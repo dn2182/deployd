@@ -1,0 +1,59 @@
+# Reference workflow for deploying through deployd.
+# Copy into your app repo as .github/workflows/deploy.yml, replace the Build
+# step with your real build, and vendor examples/notify_deploy.py as
+# scripts/notify_deploy.py.
+#
+# Repo settings needed:
+#   variables: DEPLOYD_URL   (e.g. https://deploy.example.com)
+#   secrets:   DEPLOYD_SECRET (the app's HMAC secret)
+#
+# Private repos: the release asset URL requires auth to download; either make
+# the repo public, host artifacts elsewhere (S3 presigned URL), or front the
+# download with a token deployd can use.
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          mkdir -p dist
+          echo "replace this with your real build; commit ${GITHUB_SHA}" > dist/version.txt
+          cd dist && zip -r ../app.zip .
+
+      - name: Hash artifact
+        id: hash
+        run: echo "sha256=$(sha256sum app.zip | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish artifact as release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "deploy-${GITHUB_SHA}" app.zip \
+            --title "deploy ${GITHUB_SHA:0:12}" --notes "automated deploy artifact"
+
+      - name: Notify deployd and wait
+        env:
+          DEPLOYD_URL: ${{ vars.DEPLOYD_URL }}
+          DEPLOYD_SECRET: ${{ secrets.DEPLOYD_SECRET }}
+        run: |
+          python3 scripts/notify_deploy.py \
+            --app example-api \
+            --commit-sha "${GITHUB_SHA}" \
+            --artifact-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/deploy-${GITHUB_SHA}/app.zip" \
+            --artifact-sha256 "${{ steps.hash.outputs.sha256 }}" \
+            --triggered-by "github-actions:${GITHUB_RUN_ID}"

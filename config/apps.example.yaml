@@ -1,0 +1,19 @@
+# App registry — copy to apps.yaml (gitignored) and adjust per server.
+# HMAC secrets are NOT here: they come from env (DEPLOYD_SECRET_<APP>).
+apps:
+  example-api:
+    releases_dir: /srv/example-api/releases      # unpacked as releases/<sha>/
+    current_link: /srv/example-api/current       # atomic cutover target
+    keep_releases: 5
+    artifact:
+      # only URLs matching this prefix are accepted (defense in depth on top of HMAC)
+      allowed_url_prefix: "https://github.com/your-org/"
+    migrate:
+      # optional; run from the NEW release dir before cutover; non-zero exit halts deploy
+      command: null
+    restart:
+      command: ["systemctl", "restart", "example-api"]
+    health:
+      url: "http://127.0.0.1:8000/healthz"
+      retries: 10
+      interval_seconds: 3

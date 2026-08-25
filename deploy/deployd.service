@@ -1,0 +1,34 @@
+# /etc/systemd/system/deployd.service
+#
+# Setup on the server:
+#   useradd --system --home /opt/deployd deployd
+#   /opt/deployd holds the repo clone, .venv (make install), .env, config/apps.yaml
+#   systemctl enable --now deployd
+#
+# Restart commands in apps.yaml usually need systemctl on OTHER services;
+# grant the deployd user a narrow sudoers rule per app, e.g.:
+#   deployd ALL=(root) NOPASSWD: /usr/bin/systemctl restart example-api
+# and use ["sudo", "systemctl", "restart", "example-api"] in apps.yaml.
+#
+# Expose 8300 only via the reverse proxy / Cloudflare; never directly.
+
+[Unit]
+Description=deployd deploy agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=deployd
+Group=deployd
+WorkingDirectory=/opt/deployd
+EnvironmentFile=/opt/deployd/.env
+ExecStart=/opt/deployd/.venv/bin/uvicorn deployd.main:app --host 127.0.0.1 --port 8300
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=no
+ProtectSystem=full
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
