@@ -1,4 +1,5 @@
 """Contract: X-Deploy-Signature: sha256=<hex HMAC-SHA256(secret, "{timestamp}.{raw_body}")>."""
+
 import hashlib
 import hmac
 import time
@@ -28,8 +29,8 @@ def verify_request(
     only AFTER this passes, so a failed request can't poison the nonce store."""
     try:
         ts = int(timestamp)
-    except (TypeError, ValueError):
-        raise AuthError("bad timestamp")
+    except (TypeError, ValueError) as exc:
+        raise AuthError("bad timestamp") from exc
 
     window = get_settings().timestamp_window_seconds
     if abs(time.time() - ts) > window:

@@ -1,4 +1,5 @@
 """Only module that touches the database; parameterized queries only."""
+
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -100,11 +101,24 @@ class Store:
                 (deploy_id, step, status, output),
             )
 
+    def list_deploys(self, limit: int = 50, app: str | None = None) -> list[dict]:
+        with self._conn() as c:
+            if app:
+                rows = c.execute(
+                    "SELECT * FROM deploys WHERE app = ? "
+                    "ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                    (app, limit),
+                ).fetchall()
+            else:
+                rows = c.execute(
+                    "SELECT * FROM deploys ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            return [dict(r) for r in rows]
+
     def get_deploy(self, deploy_id: str) -> dict | None:
         with self._conn() as c:
-            row = c.execute(
-                "SELECT * FROM deploys WHERE deploy_id = ?", (deploy_id,)
-            ).fetchone()
+            row = c.execute("SELECT * FROM deploys WHERE deploy_id = ?", (deploy_id,)).fetchone()
             if row is None:
                 return None
             steps = c.execute(

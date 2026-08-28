@@ -125,9 +125,7 @@ async def test_health_failure_without_previous_release_fails(tmp_path, spec, sto
     assert rollback[0]["status"] == "skipped"
 
 
-async def test_migration_failure_halts_without_touching_current(
-    tmp_path, spec, store, monkeypatch
-):
+async def test_migration_failure_halts_without_touching_current(tmp_path, spec, store, monkeypatch):
     artifact1, digest1 = make_artifact(tmp_path, "v1.zip", "v1")
     wire(monkeypatch, spec, artifact1)
     await runner.run_deploy(store, "app-x", new_deploy(store, SHA_V1, digest1))

@@ -4,6 +4,7 @@ Applied migrations are immutable: a checksum change on an already-applied
 file aborts the run. Version bookkeeping is parameterized; migration files
 themselves are executed verbatim, batch by batch (GO separators supported).
 """
+
 import argparse
 import hashlib
 import os
@@ -105,8 +106,8 @@ class Runner:
 def _connect_mssql(dsn: str):
     try:
         import pyodbc
-    except ImportError:
-        raise MigrationError("pyodbc not installed — pip install 'deployd[mssql]'")
+    except ImportError as exc:
+        raise MigrationError("pyodbc not installed — pip install 'deployd[mssql]'") from exc
     return pyodbc.connect(dsn, autocommit=False)
 
 

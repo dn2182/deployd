@@ -26,8 +26,8 @@ async def create_deploy(
     # trusting anything else in the payload.
     try:
         payload = DeployRequest.model_validate_json(body)
-    except ValueError:
-        raise HTTPException(status_code=422, detail="invalid payload")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="invalid payload") from exc
 
     registry = get_app_registry()
     if payload.app not in registry:
@@ -46,7 +46,7 @@ async def create_deploy(
             seen_nonce=store.nonce_seen(x_deploy_nonce),
         )
     except AuthError as exc:
-        raise HTTPException(status_code=401, detail=str(exc))
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
     store.record_nonce(x_deploy_nonce)
 
     spec = registry[payload.app]

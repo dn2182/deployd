@@ -4,12 +4,12 @@ import time
 
 import pytest
 from fastapi.testclient import TestClient
+from test_runner import make_artifact
 
 from deployd import config
 from deployd.main import create_app
 from deployd.security import compute_signature
 from deployd.worker import runner
-from test_runner import make_artifact
 
 SECRET = "e2e-secret"
 SHA = "f" * 40

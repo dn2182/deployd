@@ -1,4 +1,5 @@
 """The vendored CI script must sign exactly like the server verifies."""
+
 import importlib.util
 from pathlib import Path
 

@@ -34,9 +34,7 @@ async def run_deploy(store: Store, app: str, deploy_id: str) -> None:
         except Exception as exc:
             store.add_step(deploy_id, step, "failed", output=str(exc))
             rolled_back = await _maybe_rollback(step, spec, ctx, store, deploy_id)
-            store.set_status(
-                deploy_id, "rolled_back" if rolled_back else "failed", finished=True
-            )
+            store.set_status(deploy_id, "rolled_back" if rolled_back else "failed", finished=True)
             return
         store.add_step(deploy_id, step, "succeeded", output=output or "")
 
@@ -50,12 +48,14 @@ async def _step_download(spec: AppSpec, deploy: dict, ctx: dict) -> str:
     incoming.mkdir(parents=True, exist_ok=True)
     dest = incoming / f"{deploy['commit_sha']}.artifact"
     timeout = httpx.Timeout(30, read=300)
-    async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
-        async with client.stream("GET", deploy["artifact_url"]) as resp:
-            resp.raise_for_status()
-            with dest.open("wb") as f:
-                async for chunk in resp.aiter_bytes(1 << 16):
-                    f.write(chunk)
+    async with (
+        httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client,
+        client.stream("GET", deploy["artifact_url"]) as resp,
+    ):
+        resp.raise_for_status()
+        with dest.open("wb") as f:
+            async for chunk in resp.aiter_bytes(1 << 16):
+                f.write(chunk)
     ctx["artifact_path"] = dest
     return f"{dest.stat().st_size} bytes"
 
@@ -109,14 +109,34 @@ async def _step_migrate(spec: AppSpec, deploy: dict, ctx: dict) -> str:
 
 async def _step_cutover(spec: AppSpec, deploy: dict, ctx: dict) -> str:
     link = spec.current_link
-    ctx["previous_release"] = Path(os.readlink(link)) if link.is_symlink() else None
+    ctx["previous_release"] = _current_target(link)
     _atomic_symlink(ctx["release_dir"], link)
     return f"current -> {ctx['release_dir'].name}"
+
+
+def _current_target(link: Path) -> Path | None:
+    # os.readlink resolves both POSIX symlinks and Windows junctions
+    try:
+        return Path(os.readlink(link))
+    except OSError:
+        return None
 
 
 def _atomic_symlink(target: Path, link: Path) -> None:
     link.parent.mkdir(parents=True, exist_ok=True)
     tmp = link.with_name(link.name + ".new")
+    if os.name == "nt":
+        # junctions need no privilege on Windows, unlike symlinks; rename can't
+        # overwrite a directory link, so there is a brief window with no link
+        import _winapi
+
+        if tmp.exists():
+            os.rmdir(tmp)
+        _winapi.CreateJunction(str(target), str(tmp))
+        if link.exists():
+            os.rmdir(link)
+        os.rename(tmp, link)
+        return
     if tmp.exists() or tmp.is_symlink():
         tmp.unlink()
     os.symlink(target, tmp)
@@ -151,9 +171,9 @@ async def _run_cmd(command: list[str], cwd: Path | None = None) -> str:
     )
     try:
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=CMD_TIMEOUT_SECONDS)
-    except TimeoutError:
+    except TimeoutError as exc:
         proc.kill()
-        raise RuntimeError(f"command timed out after {CMD_TIMEOUT_SECONDS}s: {command}")
+        raise RuntimeError(f"command timed out after {CMD_TIMEOUT_SECONDS}s: {command}") from exc
     output = stdout.decode(errors="replace").strip()
     if proc.returncode != 0:
         raise RuntimeError(f"command exited {proc.returncode}: {command}\n{output}")

@@ -64,6 +64,7 @@ src/deployd/
   security.py              HMAC verification (signature, window, nonce)
   models.py                Pydantic request/response schemas
   api/routes.py            POST /deploys, GET /deploys/{id}, GET /healthz
+  api/admin.py             /admin: registry CRUD, secret rotation, redeploy, history
   worker/queue.py          per-app serialized asyncio queue
   worker/runner.py         deploy pipeline: download→verify→migrate→cutover→health
   migrate.py               deployd-migrate CLI: forward-only SQL migrations, GO batches
@@ -72,8 +73,27 @@ tests/
 examples/
   github-actions-deploy.yml  reference CI workflow (copy into your app repo)
   notify_deploy.py           stdlib-only signer/poller to vendor into app repos
-deploy/deployd.service       systemd unit + server setup notes
+web/                       React admin UI (Vite + Tailwind)
+deploy/
+  deployd.service          systemd unit + server setup notes
+  windows.md               Windows guide (NSSM, IIS, junctions)
 ```
+
+## Quickstart
+
+```bash
+make install                       # python venv + deps, web deps (pnpm)
+cp .env.example .env               # set DEPLOYD_ADMIN_TOKEN, per-app secrets
+cp config/apps.example.yaml config/apps.yaml   # register your apps
+make dev                           # API on 127.0.0.1:8300
+make dev-web                       # admin UI (dev) on the Vite port
+make test                          # pytest + vitest
+```
+
+Production: see `deploy/deployd.service` (Linux/systemd) or
+`deploy/windows.md` (Windows/NSSM/IIS). CI side: copy
+`examples/github-actions-deploy.yml` and `examples/notify_deploy.py` into
+your app repo.
 
 ## Deploy request contract
 
@@ -102,5 +122,9 @@ Responses: `202 {deploy_id}` → poll `GET /deploys/{deploy_id}` for
 - [x] M3: Migration runner hook (SQL Server, forward-only, versioned table)
 - [x] M4: GitHub Actions reference workflow, signed notify script, systemd unit, e2e test
 - [ ] M4b: production rollout on a real Linux VPS
-- [ ] M5: Windows service variant (NSSM / IIS repoint)
-- [ ] M6: Admin config API (app registry, secrets rotation, deploy history) + `web/` UI
+- [x] M5: Windows variant — junction cutover, NSSM/IIS guide (`deploy/windows.md`)
+- [x] M6: Admin API (registry CRUD, secret rotation, redeploy, deploy history) + `web/` UI
+
+## License
+
+Apache-2.0 — see `LICENSE` and `NOTICE`.

@@ -2,7 +2,7 @@ VENV := .venv
 PY   := $(VENV)/bin/python
 PIP  := $(VENV)/bin/pip
 
-.PHONY: install clean dev dev-web update test
+.PHONY: install clean dev dev-web update test lint
 
 install:
 	python3 -m venv $(VENV)
@@ -17,6 +17,11 @@ dev-web:
 
 test:
 	$(VENV)/bin/pytest -q
+	cd web && pnpm test
+
+lint:
+	$(VENV)/bin/ruff check src tests
+	$(VENV)/bin/ruff format --check src tests
 
 update:
 	$(PIP) install --upgrade pip
