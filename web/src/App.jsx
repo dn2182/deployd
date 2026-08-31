@@ -75,6 +75,19 @@ function AppCard({ name, spec, call, onChanged }) {
     }
   }
 
+  const remove = async () => {
+    const typed = prompt(
+      `Remove ${name} from the registry? Deployed releases on disk are NOT touched.\n\nType the app name to confirm:`
+    )
+    if (typed !== name) return
+    try {
+      await call(`/admin/apps/${name}`, { method: 'DELETE' })
+      onChanged()
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
   return (
     <div className="bg-white rounded-lg border p-5 space-y-3">
       <div className="flex items-center justify-between">
@@ -85,6 +98,12 @@ function AppCard({ name, spec, call, onChanged }) {
           </button>
           <button className="px-3 py-1 rounded border hover:bg-slate-50" onClick={rotate}>
             Rotate secret
+          </button>
+          <button
+            className="px-3 py-1 rounded border border-red-200 text-red-600 hover:bg-red-50"
+            onClick={remove}
+          >
+            Remove
           </button>
         </div>
       </div>

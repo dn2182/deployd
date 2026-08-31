@@ -91,6 +91,16 @@ def set_app_secret(app_name: str, secret: str) -> None:
     os.chmod(path, 0o600)
 
 
+def remove_app_secret(app_name: str) -> None:
+    key = _secret_key(app_name)
+    path = get_settings().secrets_file
+    if not path.exists():
+        return
+    lines = [ln for ln in path.read_text().splitlines() if not ln.startswith(f"{key}=")]
+    path.write_text("\n".join(lines) + "\n" if lines else "")
+    os.chmod(path, 0o600)
+
+
 def save_app_registry(registry: dict[str, AppSpec]) -> None:
     data = {"apps": {name: spec.model_dump(mode="json") for name, spec in registry.items()}}
     get_settings().apps_config.write_text(yaml.safe_dump(data, sort_keys=False))

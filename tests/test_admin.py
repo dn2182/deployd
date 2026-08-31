@@ -93,6 +93,16 @@ def test_delete_app(env):
         assert client.delete("/admin/apps/app-x", headers=ADMIN).status_code == 404
 
 
+def test_delete_app_scrubs_its_secret(env):
+    with TestClient(create_app()) as client:
+        client.post("/admin/apps/app-x/rotate-secret", headers=ADMIN)
+        assert "DEPLOYD_SECRET_APP_X=" in (env / "secrets.env").read_text()
+
+        client.delete("/admin/apps/app-x", headers=ADMIN)
+        assert "DEPLOYD_SECRET_APP_X=" not in (env / "secrets.env").read_text()
+        assert get_app_secret("app-x") is None
+
+
 def test_redeploy_requeues_same_artifact(env, monkeypatch):
     from deployd.worker import runner
 

@@ -1,12 +1,29 @@
 # deployd — pull-style deploy agent over HTTPS
 
-Small, self-contained deploy service. GitHub Actions builds an artifact and
-POSTs a signed deploy request to this API; a local worker downloads, verifies,
-migrates, cuts over, and health-checks — **no inbound SSH or FTP on the server,
-ever.** One HTTPS endpoint with a fixed contract is the entire attack surface.
+*Léelo en [español](README-ES.md).*
 
+Deploy to your own servers from GitHub Actions with **no inbound SSH or FTP,
+no build toolchain on prod, and no containers**. One HTTPS endpoint with a
+fixed, HMAC-signed contract is the entire attack surface.
 
-## Architecture
+## Features
+
+- **Signed deploys** — HMAC-SHA256 per app, timestamp window, nonce replay
+  protection, constant-time compares
+- **Artifact-based** — CI builds and publishes; the server downloads and
+  verifies the SHA256; prod never compiles anything
+- **Atomic cutover, instant rollback** — `releases/<sha>/` plus a `current`
+  symlink (Linux) or junction (Windows); failed health checks roll back
+  automatically
+- **Migrations that gate the release** — forward-only, checksummed SQL
+  migrations (`deployd-migrate`, SQL Server via pyodbc) run before cutover
+  and halt the deploy hard on failure
+- **Admin UI** — app registry, one-click secret rotation (shown once),
+  deploy history with per-step logs, redeploy, live status
+- **Bare-host native** — systemd on Linux, NSSM/IIS on Windows; a single
+  Python service with a SQLite state file
+
+## How it works
 
 ```
 GitHub Actions (build + publish artifact)
@@ -17,85 +34,48 @@ Deploy API (FastAPI)  -- validate, enqueue, 202 + deploy_id
       |
       v
 Deploy Worker (per-app serialized queue)
-      +--> download artifact (URL from payload) + verify SHA256
-      +--> unpack into releases/<sha>/
-      +--> run migrations        (forward-only, halt hard on failure)
-      +--> cutover               (symlink/pointer swap to new release)
-      +--> health check          (N retries; fail => auto-rollback)
-      +--> record status + logs  (Actions polls GET /deploys/{id})
+      +--> download artifact + verify SHA256
+      +--> unpack into releases/<sha>/     (traversal-safe)
+      +--> run migrations                  (forward-only, halt on failure)
+      +--> cutover                         (atomic symlink/junction swap)
+      +--> restart + health check          (fail => auto-rollback)
+      +--> record status + step log        (CI polls GET /deploys/{id})
 ```
 
-### Design decisions (and why)
+### Design decisions
 
-- **Artifacts, not source.** The server never builds. Actions compiles,
-  publishes the artifact, and sends its URL + SHA256. Prod needs no SDKs,
-  deploys are reproducible, and what was signed is what runs.
-- **Deploy by commit SHA, never branch name.** The payload pins the exact
-  release identity.
-- **Releases dir + pointer swap.** `releases/<sha>/` + `current` symlink
-  (or IIS physical-path repoint on Windows). Cutover is atomic; rollback is
-  instant; a failed deploy never touches the running version.
-- **HMAC, done properly.** Signature over `timestamp.body`, per-app secret,
-  ±5 min timestamp window, nonce replay store, constant-time compare.
-- **API and worker are separate.** API only validates and enqueues (202 with
-  `deploy_id`). Worker holds a per-app lock — deploys serialize, never overlap.
-- **Migrations gate the cutover.** Run before the pointer swap; a failed
-  migration halts the deploy hard (schema can't be rolled back by symlink).
+- **Artifacts, not source.** What was signed is what runs; prod needs no SDKs.
+- **Deploy by commit SHA, never branch name.**
+- **API and worker are separate.** The API only validates and enqueues;
+  same-app deploys serialize, different apps run concurrently.
 - **Fixed contract beats a self-hosted runner.** A runner executes whatever
-  the workflow says — compromised action = RCE on prod. This API can only do
-  the steps above, against allowlisted apps.
-
-### State: files for config, SQLite for runtime
-
-- `config/apps.yaml` — app registry: paths, artifact rules, health URL,
-  restart command, migration runner. Secrets via env / `.env` (never in git).
-- `deployd.sqlite3` — deploy runs, statuses, logs, nonce replay store.
-  A deploy agent must not depend on an external DB server (bootstrap problem);
-  its state is tiny. All access is parameterized queries isolated in
-  `store/db.py`, the only module that touches the database.
-
-## Layout
-
-```
-config/apps.example.yaml   app registry template
-src/deployd/
-  main.py                  FastAPI app factory + lifespan (starts worker)
-  config.py                settings + app registry loading
-  security.py              HMAC verification (signature, window, nonce)
-  models.py                Pydantic request/response schemas
-  api/routes.py            POST /deploys, GET /deploys/{id}, GET /healthz
-  api/admin.py             /admin: registry CRUD, secret rotation, redeploy, history
-  worker/queue.py          per-app serialized asyncio queue
-  worker/runner.py         deploy pipeline: download→verify→migrate→cutover→health
-  migrate.py               deployd-migrate CLI: forward-only SQL migrations, GO batches
-  store/db.py              SQLite state store (only module that touches the DB)
-tests/
-examples/
-  github-actions-deploy.yml  reference CI workflow (copy into your app repo)
-  notify_deploy.py           stdlib-only signer/poller to vendor into app repos
-web/                       React admin UI (Vite + Tailwind)
-deploy/
-  deployd.service          systemd unit + server setup notes
-  windows.md               Windows guide (NSSM, IIS, junctions)
-```
+  the workflow says — this API can only run its seven steps against
+  allowlisted apps and artifact hosts.
+- **No external database.** Config is YAML + env; runtime state is SQLite.
+  A deploy agent must not depend on infrastructure it might be deploying.
 
 ## Quickstart
 
 ```bash
-make install                       # python venv + deps, web deps (pnpm)
-cp .env.example .env               # set DEPLOYD_ADMIN_TOKEN, per-app secrets
+make install                                   # python venv + deps, web deps (pnpm)
+cp .env.example .env                           # set DEPLOYD_ADMIN_TOKEN
 cp config/apps.example.yaml config/apps.yaml   # register your apps
-make dev                           # API on 127.0.0.1:8300
-make dev-web                       # admin UI (dev) on the Vite port
-make test                          # pytest + vitest
+make dev                                       # API on 127.0.0.1:8300
+make dev-web                                   # admin UI (Vite dev server)
 ```
 
-Production: see `deploy/deployd.service` (Linux/systemd) or
-`deploy/windows.md` (Windows/NSSM/IIS). CI side: copy
-`examples/github-actions-deploy.yml` and `examples/notify_deploy.py` into
-your app repo.
+Open the UI, enter the admin token, and rotate your app's secret — that value
+becomes the `DEPLOYD_SECRET` in your app repo's CI.
 
-## Deploy request contract
+## CI integration
+
+Copy [`examples/github-actions-deploy.yml`](examples/github-actions-deploy.yml)
+into your app repo and vendor
+[`examples/notify_deploy.py`](examples/notify_deploy.py) as
+`scripts/notify_deploy.py`. The repo needs one secret (`DEPLOYD_SECRET`) and
+one variable (`DEPLOYD_URL`) — the server stores no GitHub credentials at all.
+
+The request contract:
 
 ```
 POST /deploys
@@ -112,19 +92,43 @@ X-Deploy-Signature: sha256=<hex hmac of "{timestamp}.{raw body}">
 }
 ```
 
-Responses: `202 {deploy_id}` → poll `GET /deploys/{deploy_id}` for
-`queued | running | succeeded | failed | rolled_back` + step log.
+`202 {deploy_id}` → poll `GET /deploys/{deploy_id}` for
+`queued | running | succeeded | failed | rolled_back` plus the step log.
 
-## Roadmap
+## Production
 
-- [x] M1: API skeleton — HMAC auth, contract validation, SQLite store, status endpoint
-- [x] M2: Worker — download/verify/unpack, symlink cutover, restart, health check, rollback
-- [x] M3: Migration runner hook (SQL Server, forward-only, versioned table)
-- [x] M4: GitHub Actions reference workflow, signed notify script, systemd unit, e2e test
-- [ ] M4b: production rollout on a real Linux VPS
-- [x] M5: Windows variant — junction cutover, NSSM/IIS guide (`deploy/windows.md`)
-- [x] M6: Admin API (registry CRUD, secret rotation, redeploy, deploy history) + `web/` UI
+- **Linux:** [`deploy/deployd.service`](deploy/deployd.service) — systemd
+  unit, dedicated user, per-app sudoers rules for restarts.
+- **Windows:** [`deploy/windows.md`](deploy/windows.md) — NSSM service,
+  IIS physical path on a junction, `Restart-WebAppPool`.
+- **Hardening:** bind to localhost behind a reverse proxy, keep `/admin` off
+  the public internet — full checklist in [`SECURITY.md`](SECURITY.md).
+
+## Layout
+
+```
+src/deployd/
+  main.py                  FastAPI app factory + lifespan (starts worker)
+  config.py                settings, app registry, secrets
+  security.py              HMAC verification (signature, window, nonce)
+  models.py                request/response schemas
+  api/routes.py            POST /deploys, GET /deploys/{id}, GET /healthz
+  api/admin.py             /admin: registry CRUD, secret rotation, redeploy, history
+  worker/queue.py          per-app serialized asyncio queue
+  worker/runner.py         the seven-step deploy pipeline
+  migrate.py               deployd-migrate CLI
+  store/db.py              SQLite state store
+web/                       React admin UI (Vite + Tailwind)
+examples/                  CI workflow + vendorable notify script
+deploy/                    systemd unit, Windows guide
+tests/                     pytest (API/worker) — web/ has vitest
+```
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). Security reports:
+[`SECURITY.md`](SECURITY.md).
 
 ## License
 
-Apache-2.0 — see `LICENSE` and `NOTICE`.
+Apache-2.0 — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).

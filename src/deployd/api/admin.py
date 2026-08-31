@@ -15,6 +15,7 @@ from ..config import (
     get_app_registry,
     get_app_secret,
     get_settings,
+    remove_app_secret,
     save_app_registry,
     set_app_secret,
 )
@@ -63,7 +64,16 @@ async def delete_app(name: str):
         raise HTTPException(status_code=404, detail="unknown app")
     del registry[name]
     save_app_registry(registry)
-    return {"status": "deleted", "app": name}
+    remove_app_secret(name)
+    # an env-var secret can't be removed from here — surface it so ops cleans it up
+    env_leftover = _secret_key(name) in os.environ
+    return {
+        "status": "deleted",
+        "app": name,
+        "warning": f"unset {_secret_key(name)} from the service environment"
+        if env_leftover
+        else None,
+    }
 
 
 @router.post("/apps/{name}/rotate-secret")

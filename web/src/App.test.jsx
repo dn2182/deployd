@@ -118,6 +118,32 @@ describe('App', () => {
     expect(screen.queryByText('f'.repeat(64))).not.toBeInTheDocument()
   })
 
+  it('remove requires typing the app name and calls DELETE', async () => {
+    const fetcher = mockFetch({
+      'GET /api/healthz': { status: 'ok' },
+      'GET /api/admin/apps': APPS,
+      'GET /api/admin/deploys': DEPLOYS,
+      'DELETE /api/admin/apps/my-api': { status: 'deleted', app: 'my-api' },
+    })
+    global.fetch = fetcher
+    vi.spyOn(window, 'prompt').mockReturnValue('wrong-name')
+    render(<App />)
+    fireEvent.click(await screen.findByText('Remove'))
+    expect(fetcher).not.toHaveBeenCalledWith(
+      '/api/admin/apps/my-api',
+      expect.objectContaining({ method: 'DELETE' })
+    )
+
+    window.prompt.mockReturnValue('my-api')
+    fireEvent.click(screen.getByText('Remove'))
+    await waitFor(() =>
+      expect(fetcher).toHaveBeenCalledWith(
+        '/api/admin/apps/my-api',
+        expect.objectContaining({ method: 'DELETE' })
+      )
+    )
+  })
+
   it('validates the new-app name', async () => {
     global.fetch = mockFetch({
       'GET /api/healthz': { status: 'ok' },
