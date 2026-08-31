@@ -5,7 +5,8 @@ from deployd import config
 from deployd.config import get_app_secret
 from deployd.main import create_app
 
-ADMIN = {"X-Admin-Token": "admin-token"}
+ADMIN_TOKEN = "a" * 32
+ADMIN = {"X-Admin-Token": ADMIN_TOKEN}
 
 
 @pytest.fixture
@@ -28,7 +29,7 @@ apps:
     monkeypatch.setenv("DEPLOYD_DB_PATH", str(tmp_path / "state.sqlite3"))
     monkeypatch.setenv("DEPLOYD_APPS_CONFIG", str(apps_yaml))
     monkeypatch.setenv("DEPLOYD_SECRETS_FILE", str(tmp_path / "secrets.env"))
-    monkeypatch.setenv("DEPLOYD_ADMIN_TOKEN", "admin-token")
+    monkeypatch.setenv("DEPLOYD_ADMIN_TOKEN", ADMIN_TOKEN)
     monkeypatch.delenv("DEPLOYD_SECRET_APP_X", raising=False)
     config.get_settings.cache_clear()
     config.get_app_registry.cache_clear()
@@ -71,6 +72,14 @@ def test_rotate_unknown_app_404(env):
         assert client.post("/admin/apps/nope/rotate-secret", headers=ADMIN).status_code == 404
 
 
+def test_rotate_env_managed_secret_is_rejected(env, monkeypatch):
+    monkeypatch.setenv("DEPLOYD_SECRET_APP_X", "managed-externally")
+    with TestClient(create_app()) as client:
+        response = client.post("/admin/apps/app-x/rotate-secret", headers=ADMIN)
+        assert response.status_code == 409
+        assert not (env / "secrets.env").exists()
+
+
 def test_upsert_app_persists_to_yaml(env):
     with TestClient(create_app()) as client:
         spec = {
@@ -84,6 +93,19 @@ def test_upsert_app_persists_to_yaml(env):
         apps = client.get("/admin/apps", headers=ADMIN).json()
         assert set(apps) == {"app-x", "app-y"}
         assert "app-y" in (env / "apps.yaml").read_text()
+
+
+def test_upsert_rejects_invalid_backend_app_name(env):
+    with TestClient(create_app()) as client:
+        spec = {
+            "releases_dir": str(env / "r2"),
+            "current_link": str(env / "c2"),
+            "artifact": {"allowed_url_prefix": "https://example.org/"},
+            "restart": {"command": ["true"]},
+            "health": {"url": "http://127.0.0.1:1/hz"},
+        }
+        response = client.put("/admin/apps/BAD_NAME", headers=ADMIN, json=spec)
+        assert response.status_code == 422
 
 
 def test_delete_app(env):
@@ -101,6 +123,24 @@ def test_delete_app_scrubs_its_secret(env):
         client.delete("/admin/apps/app-x", headers=ADMIN)
         assert "DEPLOYD_SECRET_APP_X=" not in (env / "secrets.env").read_text()
         assert get_app_secret("app-x") is None
+
+
+def test_delete_app_rejects_active_deployments(env):
+    with TestClient(create_app()) as client:
+        client.app.state.store.create_deploy(
+            "app-x", "a" * 40, "https://example.com/a.zip", "b" * 64, "test"
+        )
+        response = client.delete("/admin/apps/app-x", headers=ADMIN)
+        assert response.status_code == 409
+        assert "app-x" in client.get("/admin/apps", headers=ADMIN).json()
+
+
+def test_delete_app_rejects_env_managed_secret(env, monkeypatch):
+    monkeypatch.setenv("DEPLOYD_SECRET_APP_X", "managed-externally")
+    with TestClient(create_app()) as client:
+        response = client.delete("/admin/apps/app-x", headers=ADMIN)
+        assert response.status_code == 409
+        assert "app-x" in client.get("/admin/apps", headers=ADMIN).json()
 
 
 def test_redeploy_requeues_same_artifact(env, monkeypatch):

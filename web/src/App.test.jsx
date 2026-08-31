@@ -49,7 +49,7 @@ function mockFetch(routes) {
 }
 
 beforeEach(() => {
-  localStorage.setItem('deployd-admin-token', 't0ken')
+  sessionStorage.setItem('deployd-admin-token', 't0ken')
 })
 
 describe('App', () => {

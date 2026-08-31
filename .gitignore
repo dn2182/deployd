@@ -6,6 +6,7 @@ config/apps.yaml
 config/secrets.env
 *.sqlite3
 *.sqlite3-*
+*.sqlite3.lock
 
 # --- python ---
 __pycache__/

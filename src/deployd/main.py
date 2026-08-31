@@ -5,23 +5,34 @@ from fastapi import FastAPI
 
 from .api.admin import router as admin_router
 from .api.routes import router
-from .config import get_settings
-from .store.db import Store
+from .config import get_app_registry, get_settings
+from .store.db import InstanceLock, Store
 from .worker.queue import DeployQueue
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+log = logging.getLogger("deployd")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    instance_lock = InstanceLock(settings.db_path)
+    instance_lock.acquire()
     store = Store(settings.db_path)
-    store.init()
-    store.purge_old_nonces()
-    app.state.store = store
-    app.state.queue = DeployQueue(store)
-    yield
-    await app.state.queue.shutdown()
+    try:
+        store.init()
+        store.purge_old_nonces()
+        app.state.store = store
+        app.state.queue = DeployQueue(store)
+        recovered = app.state.queue.recover(set(get_app_registry()))
+        if recovered:
+            log.warning("recovered %s queued deployment(s) after restart", recovered)
+        try:
+            yield
+        finally:
+            await app.state.queue.shutdown()
+    finally:
+        instance_lock.release()
 
 
 def create_app() -> FastAPI:
@@ -33,4 +44,9 @@ def create_app() -> FastAPI:
 
 app = create_app()
 
-# Run: uvicorn deployd.main:app --host 127.0.0.1 --port 8300
+
+def run() -> None:
+    import uvicorn
+
+    settings = get_settings()
+    uvicorn.run(app, host=settings.bind_host, port=settings.bind_port, workers=1)

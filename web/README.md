@@ -1,16 +1,18 @@
-# React + Vite
+# deployd admin UI
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React/Vite administration console for app registration, secret rotation,
+deployment history, redeploys, and live step status.
 
-Currently, two official plugins are available:
+```bash
+pnpm install --frozen-lockfile
+pnpm dev       # proxies /api to http://127.0.0.1:8300
+pnpm lint
+pnpm test
+pnpm build
+```
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+For production, serve `dist/` from the same HTTPS origin used for the console
+and proxy `/api/*` to deployd after removing the `/api` prefix. Keep the UI and
+`/admin` API behind localhost, a private network, or an identity-aware proxy.
+The admin token is retained only in browser session storage and is cleared when
+the tab session ends.

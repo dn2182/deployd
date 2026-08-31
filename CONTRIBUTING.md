@@ -4,10 +4,13 @@ Thanks for your interest in deployd.
 
 ## Setup
 
+Install `uv` and `pnpm`, then:
+
 ```bash
 make install     # python venv + deps, web deps (pnpm)
 make test        # pytest + vitest
-make lint        # ruff check + format check
+make lint        # ruff + frontend lint
+make audit       # Python + production Node dependency advisories
 make dev         # API on 127.0.0.1:8300 (hot reload)
 make dev-web     # Vite dev server, proxies /api to the API
 ```

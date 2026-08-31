@@ -20,7 +20,7 @@ const APP_TEMPLATE = {
   health: { url: 'http://127.0.0.1:8000/healthz', retries: 10, interval_seconds: 3 },
 }
 
-const api = (token) => async (path, opts = {}) => {
+const api = async (token, path, opts = {}) => {
   const resp = await fetch(`/api${path}`, {
     ...opts,
     headers: {
@@ -48,7 +48,7 @@ function AppCard({ name, spec, call, onChanged }) {
   const [error, setError] = useState(null)
 
   const startEdit = () => {
-    const { secret, ...rest } = spec
+    const { secret: _secret, ...rest } = spec
     setDraft(JSON.stringify(rest, null, 2))
     setEditing(true)
     setError(null)
@@ -165,8 +165,8 @@ function NewAppCard({ call, onChanged }) {
   const [error, setError] = useState(null)
 
   const save = async () => {
-    if (!/^[a-z0-9][a-z0-9-]{1,63}$/.test(name)) {
-      setError('name must be lowercase letters, digits, dashes')
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(name)) {
+      setError('name must use lowercase letters, digits, and interior dashes')
       return
     }
     try {
@@ -290,7 +290,7 @@ function DeployRow({ deploy, call, onChanged }) {
 export default function App() {
   const [token, setToken] = useState(() => {
     try {
-      return localStorage.getItem('deployd-admin-token') ?? ''
+      return sessionStorage.getItem('deployd-admin-token') ?? ''
     } catch {
       return ''
     }
@@ -299,13 +299,17 @@ export default function App() {
   const [apps, setApps] = useState(null)
   const [deploys, setDeploys] = useState([])
   const [error, setError] = useState(null)
-  const call = useCallback(api(token), [token])
+  const call = useCallback((path, opts = {}) => api(token, path, opts), [token])
 
   const refresh = useCallback(async () => {
     if (!token) return
     try {
-      setApps(await call('/admin/apps'))
-      setDeploys(await call('/admin/deploys?limit=20'))
+      const [nextApps, nextDeploys] = await Promise.all([
+        call('/admin/apps'),
+        call('/admin/deploys?limit=20'),
+      ])
+      setApps(nextApps)
+      setDeploys(nextDeploys)
       setError(null)
     } catch (e) {
       setApps(null)
@@ -321,7 +325,8 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    refresh()
+    const timer = setTimeout(refresh, 0)
+    return () => clearTimeout(timer)
   }, [refresh])
 
   const hasActive = deploys.some((d) => d.status === 'queued' || d.status === 'running')
@@ -334,7 +339,7 @@ export default function App() {
   const saveToken = (value) => {
     setToken(value)
     try {
-      localStorage.setItem('deployd-admin-token', value)
+      sessionStorage.setItem('deployd-admin-token', value)
     } catch {
       /* storage unavailable — token lives for this page only */
     }

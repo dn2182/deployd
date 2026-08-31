@@ -13,5 +13,5 @@ spec.loader.exec_module(notify)
 
 
 def test_signature_parity():
-    secret, ts, body = "abc", "1756100000", b'{"app":"x"}'
-    assert notify.sign(secret, ts, body) == compute_signature(secret, ts, body)
+    secret, ts, nonce, body = "abc", "1756100000", "nonce-1", b'{"app":"x"}'
+    assert notify.sign(secret, ts, nonce, body) == compute_signature(secret, ts, nonce, body)

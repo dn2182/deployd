@@ -9,14 +9,14 @@ ataque.
 
 ## Características
 
-- **Despliegues firmados** — HMAC-SHA256 por aplicación, ventana de
-  timestamp, protección contra replay por nonce, comparaciones en tiempo
-  constante
+- **Despliegues firmados** — HMAC-SHA256 por aplicación sobre timestamp,
+  nonce y cuerpo; protección atómica y persistente contra replay
 - **Basado en artefactos** — CI compila y publica; el servidor descarga y
   verifica el SHA256; producción nunca compila nada
-- **Cutover atómico, rollback instantáneo** — `releases/<sha>/` más un
-  symlink `current` (Linux) o junction (Windows); si el health check falla,
-  el rollback es automático
+- **Cutover seguro, rollback instantáneo** — intentos inmutables en
+  `releases/<sha>-<deploy_id>/` más un symlink `current` (atómico en Linux) o
+  un cambio controlado de junction (Windows); si el health check falla, el
+  rollback es automático
 - **Migraciones que condicionan el release** — migraciones SQL forward-only
   con checksum (`deployd-migrate`, SQL Server vía pyodbc) corren antes del
   cutover y detienen el despliegue en seco si fallan
@@ -25,6 +25,8 @@ ataque.
   por paso, redeploy, estado en vivo
 - **Nativo en bare-host** — systemd en Linux, NSSM/IIS en Windows; un solo
   servicio Python con un archivo de estado SQLite
+- **Cola consciente de reinicios** — los deploys en cola se recuperan; los
+  interrumpidos fallan explícitamente en vez de quedar en `running`
 
 ## Cómo funciona
 
@@ -38,9 +40,9 @@ API de despliegue (FastAPI)  -- valida, encola, 202 + deploy_id
       v
 Worker de despliegue (cola serializada por app)
       +--> descarga el artefacto + verifica SHA256
-      +--> desempaqueta en releases/<sha>/   (a prueba de path traversal)
+      +--> desempaqueta en release único     (límites + path traversal seguro)
       +--> ejecuta migraciones               (forward-only, se detiene si falla)
-      +--> cutover                           (swap atómico de symlink/junction)
+      +--> cutover                           (symlink o junction controlado)
       +--> restart + health check            (falla => rollback automático)
       +--> registra estado + log por paso    (CI consulta GET /deploys/{id})
 ```
@@ -52,9 +54,10 @@ Worker de despliegue (cola serializada por app)
 - **Se despliega por SHA de commit, nunca por nombre de rama.**
 - **API y worker separados.** La API solo valida y encola; los despliegues
   de una misma app se serializan, apps distintas corren en paralelo.
-- **Un contrato fijo le gana a un runner self-hosted.** Un runner ejecuta lo
-  que diga el workflow — esta API solo puede correr sus siete pasos contra
-  apps y hosts de artefactos permitidos.
+- **Un contrato fijo reduce el radio de impacto.** El workflow no puede
+  reemplazar comandos de deploy ni apuntar a una app no registrada. Un build
+  comprometido todavía puede empacar código malicioso, así que cada app debe
+  ejecutarse con una identidad propia de privilegios mínimos.
 - **Sin base de datos externa.** La configuración es YAML + env; el estado
   de runtime es SQLite. Un agente de despliegue no debe depender de
   infraestructura que él mismo podría estar desplegando.
@@ -62,6 +65,7 @@ Worker de despliegue (cola serializada por app)
 ## Inicio rápido
 
 ```bash
+brew install uv pnpm                            # o instálalos para tu sistema
 make install                                   # venv de python + deps, deps web (pnpm)
 cp .env.example .env                           # define DEPLOYD_ADMIN_TOKEN
 cp config/apps.example.yaml config/apps.yaml   # registra tus aplicaciones
@@ -87,7 +91,7 @@ El contrato del request:
 POST /deploys
 X-Deploy-Timestamp: <epoch unix en segundos>
 X-Deploy-Nonce: <uuid4>
-X-Deploy-Signature: sha256=<hmac hex de "{timestamp}.{cuerpo crudo}">
+X-Deploy-Signature: sha256=<hmac hex de "{timestamp}.{nonce}.{cuerpo crudo}">
 
 {
   "app": "example-api",
@@ -100,6 +104,8 @@ X-Deploy-Signature: sha256=<hmac hex de "{timestamp}.{cuerpo crudo}">
 
 `202 {deploy_id}` → consulta `GET /deploys/{deploy_id}` para
 `queued | running | succeeded | failed | rolled_back` más el log por paso.
+Si se pierde la respuesta `202`, reintenta exactamente el mismo request
+firmado y nonce; deployd devuelve el `deploy_id` original sin duplicarlo.
 
 ## Producción
 
@@ -110,6 +116,12 @@ X-Deploy-Signature: sha256=<hmac hex de "{timestamp}.{cuerpo crudo}">
 - **Endurecimiento:** enlaza a localhost detrás de un reverse proxy, mantén
   `/admin` fuera del internet público — checklist completo en
   [`SECURITY.md`](SECURITY.md).
+
+Ejecuta exactamente un proceso deployd por base de estado; ese proceso es
+dueño de las colas durables por app. Compila `web/`, sirve `web/dist` desde el
+reverse proxy y redirige `/api/*` a deployd removiendo el prefijo `/api`.
+Para cambios de base de datos usa migraciones expand/contract, manteniendo la
+versión anterior compatible si hace falta un rollback de aplicación.
 
 ## Estructura
 

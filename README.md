@@ -8,13 +8,13 @@ fixed, HMAC-signed contract is the entire attack surface.
 
 ## Features
 
-- **Signed deploys** — HMAC-SHA256 per app, timestamp window, nonce replay
-  protection, constant-time compares
+- **Signed deploys** — HMAC-SHA256 per app over timestamp, nonce, and body;
+  atomic persisted replay protection and constant-time compares
 - **Artifact-based** — CI builds and publishes; the server downloads and
   verifies the SHA256; prod never compiles anything
-- **Atomic cutover, instant rollback** — `releases/<sha>/` plus a `current`
-  symlink (Linux) or junction (Windows); failed health checks roll back
-  automatically
+- **Safe cutover, instant rollback** — immutable `releases/<sha>-<deploy_id>/`
+  attempts plus a `current` symlink (atomic on Linux) or guarded junction swap
+  (Windows); failed health checks roll back automatically
 - **Migrations that gate the release** — forward-only, checksummed SQL
   migrations (`deployd-migrate`, SQL Server via pyodbc) run before cutover
   and halt the deploy hard on failure
@@ -22,6 +22,8 @@ fixed, HMAC-signed contract is the entire attack surface.
   deploy history with per-step logs, redeploy, live status
 - **Bare-host native** — systemd on Linux, NSSM/IIS on Windows; a single
   Python service with a SQLite state file
+- **Crash-aware queue** — queued deploys resume after restart; interrupted
+  deploys fail explicitly instead of remaining stuck in `running`
 
 ## How it works
 
@@ -35,9 +37,9 @@ Deploy API (FastAPI)  -- validate, enqueue, 202 + deploy_id
       v
 Deploy Worker (per-app serialized queue)
       +--> download artifact + verify SHA256
-      +--> unpack into releases/<sha>/     (traversal-safe)
+      +--> unpack into unique release dir  (traversal + resource-limit safe)
       +--> run migrations                  (forward-only, halt on failure)
-      +--> cutover                         (atomic symlink/junction swap)
+      +--> cutover                         (symlink or guarded junction swap)
       +--> restart + health check          (fail => auto-rollback)
       +--> record status + step log        (CI polls GET /deploys/{id})
 ```
@@ -48,15 +50,17 @@ Deploy Worker (per-app serialized queue)
 - **Deploy by commit SHA, never branch name.**
 - **API and worker are separate.** The API only validates and enqueues;
   same-app deploys serialize, different apps run concurrently.
-- **Fixed contract beats a self-hosted runner.** A runner executes whatever
-  the workflow says — this API can only run its seven steps against
-  allowlisted apps and artifact hosts.
+- **A fixed contract narrows the blast radius.** Unlike a self-hosted runner,
+  the workflow cannot replace deploy commands or target an unregistered app.
+  A compromised build can still ship malicious application code, so run each
+  deployed app with its own least-privileged identity.
 - **No external database.** Config is YAML + env; runtime state is SQLite.
   A deploy agent must not depend on infrastructure it might be deploying.
 
 ## Quickstart
 
 ```bash
+brew install uv pnpm                            # or install them for your OS
 make install                                   # python venv + deps, web deps (pnpm)
 cp .env.example .env                           # set DEPLOYD_ADMIN_TOKEN
 cp config/apps.example.yaml config/apps.yaml   # register your apps
@@ -81,7 +85,7 @@ The request contract:
 POST /deploys
 X-Deploy-Timestamp: <unix epoch seconds>
 X-Deploy-Nonce: <uuid4>
-X-Deploy-Signature: sha256=<hex hmac of "{timestamp}.{raw body}">
+X-Deploy-Signature: sha256=<hex hmac of "{timestamp}.{nonce}.{raw body}">
 
 {
   "app": "example-api",
@@ -94,6 +98,8 @@ X-Deploy-Signature: sha256=<hex hmac of "{timestamp}.{raw body}">
 
 `202 {deploy_id}` → poll `GET /deploys/{deploy_id}` for
 `queued | running | succeeded | failed | rolled_back` plus the step log.
+If the `202` response is lost, retry the exact signed request with the same
+nonce; deployd returns the original `deploy_id` without enqueueing a duplicate.
 
 ## Production
 
@@ -103,6 +109,12 @@ X-Deploy-Signature: sha256=<hex hmac of "{timestamp}.{raw body}">
   IIS physical path on a junction, `Restart-WebAppPool`.
 - **Hardening:** bind to localhost behind a reverse proxy, keep `/admin` off
   the public internet — full checklist in [`SECURITY.md`](SECURITY.md).
+
+Run exactly one deployd process per state database; that process owns the
+durable per-app queues. Build `web/` and serve `web/dist` from the reverse
+proxy, forwarding `/api/*` to deployd after stripping the `/api` prefix.
+For database changes, use expand/contract migrations so the previous release
+remains compatible if application rollback is required.
 
 ## Layout
 

@@ -4,11 +4,12 @@
 
 Initial release.
 
-- Deploy API: HMAC-authenticated `POST /deploys` (timestamp window, nonce
-  replay protection), `GET /deploys/{id}` status with per-step log.
+- Deploy API: HMAC-authenticated `POST /deploys` (timestamp + signed nonce +
+  body, atomic replay protection), `GET /deploys/{id}` status with per-step log.
 - Worker: per-app serialized pipeline — download, SHA256 verify, unpack
   (zip/tar, traversal-safe), migrate, atomic cutover (symlink/junction),
-  restart, health check, auto-rollback, release pruning.
+  restart, health check, auto-rollback, release pruning, crash recovery, and
+  bounded downloads/extraction/command output.
 - `deployd-migrate`: forward-only SQL migrations with checksummed immutable
   files, versioned table, `GO` batch support (SQL Server via pyodbc).
 - Admin API + React UI: app registry CRUD, secret rotation (shown once),

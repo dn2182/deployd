@@ -24,10 +24,11 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Build
         run: |
@@ -39,12 +40,24 @@ jobs:
         id: hash
         run: echo "sha256=$(sha256sum app.zip | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
-      - name: Publish artifact as release asset
+      - name: Publish immutable release asset
         env:
           GH_TOKEN: ${{ github.token }}
+          ARTIFACT_SHA256: ${{ steps.hash.outputs.sha256 }}
         run: |
-          gh release create "deploy-${GITHUB_SHA}" app.zip \
-            --title "deploy ${GITHUB_SHA:0:12}" --notes "automated deploy artifact"
+          tag="deploy-${GITHUB_SHA}"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            mkdir existing-release
+            gh release download "${tag}" --pattern app.zip --dir existing-release
+            existing_sha="$(sha256sum existing-release/app.zip | cut -d' ' -f1)"
+            if [ "${existing_sha}" != "${ARTIFACT_SHA256}" ]; then
+              echo "release ${tag} already exists with a different artifact" >&2
+              exit 1
+            fi
+          else
+            gh release create "${tag}" app.zip \
+              --title "deploy ${GITHUB_SHA:0:12}" --notes "automated deploy artifact"
+          fi
 
       - name: Notify deployd and wait
         env:

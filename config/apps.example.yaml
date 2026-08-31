@@ -2,12 +2,18 @@
 # HMAC secrets are NOT here: they come from env (DEPLOYD_SECRET_<APP>).
 apps:
   example-api:
-    releases_dir: /srv/example-api/releases      # unpacked as releases/<sha>/
+    releases_dir: /srv/example-api/releases      # releases/<sha>-<deploy_id>/
     current_link: /srv/example-api/current       # atomic cutover target
     keep_releases: 5
     artifact:
       # only URLs matching this prefix are accepted (defense in depth on top of HMAC)
       allowed_url_prefix: "https://github.com/your-org/"
+      # GitHub release downloads redirect here; every redirect host must be explicit.
+      allowed_redirect_hosts: ["release-assets.githubusercontent.com"]
+      allow_private_networks: false
+      max_download_bytes: 1073741824               # 1 GiB compressed artifact
+      max_extract_bytes: 2147483648                # 2 GiB extracted content
+      max_extract_files: 10000
     migrate:
       # optional; run from the NEW release dir before cutover; non-zero exit halts deploy
       command: null

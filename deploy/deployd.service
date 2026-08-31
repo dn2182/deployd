@@ -23,12 +23,31 @@ User=deployd
 Group=deployd
 WorkingDirectory=/opt/deployd
 EnvironmentFile=/opt/deployd/.env
-ExecStart=/opt/deployd/.venv/bin/uvicorn deployd.main:app --host 127.0.0.1 --port 8300
+ExecStart=/opt/deployd/.venv/bin/deployd
 Restart=on-failure
 RestartSec=3
+# Restart via sudo requires narrow sudoers rules; otherwise enable NoNewPrivileges.
 NoNewPrivileges=no
 ProtectSystem=full
+ProtectHome=yes
 PrivateTmp=yes
+PrivateDevices=yes
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+UMask=0077
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target

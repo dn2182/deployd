@@ -1,13 +1,12 @@
 VENV := .venv
 PY   := $(VENV)/bin/python
-PIP  := $(VENV)/bin/pip
+UV   ?= uv
 
-.PHONY: install clean dev dev-web update test lint
+.PHONY: install clean dev dev-web update test lint audit
 
 install:
-	python3 -m venv $(VENV)
-	$(PIP) install -e ".[dev]"
-	cd web && pnpm install
+	$(UV) sync --extra dev --frozen
+	cd web && pnpm install --frozen-lockfile
 
 dev:
 	$(VENV)/bin/uvicorn deployd.main:app --host 127.0.0.1 --port 8300 --reload
@@ -22,10 +21,15 @@ test:
 lint:
 	$(VENV)/bin/ruff check src tests
 	$(VENV)/bin/ruff format --check src tests
+	cd web && pnpm lint
+
+audit:
+	$(UV) run --with pip-audit==2.10.1 pip-audit
+	cd web && pnpm audit --prod
 
 update:
-	$(PIP) install --upgrade pip
-	$(PIP) install --upgrade -e ".[dev]"
+	$(UV) lock --upgrade
+	$(UV) sync --extra dev --frozen
 	cd web && pnpm update
 
 clean:

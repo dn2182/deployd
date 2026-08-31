@@ -8,14 +8,15 @@ Linux. Only the touch-points differ.
 Run deployd under [NSSM](https://nssm.cc):
 
 ```powershell
-nssm install deployd "C:\deployd\.venv\Scripts\python.exe" `
-  "-m" "uvicorn" "deployd.main:app" "--host" "127.0.0.1" "--port" "8300"
+nssm install deployd "C:\deployd\.venv\Scripts\deployd.exe"
 nssm set deployd AppDirectory C:\deployd
 nssm set deployd AppEnvironmentExtra DEPLOYD_APPS_CONFIG=C:\deployd\config\apps.yaml
 nssm start deployd
 ```
 
 Put secrets in the service environment (or `config\secrets.env`), never in git.
+Restrict the secrets file ACL to the service identity; POSIX mode `0600` does
+not provide equivalent ACL protection on Windows.
 
 ## Cutover
 
@@ -38,6 +39,11 @@ apps:
     keep_releases: 5
     artifact:
       allowed_url_prefix: "https://github.com/your-org/"
+      allowed_redirect_hosts: ["release-assets.githubusercontent.com"]
+      allow_private_networks: false
+      max_download_bytes: 1073741824
+      max_extract_bytes: 2147483648
+      max_extract_files: 10000
     migrate:
       command: ["deployd-migrate", "--dir", "migrations"]
     restart:
@@ -54,7 +60,7 @@ account with that right).
 
 ## Migrations
 
-`pip install "deployd[mssql]"` plus the Microsoft ODBC Driver for SQL Server.
+`uv sync --extra mssql` plus the Microsoft ODBC Driver for SQL Server.
 Set `DEPLOYD_MIGRATE_DSN` in the app's environment, e.g.:
 
 ```

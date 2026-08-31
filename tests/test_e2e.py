@@ -11,7 +11,7 @@ from deployd.main import create_app
 from deployd.security import compute_signature
 from deployd.worker import runner
 
-SECRET = "e2e-secret"
+SECRET = "e" * 32
 SHA = "f" * 40
 
 
@@ -50,7 +50,7 @@ def signed_headers(body: bytes, *, secret: str = SECRET, nonce: str = "e2e-nonce
         "Content-Type": "application/json",
         "X-Deploy-Timestamp": ts,
         "X-Deploy-Nonce": nonce,
-        "X-Deploy-Signature": "sha256=" + compute_signature(secret, ts, body),
+        "X-Deploy-Signature": "sha256=" + compute_signature(secret, ts, nonce, body),
     }
 
 
@@ -102,11 +102,11 @@ def test_signed_request_deploys_end_to_end(env, monkeypatch):
 def test_bad_signature_rejected(env):
     with TestClient(create_app()) as client:
         body = deploy_body("0" * 64)
-        headers = signed_headers(body, secret="wrong-secret")
+        headers = signed_headers(body, secret="w" * 32)
         assert client.post("/deploys", content=body, headers=headers).status_code == 401
 
 
-def test_replayed_nonce_rejected(env, monkeypatch):
+def test_identical_retry_returns_original_deploy_id(env, monkeypatch):
     async def boom(spec, deploy, ctx):
         raise RuntimeError("stop early")
 
@@ -114,5 +114,55 @@ def test_replayed_nonce_rejected(env, monkeypatch):
     with TestClient(create_app()) as client:
         body = deploy_body("0" * 64)
         headers = signed_headers(body, nonce="replay-me")
-        assert client.post("/deploys", content=body, headers=headers).status_code == 202
+        first = client.post("/deploys", content=body, headers=headers)
+        second = client.post("/deploys", content=body, headers=headers)
+        assert first.status_code == second.status_code == 202
+        assert first.json()["deploy_id"] == second.json()["deploy_id"]
+
+
+def test_same_nonce_with_different_signed_body_is_rejected(env, monkeypatch):
+    async def boom(spec, deploy, ctx):
+        raise RuntimeError("stop early")
+
+    monkeypatch.setitem(runner._STEP_FNS, "download", boom)
+    with TestClient(create_app()) as client:
+        first_body = deploy_body("0" * 64)
+        second_body = deploy_body("1" * 64)
+        assert (
+            client.post(
+                "/deploys",
+                content=first_body,
+                headers=signed_headers(first_body, nonce="same-nonce"),
+            ).status_code
+            == 202
+        )
+        assert (
+            client.post(
+                "/deploys",
+                content=second_body,
+                headers=signed_headers(second_body, nonce="same-nonce"),
+            ).status_code
+            == 401
+        )
+
+
+def test_changing_nonce_without_resigning_is_rejected(env):
+    with TestClient(create_app()) as client:
+        body = deploy_body("0" * 64)
+        headers = signed_headers(body, nonce="signed-nonce")
+        headers["X-Deploy-Nonce"] = "different-nonce"
         assert client.post("/deploys", content=body, headers=headers).status_code == 401
+
+
+def test_oversized_request_is_rejected_before_parsing(env):
+    with TestClient(create_app()) as client:
+        response = client.post(
+            "/deploys",
+            content=b"x" * 65_537,
+            headers={
+                "X-Deploy-Timestamp": "0",
+                "X-Deploy-Nonce": "n",
+                "X-Deploy-Signature": "sha256=00",
+            },
+        )
+        assert response.status_code == 413

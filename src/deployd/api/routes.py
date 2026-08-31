@@ -1,8 +1,10 @@
+import hashlib
+
 from fastapi import APIRouter, Header, HTTPException, Request
 
-from ..config import get_app_registry, get_app_secret
+from ..config import config_lock, get_app_registry, get_app_secret, get_settings
 from ..models import DeployAccepted, DeployDetail, DeployRequest
-from ..security import AuthError, verify_request
+from ..security import AuthError, signed_message, verify_request
 
 router = APIRouter()
 
@@ -19,7 +21,22 @@ async def create_deploy(
     x_deploy_nonce: str = Header(...),
     x_deploy_signature: str = Header(...),
 ):
-    body = await request.body()
+    declared = request.headers.get("content-length")
+    limit = get_settings().max_request_bytes
+    if declared is not None:
+        try:
+            if int(declared) > limit:
+                raise HTTPException(status_code=413, detail="request body too large")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="invalid Content-Length") from exc
+    chunks = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(status_code=413, detail="request body too large")
+        chunks.append(chunk)
+    body = b"".join(chunks)
     store = request.app.state.store
 
     # Parse just enough to find the app -> secret; full HMAC check before
@@ -35,6 +52,8 @@ async def create_deploy(
     secret = get_app_secret(payload.app)
     if not secret:
         raise HTTPException(status_code=503, detail="app secret not configured")
+    if len(secret.encode()) < 32:
+        raise HTTPException(status_code=503, detail="app secret must contain at least 32 bytes")
 
     try:
         verify_request(
@@ -43,25 +62,36 @@ async def create_deploy(
             x_deploy_nonce,
             x_deploy_signature,
             body,
-            seen_nonce=store.nonce_seen(x_deploy_nonce),
         )
     except AuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
-    store.record_nonce(x_deploy_nonce)
-
     spec = registry[payload.app]
-    if not str(payload.artifact_url).startswith(spec.artifact.allowed_url_prefix):
+    if not spec.artifact.allows_initial_url(str(payload.artifact_url)):
         raise HTTPException(status_code=403, detail="artifact URL not allowed for this app")
-
-    deploy_id = store.create_deploy(
-        payload.app,
-        payload.commit_sha,
-        str(payload.artifact_url),
-        payload.artifact_sha256,
-        payload.triggered_by,
-    )
-    request.app.state.queue.enqueue(payload.app, deploy_id)
-    return DeployAccepted(deploy_id=deploy_id)
+    with config_lock():
+        current_registry = get_app_registry()
+        if payload.app not in current_registry:
+            raise HTTPException(status_code=409, detail="app was removed during request")
+        if get_app_secret(payload.app) != secret:
+            raise HTTPException(status_code=401, detail="app secret changed during request")
+        if not current_registry[payload.app].artifact.allows_initial_url(str(payload.artifact_url)):
+            raise HTTPException(status_code=403, detail="artifact rules changed during request")
+        result = store.create_deploy_once(
+            x_deploy_nonce,
+            hashlib.sha256(signed_message(x_deploy_timestamp, x_deploy_nonce, body)).hexdigest(),
+            payload.app,
+            payload.commit_sha,
+            str(payload.artifact_url),
+            payload.artifact_sha256,
+            payload.triggered_by,
+        )
+        if result is None:
+            raise HTTPException(status_code=401, detail="nonce replayed with different request")
+        deploy_id, created = result
+        deploy_status = store.get_deploy(deploy_id)["status"]
+        if created or deploy_status == "queued":
+            request.app.state.queue.enqueue(payload.app, deploy_id)
+    return DeployAccepted(deploy_id=deploy_id, status=deploy_status)
 
 
 @router.get("/deploys/{deploy_id}", response_model=DeployDetail)

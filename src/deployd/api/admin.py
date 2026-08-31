@@ -6,19 +6,24 @@ import hashlib
 import hmac
 import os
 import secrets as pysecrets
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request
 
 from ..config import (
+    APP_NAME_PATTERN,
     AppSpec,
     _secret_key,
+    config_lock,
+    delete_app_config,
     get_app_registry,
     get_app_secret,
     get_settings,
-    remove_app_secret,
-    save_app_registry,
     set_app_secret,
+    upsert_app,
 )
+
+AppName = Annotated[str, Path(pattern=APP_NAME_PATTERN)]
 
 
 def require_admin(x_admin_token: str | None = Header(default=None)):
@@ -50,56 +55,52 @@ async def list_apps():
 
 
 @router.put("/apps/{name}")
-async def upsert_app(name: str, spec: AppSpec):
-    registry = dict(get_app_registry())
-    registry[name] = spec
-    save_app_registry(registry)
+async def upsert_app_route(name: AppName, spec: AppSpec):
+    upsert_app(name, spec)
     return {"status": "saved", "app": name}
 
 
 @router.delete("/apps/{name}")
-async def delete_app(name: str):
-    registry = dict(get_app_registry())
-    if name not in registry:
-        raise HTTPException(status_code=404, detail="unknown app")
-    del registry[name]
-    save_app_registry(registry)
-    remove_app_secret(name)
-    # an env-var secret can't be removed from here — surface it so ops cleans it up
-    env_leftover = _secret_key(name) in os.environ
-    return {
-        "status": "deleted",
-        "app": name,
-        "warning": f"unset {_secret_key(name)} from the service environment"
-        if env_leftover
-        else None,
-    }
+async def delete_app(request: Request, name: AppName):
+    with config_lock():
+        if request.app.state.store.has_active_deploys(name):
+            raise HTTPException(status_code=409, detail="app has queued or running deployments")
+        if _secret_key(name) in os.environ:
+            raise HTTPException(
+                status_code=409,
+                detail=f"unset {_secret_key(name)} from the service environment before deletion",
+            )
+        if not delete_app_config(name):
+            raise HTTPException(status_code=404, detail="unknown app")
+    return {"status": "deleted", "app": name}
 
 
 @router.post("/apps/{name}/rotate-secret")
-async def rotate_secret(name: str):
-    if name not in get_app_registry():
-        raise HTTPException(status_code=404, detail="unknown app")
-    new_secret = pysecrets.token_hex(32)
-    set_app_secret(name, new_secret)
-    info = _secret_info(name)
+async def rotate_secret(name: AppName):
+    with config_lock():
+        if name not in get_app_registry():
+            raise HTTPException(status_code=404, detail="unknown app")
+        if _secret_key(name) in os.environ:
+            raise HTTPException(
+                status_code=409,
+                detail="secret is managed by the service environment; rotate it there",
+            )
+        new_secret = pysecrets.token_hex(32)
+        set_app_secret(name, new_secret)
     return {
         # shown exactly once — copy it into the CI secret now
-        "secret": new_secret if not info["env_override"] else None,
+        "secret": new_secret,
         "fingerprint": hashlib.sha256(new_secret.encode()).hexdigest()[:12],
-        "env_override": info["env_override"],
-        "warning": (
-            "an environment variable overrides the secrets file for this app; "
-            "update the env var or remove it"
-        )
-        if info["env_override"]
-        else None,
+        "env_override": False,
+        "warning": None,
     }
 
 
 @router.get("/deploys")
-async def list_deploys(request: Request, limit: int = 50, app: str | None = None):
-    return request.app.state.store.list_deploys(limit=min(limit, 200), app=app)
+async def list_deploys(
+    request: Request, limit: Annotated[int, Query(ge=1, le=200)] = 50, app: str | None = None
+):
+    return request.app.state.store.list_deploys(limit=limit, app=app)
 
 
 @router.post("/deploys/{deploy_id}/redeploy")
