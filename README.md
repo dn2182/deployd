@@ -113,6 +113,9 @@ nonce; deployd returns the original `deploy_id` without enqueueing a duplicate.
   interactive setup of dependencies, the service user, runtime state, systemd,
   Nginx, and the management UI. Its Cloudflare Flexible mode is intended only
   for testing; keep the separate management port restricted by the firewall.
+- **Ubuntu updates:** run `git pull --ff-only`, `make install`, and `make build`
+  as the repository owner. Restart `deployd` when backend code or dependencies
+  change. Frontend-only updates need only `make build` and a browser refresh.
 - **Linux:** [`deploy/deployd.service`](deploy/deployd.service) — systemd
   unit, dedicated user, per-app sudoers rules for restarts.
 - **Windows:** [`deploy/windows.md`](deploy/windows.md) — NSSM service,

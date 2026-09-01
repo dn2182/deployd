@@ -2,11 +2,14 @@ VENV := .venv
 PY   := $(VENV)/bin/python
 UV   ?= uv
 
-.PHONY: install clean dev dev-web update test lint audit
+.PHONY: install build clean dev dev-web update test lint audit
 
 install:
 	$(UV) sync --extra dev --frozen
 	cd web && pnpm install --frozen-lockfile
+
+build:
+	cd web && pnpm build
 
 dev:
 	$(VENV)/bin/uvicorn deployd.main:app --host 127.0.0.1 --port 8300 --reload

@@ -121,6 +121,10 @@ firmado y nonce; deployd devuelve el `deploy_id` original sin duplicarlo.
   systemd, Nginx y la interfaz de administración. El modo Flexible de
   Cloudflare es solo para pruebas; restringe el puerto de administración con
   el firewall.
+- **Actualizaciones en Ubuntu:** ejecuta `git pull --ff-only`, `make install` y
+  `make build` como propietario del repositorio. Reinicia `deployd` cuando
+  cambie el backend o sus dependencias. Para cambios solo del frontend basta
+  con `make build` y refrescar el navegador.
 - **Linux:** [`deploy/deployd.service`](deploy/deployd.service) — unidad de
   systemd, usuario dedicado, reglas sudoers por app para los restarts.
 - **Windows:** [`deploy/windows.md`](deploy/windows.md) — servicio NSSM,

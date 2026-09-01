@@ -93,17 +93,53 @@ check_checkout() {
     die "tracked repository changes detected; commit or restore them first"
 }
 
+run_as_checkout_owner() {
+  local owner=$1
+  shift
+  if [[ $owner == "root" ]]; then
+    "$@"
+    return
+  fi
+
+  local owner_home
+  owner_home=$(getent passwd "$owner" | cut -d: -f6)
+  [[ -n $owner_home ]] || die "could not determine home directory for $owner"
+  runuser -u "$owner" -- env HOME="$owner_home" PATH="$PATH" "$@"
+}
+
+normalize_build_ownership() {
+  local repo_root=$1
+  local owner=$2
+  local group=$3
+  local path
+  for path in \
+    "$repo_root/.venv" \
+    "$repo_root/.pytest_cache" \
+    "$repo_root/.ruff_cache" \
+    "$repo_root/web/node_modules" \
+    "$repo_root/web/dist"; do
+    if [[ -e $path ]]; then
+      chown -R "$owner:$group" "$path"
+    fi
+  done
+}
+
 install_application() {
   local repo_root=$1
-  local effective_pnpm
-  effective_pnpm=$(pnpm --dir "$repo_root/web" --version)
+  local owner group effective_pnpm
+  owner=$(stat -c '%U' "$repo_root")
+  group=$(stat -c '%G' "$repo_root")
+  id "$owner" >/dev/null 2>&1 || die "repository owner $owner is not a local user"
+  normalize_build_ownership "$repo_root" "$owner" "$group"
+
+  effective_pnpm=$(run_as_checkout_owner "$owner" pnpm --dir "$repo_root/web" --version)
   [[ $effective_pnpm == "$PNPM_VERSION" ]] ||
     die "web/package.json requires pnpm ${PNPM_VERSION}, got ${effective_pnpm}"
-  make -C "$repo_root" install
-  make -C "$repo_root" lint
-  make -C "$repo_root" test
-  make -C "$repo_root" audit
-  pnpm --dir "$repo_root/web" build
+  run_as_checkout_owner "$owner" make -C "$repo_root" install
+  run_as_checkout_owner "$owner" make -C "$repo_root" lint
+  run_as_checkout_owner "$owner" make -C "$repo_root" test
+  run_as_checkout_owner "$owner" make -C "$repo_root" audit
+  run_as_checkout_owner "$owner" make -C "$repo_root" build
   chmod 0755 "$repo_root" "$repo_root/web" "$repo_root/web/dist"
   chmod -R a+rX "$repo_root/.venv"
   find "$repo_root/src" -type d -exec chmod 0755 {} +
