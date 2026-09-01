@@ -109,6 +109,10 @@ nonce; deployd returns the original `deploy_id` without enqueueing a duplicate.
 
 ## Production
 
+- **Ubuntu installer:** run `sudo ./deploy/install-ubuntu.sh` for an
+  interactive setup of dependencies, the service user, runtime state, systemd,
+  Nginx, and the management UI. Its Cloudflare Flexible mode is intended only
+  for testing; keep the separate management port restricted by the firewall.
 - **Linux:** [`deploy/deployd.service`](deploy/deployd.service) — systemd
   unit, dedicated user, per-app sudoers rules for restarts.
 - **Windows:** [`deploy/windows.md`](deploy/windows.md) — NSSM service,

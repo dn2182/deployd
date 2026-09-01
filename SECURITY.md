@@ -17,6 +17,9 @@ response within a few days.
   is set. Keep it reachable only from localhost, a VPN/tailnet, or behind
   Cloudflare Access. Treat that token as command-execution authority because
   administrators can configure migration and restart commands.
+- The testing installer serves management on a separate Basic Auth port. Its
+  default all-interface bind is safe only when the host firewall restricts that
+  port; choose `127.0.0.1` when access through an SSH tunnel is sufficient.
 - One HMAC secret per app; rotate via the admin API. Secrets live in env vars
   or `config/secrets.env` (0600) — never in git. Admin and app secrets must
   contain at least 32 bytes.

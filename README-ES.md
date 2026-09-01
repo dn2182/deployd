@@ -116,6 +116,11 @@ firmado y nonce; deployd devuelve el `deploy_id` original sin duplicarlo.
 
 ## Producción
 
+- **Instalador para Ubuntu:** ejecuta `sudo ./deploy/install-ubuntu.sh` para
+  configurar interactivamente dependencias, usuario de servicio, estado,
+  systemd, Nginx y la interfaz de administración. El modo Flexible de
+  Cloudflare es solo para pruebas; restringe el puerto de administración con
+  el firewall.
 - **Linux:** [`deploy/deployd.service`](deploy/deployd.service) — unidad de
   systemd, usuario dedicado, reglas sudoers por app para los restarts.
 - **Windows:** [`deploy/windows.md`](deploy/windows.md) — servicio NSSM,
