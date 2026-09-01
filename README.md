@@ -127,6 +127,11 @@ cd /opt/deployd
 - **Ubuntu updates:** run `git pull --ff-only`, `make install`, and `make build`
   as the repository owner. Restart `deployd` when backend code or dependencies
   change. Frontend-only updates need only `make build` and a browser refresh.
+- **Ubuntu uninstall:** run `./deploy/uninstall-ubuntu.sh` without `sudo`. It
+  offers a permission-restricted backup, requires explicit confirmation, and
+  removes the deployd service, Nginx configuration, credentials, runtime state,
+  service account, and repository. Shared packages and deployed applications
+  are preserved because they may be used independently.
 - **Linux:** [`deploy/deployd.service`](deploy/deployd.service) — systemd
   unit, dedicated user, per-app sudoers rules for restarts.
 - **Windows:** [`deploy/windows.md`](deploy/windows.md) — NSSM service,

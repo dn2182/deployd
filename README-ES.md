@@ -135,6 +135,12 @@ cd /opt/deployd
   `make build` como propietario del repositorio. Reinicia `deployd` cuando
   cambie el backend o sus dependencias. Para cambios solo del frontend basta
   con `make build` y refrescar el navegador.
+- **Desinstalación en Ubuntu:** ejecuta `./deploy/uninstall-ubuntu.sh` sin
+  `sudo`. Ofrece un respaldo con permisos restringidos, exige confirmación
+  explícita y elimina el servicio deployd, la configuración de Nginx, las
+  credenciales, el estado, la cuenta de servicio y el repositorio. Conserva
+  los paquetes compartidos y las aplicaciones desplegadas porque pueden usarse
+  de forma independiente.
 - **Linux:** [`deploy/deployd.service`](deploy/deployd.service) — unidad de
   systemd, usuario dedicado, reglas sudoers por app para los restarts.
 - **Windows:** [`deploy/windows.md`](deploy/windows.md) — servicio NSSM,
