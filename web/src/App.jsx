@@ -537,7 +537,7 @@ export default function App() {
               label={t('language.switch')}
               onClick={() => setLanguage(language === 'es' ? 'en' : 'es')}
             >
-              <span className="language-code">{language === 'es' ? 'EN' : 'ES'}</span>
+              <span className="language-code">{language === 'es' ? 'ES' : 'EN'}</span>
             </TooltipButton>
           </div>
         </div>

@@ -207,10 +207,12 @@ describe('App', () => {
     expect(await screen.findByRole('heading', { name: 'Resumen de despliegues' })).toBeInTheDocument()
     expect(document.documentElement.lang).toBe('es')
     expect(await screen.findByText('Completado')).toBeInTheDocument()
+    expect(screen.getByText('ES')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Switch to English' }))
     expect(screen.getByRole('heading', { name: 'Deployment overview' })).toBeInTheDocument()
     expect(document.documentElement.lang).toBe('en')
+    expect(screen.getByText('EN')).toBeInTheDocument()
   })
 
   it('defaults non-Spanish browsers to English', async () => {
