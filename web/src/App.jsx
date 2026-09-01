@@ -536,8 +536,8 @@ export default function App() {
         <section className="hero-section">
           <div>
             <span className="eyebrow"><Activity size={14} /> Deployment control</span>
-            <h1>Ship clearly.<br /><span>Recover confidently.</span></h1>
-            <p>Manage application contracts, signing secrets, and release activity from one calm control plane.</p>
+            <h1>Deployment overview</h1>
+            <p>Manage applications, signing secrets, and recent deployment activity.</p>
           </div>
           <div className="metrics glass-panel">
             <div><strong>{appCount}</strong><span>Applications</span></div>
