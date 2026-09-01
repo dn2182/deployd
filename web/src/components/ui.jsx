@@ -45,6 +45,8 @@ export function ConfirmDialog({
   onConfirm,
   destructive = false,
   confirmationValue,
+  confirmationLabel,
+  cancelLabel = 'Cancel',
 }) {
   const [open, setOpen] = useState(false)
   const [value, setValue] = useState('')
@@ -70,7 +72,7 @@ export function ConfirmDialog({
           </AlertDialog.Description>
           {confirmationValue !== undefined && (
             <label className="field-label dialog-confirmation">
-              Type <strong>{confirmationValue}</strong> to confirm
+              {confirmationLabel ?? <>Type <strong>{confirmationValue}</strong> to confirm</>}
               <input
                 className="text-input"
                 value={value}
@@ -82,7 +84,7 @@ export function ConfirmDialog({
           )}
           <div className="dialog-actions">
             <AlertDialog.Cancel asChild>
-              <Button>Cancel</Button>
+              <Button>{cancelLabel}</Button>
             </AlertDialog.Cancel>
             <AlertDialog.Action asChild>
               <Button

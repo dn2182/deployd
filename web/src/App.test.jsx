@@ -54,6 +54,7 @@ function mockFetch(routes) {
 }
 
 beforeEach(() => {
+  Object.defineProperty(window.navigator, 'language', { value: 'en-US', configurable: true })
   sessionStorage.setItem('deployd-admin-token', 't0ken')
   localStorage.clear()
   document.documentElement.removeAttribute('data-theme')
@@ -191,5 +192,38 @@ describe('App', () => {
     await waitFor(() => expect(document.documentElement.dataset.theme).toBe('dark'))
     expect(localStorage.getItem('deployd-theme')).toBe('dark')
     expect(screen.getByRole('button', { name: 'Switch to light theme' })).toBeInTheDocument()
+  })
+
+  it('uses Spanish for a Spanish browser and allows switching to English', async () => {
+    Object.defineProperty(window.navigator, 'language', { value: 'es-CR', configurable: true })
+    global.fetch = mockFetch({
+      'GET /api/healthz': { status: 'ok' },
+      'GET /api/admin/apps': APPS,
+      'GET /api/admin/deploys': DEPLOYS,
+    })
+
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { name: 'Resumen de despliegues' })).toBeInTheDocument()
+    expect(document.documentElement.lang).toBe('es')
+    expect(await screen.findByText('Completado')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to English' }))
+    expect(screen.getByRole('heading', { name: 'Deployment overview' })).toBeInTheDocument()
+    expect(document.documentElement.lang).toBe('en')
+  })
+
+  it('defaults non-Spanish browsers to English', async () => {
+    Object.defineProperty(window.navigator, 'language', { value: 'fr-FR', configurable: true })
+    global.fetch = mockFetch({
+      'GET /api/healthz': { status: 'ok' },
+      'GET /api/admin/apps': APPS,
+      'GET /api/admin/deploys': DEPLOYS,
+    })
+
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { name: 'Deployment overview' })).toBeInTheDocument()
+    expect(document.documentElement.lang).toBe('en')
   })
 })

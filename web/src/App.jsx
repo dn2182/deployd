@@ -23,14 +23,7 @@ import {
   X,
 } from 'lucide-react'
 import { Button, ConfirmDialog, TooltipButton } from './components/ui.jsx'
-
-const STATUS_LABELS = {
-  queued: 'Queued',
-  running: 'Running',
-  succeeded: 'Succeeded',
-  failed: 'Failed',
-  rolled_back: 'Rolled back',
-}
+import { detectLanguage, translate } from './i18n.js'
 
 const STEP_ICON = {
   succeeded: <Check size={13} />,
@@ -80,11 +73,11 @@ function initialTheme() {
   }
 }
 
-function StatusBadge({ status }) {
+function StatusBadge({ status, t }) {
   return (
     <span className={`status-badge status-${status}`}>
       <span className="status-dot" />
-      {STATUS_LABELS[status] ?? status}
+      {t(`status.${status}`)}
     </span>
   )
 }
@@ -98,7 +91,7 @@ function ErrorMessage({ children, compact = false }) {
   )
 }
 
-function AppCard({ name, spec, call, onChanged }) {
+function AppCard({ name, spec, call, onChanged, t }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [freshSecret, setFreshSecret] = useState(null)
@@ -161,34 +154,37 @@ function AppCard({ name, spec, call, onChanged }) {
           </div>
           <div>
             <h3>{name}</h3>
-            <span>{spec.health?.url ?? 'No health endpoint'}</span>
+            <span>{spec.health?.url ?? t('app.no_health')}</span>
           </div>
         </div>
         <div className="app-actions">
-          <TooltipButton label={`Edit ${name}`} onClick={startEdit}>
+          <TooltipButton label={t('app.edit', { name })} onClick={startEdit}>
             <Pencil size={16} />
           </TooltipButton>
           <ConfirmDialog
             trigger={
-              <TooltipButton label={`Rotate secret for ${name}`}>
+              <TooltipButton label={t('app.rotate', { name })}>
                 <KeyRound size={16} />
               </TooltipButton>
             }
-            title={`Rotate ${name} secret?`}
-            description="The current HMAC secret will stop working. Update your CI with the new value immediately."
-            confirmLabel="Rotate secret"
+            title={t('app.rotate_title', { name })}
+            description={t('app.rotate_description')}
+            confirmLabel={t('app.rotate_confirm')}
+            cancelLabel={t('common.cancel')}
             onConfirm={rotate}
           />
           <ConfirmDialog
             trigger={
-              <TooltipButton label={`Remove ${name}`} className="icon-button-danger">
+              <TooltipButton label={t('app.remove', { name })} className="icon-button-danger">
                 <Trash2 size={16} />
               </TooltipButton>
             }
-            title={`Remove ${name}?`}
-            description="The app will be removed from the registry. Existing releases on disk are not touched."
-            confirmLabel="Remove app"
+            title={t('app.remove_title', { name })}
+            description={t('app.remove_description')}
+            confirmLabel={t('app.remove_confirm')}
             confirmationValue={name}
+            confirmationLabel={t('common.confirm_type', { value: name })}
+            cancelLabel={t('common.cancel')}
             destructive
             onConfirm={remove}
           />
@@ -197,7 +193,7 @@ function AppCard({ name, spec, call, onChanged }) {
 
       <div className="app-details">
         <div className="detail-item">
-          <span className="detail-label">Signing secret</span>
+          <span className="detail-label">{t('app.signing_secret')}</span>
           {spec.secret?.configured ? (
             <span className="secret-value">
               <ShieldCheck size={14} />
@@ -205,11 +201,11 @@ function AppCard({ name, spec, call, onChanged }) {
               {spec.secret.env_override && <span className="mini-badge">ENV</span>}
             </span>
           ) : (
-            <span className="warning-value">Not configured</span>
+            <span className="warning-value">{t('app.not_configured')}</span>
           )}
         </div>
         <div className="detail-item detail-item-wide">
-          <span className="detail-label">Release directory</span>
+          <span className="detail-label">{t('app.release_directory')}</span>
           <code className="path-value">{spec.releases_dir}</code>
         </div>
       </div>
@@ -218,10 +214,10 @@ function AppCard({ name, spec, call, onChanged }) {
         <div className="secret-reveal">
           <div className="secret-reveal-head">
             <div>
-              <strong>{freshSecret.secret ? 'New secret generated' : 'Secret not returned'}</strong>
-              <span>{freshSecret.secret ? 'Shown once. Copy it to CI now.' : freshSecret.warning}</span>
+              <strong>{freshSecret.secret ? t('app.secret_generated') : t('app.secret_missing')}</strong>
+              <span>{freshSecret.secret ? t('app.secret_once') : freshSecret.warning}</span>
             </div>
-            <TooltipButton label="Dismiss" onClick={() => setFreshSecret(null)}>
+            <TooltipButton label={t('app.dismiss')} onClick={() => setFreshSecret(null)}>
               <X size={15} />
             </TooltipButton>
           </div>
@@ -229,7 +225,7 @@ function AppCard({ name, spec, call, onChanged }) {
             <button className="secret-copy" type="button" onClick={copySecret}>
               <code>{freshSecret.secret}</code>
               {copied ? <Check size={15} /> : <Copy size={15} />}
-              <span>{copied ? 'Copied' : 'Copy'}</span>
+              <span>{copied ? t('app.copied') : t('app.copy')}</span>
             </button>
           )}
         </div>
@@ -239,18 +235,18 @@ function AppCard({ name, spec, call, onChanged }) {
         <div className="editor-panel">
           <div className="editor-title">
             <Code2 size={15} />
-            Configuration
+            {t('app.configuration')}
           </div>
           <textarea
             className="code-editor"
-            aria-label={`${name} configuration`}
+            aria-label={t('app.configuration_label', { name })}
             value={draft}
             spellCheck="false"
             onChange={(event) => setDraft(event.target.value)}
           />
           <div className="form-actions">
-            <Button variant="primary" onClick={save}>Save changes</Button>
-            <Button onClick={() => setEditing(false)}>Cancel</Button>
+            <Button variant="primary" onClick={save}>{t('app.save_changes')}</Button>
+            <Button onClick={() => setEditing(false)}>{t('common.cancel')}</Button>
           </div>
         </div>
       )}
@@ -259,7 +255,7 @@ function AppCard({ name, spec, call, onChanged }) {
   )
 }
 
-function NewAppCard({ call, onChanged }) {
+function NewAppCard({ call, onChanged, t }) {
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
   const [draft, setDraft] = useState(JSON.stringify(APP_TEMPLATE, null, 2))
@@ -272,7 +268,7 @@ function NewAppCard({ call, onChanged }) {
 
   const save = async () => {
     if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(name)) {
-      setError('Name must use lowercase letters, digits, and interior dashes.')
+      setError(t('new.validation'))
       return
     }
     try {
@@ -291,8 +287,8 @@ function NewAppCard({ call, onChanged }) {
     return (
       <button className="add-app-card" type="button" onClick={() => setOpen(true)}>
         <span><Plus size={19} /></span>
-        <strong>Add application</strong>
-        <small>Register another deployment target</small>
+        <strong>{t('new.add')}</strong>
+        <small>{t('new.add_description')}</small>
       </button>
     )
   }
@@ -303,41 +299,41 @@ function NewAppCard({ call, onChanged }) {
         <div className="app-identity">
           <div className="app-icon app-icon-new" aria-hidden="true"><Plus size={19} /></div>
           <div>
-            <h3>New application</h3>
-            <span>Define its deployment contract</span>
+            <h3>{t('new.title')}</h3>
+            <span>{t('new.description')}</span>
           </div>
         </div>
       </div>
       <label className="field-label">
-        Application name
+        {t('new.name')}
         <input
           className="text-input"
-          placeholder="app name (e.g. my-api)"
+          placeholder={t('new.placeholder')}
           value={name}
           autoComplete="off"
           onChange={(event) => setName(event.target.value)}
         />
       </label>
       <label className="field-label">
-        Configuration
+        {t('app.configuration')}
         <textarea
           className="code-editor"
-          aria-label="New application configuration"
+          aria-label={t('new.configuration_label')}
           value={draft}
           spellCheck="false"
           onChange={(event) => setDraft(event.target.value)}
         />
       </label>
       <div className="form-actions">
-        <Button variant="primary" onClick={save}>Create application</Button>
-        <Button onClick={close}>Cancel</Button>
+        <Button variant="primary" onClick={save}>{t('new.create')}</Button>
+        <Button onClick={close}>{t('common.cancel')}</Button>
       </div>
       {error && <ErrorMessage compact>{error}</ErrorMessage>}
     </article>
   )
 }
 
-function DeployRow({ deploy, call, onChanged }) {
+function DeployRow({ deploy, call, onChanged, t }) {
   const [expanded, setExpanded] = useState(false)
   const [detail, setDetail] = useState(null)
   const [error, setError] = useState(null)
@@ -377,16 +373,17 @@ function DeployRow({ deploy, call, onChanged }) {
         </button>
         <div className="deploy-meta">
           <time>{deploy.created_at}</time>
-          <StatusBadge status={deploy.status} />
+          <StatusBadge status={deploy.status} t={t} />
           <ConfirmDialog
             trigger={
-              <TooltipButton label={`Redeploy ${deploy.app}`}>
+              <TooltipButton label={t('deploy.redeploy', { name: deploy.app })}>
                 <RotateCcw size={15} />
               </TooltipButton>
             }
-            title={`Redeploy ${deploy.app}?`}
-            description={`Commit ${deploy.commit_sha.slice(0, 12)} will be queued using the original artifact.`}
-            confirmLabel="Redeploy"
+            title={t('deploy.redeploy_title', { name: deploy.app })}
+            description={t('deploy.redeploy_description', { commit: deploy.commit_sha.slice(0, 12) })}
+            confirmLabel={t('deploy.redeploy_confirm')}
+            cancelLabel={t('common.cancel')}
             onConfirm={redeploy}
           />
         </div>
@@ -395,7 +392,7 @@ function DeployRow({ deploy, call, onChanged }) {
       {expanded && (
         <div className="deploy-detail">
           {!detail && !error && (
-            <div className="detail-loading"><LoaderCircle className="spin" size={15} /> Loading steps</div>
+            <div className="detail-loading"><LoaderCircle className="spin" size={15} /> {t('deploy.loading_steps')}</div>
           )}
           {detail?.steps.map((step, index) => (
             <div className={`deploy-step step-${step.status}`} key={`${step.step}-${index}`}>
@@ -406,7 +403,7 @@ function DeployRow({ deploy, call, onChanged }) {
               </div>
             </div>
           ))}
-          {detail && <p className="triggered-by">Triggered by {deploy.triggered_by}</p>}
+          {detail && <p className="triggered-by">{t('deploy.triggered_by', { name: deploy.triggered_by })}</p>}
         </div>
       )}
       {error && <ErrorMessage compact>{error}</ErrorMessage>}
@@ -414,17 +411,18 @@ function DeployRow({ deploy, call, onChanged }) {
   )
 }
 
-function LoadingPanel() {
+function LoadingPanel({ t }) {
   return (
-    <div className="glass-panel loading-panel" aria-label="Loading applications">
+    <div className="glass-panel loading-panel" aria-label={t('loading.applications')}>
       <LoaderCircle className="spin" size={20} />
-      <span>Loading control plane…</span>
+      <span>{t('loading.control_plane')}</span>
     </div>
   )
 }
 
 export default function App() {
   const [theme, setTheme] = useState(initialTheme)
+  const [language, setLanguage] = useState(detectLanguage)
   const [token, setToken] = useState(() => {
     try {
       return sessionStorage.getItem('deployd-admin-token') ?? ''
@@ -436,6 +434,7 @@ export default function App() {
   const [apps, setApps] = useState(null)
   const [deploys, setDeploys] = useState([])
   const [error, setError] = useState(null)
+  const t = useCallback((key, values) => translate(language, key, values), [language])
   const call = useCallback((path, opts = {}) => api(token, path, opts), [token])
 
   useLayoutEffect(() => {
@@ -446,6 +445,10 @@ export default function App() {
       return
     }
   }, [theme])
+
+  useLayoutEffect(() => {
+    document.documentElement.lang = language
+  }, [language])
 
   const refresh = useCallback(async () => {
     if (!token) return
@@ -504,29 +507,37 @@ export default function App() {
             <div className="brand-mark" aria-hidden="true"><CloudCog size={21} /></div>
             <div>
               <strong>deployd</strong>
-              <span>Control plane</span>
+              <span>{t('brand.control_plane')}</span>
             </div>
           </div>
           <div className="topbar-actions">
             <label className="token-field">
               <ShieldCheck size={15} />
-              <span className="sr-only">Admin token</span>
+              <span className="sr-only">{t('topbar.admin_token')}</span>
               <input
                 type="password"
-                placeholder="Admin token"
+                placeholder={t('topbar.admin_token')}
                 value={token}
                 autoComplete="current-password"
                 onChange={(event) => saveToken(event.target.value)}
               />
             </label>
             <span className={`health-pill ${health === 'ok' ? 'health-ok' : 'health-error'}`}>
-              <span /> API {health ?? 'checking'}
+              <span /> {t('topbar.api', {
+                status: health === 'unreachable' ? t('health.unreachable') : health ?? t('health.checking'),
+              })}
             </span>
             <TooltipButton
-              label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+              label={t('theme.switch', { theme: t(`theme.${theme === 'dark' ? 'light' : 'dark'}`) })}
               onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
             >
               {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+            </TooltipButton>
+            <TooltipButton
+              label={t('language.switch')}
+              onClick={() => setLanguage(language === 'es' ? 'en' : 'es')}
+            >
+              <span className="language-code">{language === 'es' ? 'EN' : 'ES'}</span>
             </TooltipButton>
           </div>
         </div>
@@ -535,14 +546,14 @@ export default function App() {
       <main className="main-content">
         <section className="hero-section">
           <div>
-            <span className="eyebrow"><Activity size={14} /> Deployment control</span>
-            <h1>Deployment overview</h1>
-            <p>Manage applications, signing secrets, and recent deployment activity.</p>
+            <span className="eyebrow"><Activity size={14} /> {t('hero.kicker')}</span>
+            <h1>{t('hero.title')}</h1>
+            <p>{t('hero.description')}</p>
           </div>
           <div className="metrics glass-panel">
-            <div><strong>{appCount}</strong><span>Applications</span></div>
-            <div><strong>{deploys.length}</strong><span>Recent deploys</span></div>
-            <div><strong>{successfulCount}</strong><span>Succeeded</span></div>
+            <div><strong>{appCount}</strong><span>{t('metrics.applications')}</span></div>
+            <div><strong>{deploys.length}</strong><span>{t('metrics.recent')}</span></div>
+            <div><strong>{successfulCount}</strong><span>{t('metrics.succeeded')}</span></div>
           </div>
         </section>
 
@@ -552,28 +563,28 @@ export default function App() {
           <section className="glass-panel locked-panel">
             <div className="locked-icon"><KeyRound size={23} /></div>
             <div>
-              <h2>Connect to the control plane</h2>
-              <p>Enter the admin token above to load applications and deployment history.</p>
+              <h2>{t('locked.title')}</h2>
+              <p>{t('locked.description')}</p>
             </div>
           </section>
         )}
 
-        {token && !apps && !error && <LoadingPanel />}
+        {token && !apps && !error && <LoadingPanel t={t} />}
 
         {apps && (
           <section className="content-section">
             <div className="section-heading">
               <div>
-                <span className="section-kicker"><AppWindow size={14} /> Registry</span>
-                <h2>Applications</h2>
+                <span className="section-kicker"><AppWindow size={14} /> {t('registry.kicker')}</span>
+                <h2>{t('registry.title')}</h2>
               </div>
-              <span>{appCount} configured</span>
+              <span>{t('registry.configured', { count: appCount })}</span>
             </div>
             <div className="app-grid">
               {Object.entries(apps).map(([name, spec]) => (
-                <AppCard key={name} name={name} spec={spec} call={call} onChanged={refresh} />
+                <AppCard key={name} name={name} spec={spec} call={call} onChanged={refresh} t={t} />
               ))}
-              <NewAppCard call={call} onChanged={refresh} />
+              <NewAppCard call={call} onChanged={refresh} t={t} />
             </div>
           </section>
         )}
@@ -582,19 +593,19 @@ export default function App() {
           <section className="content-section">
             <div className="section-heading">
               <div>
-                <span className="section-kicker"><Activity size={14} /> Activity</span>
-                <h2>Recent deploys</h2>
+                <span className="section-kicker"><Activity size={14} /> {t('activity.kicker')}</span>
+                <h2>{t('activity.title')}</h2>
               </div>
               <div className="section-actions">
-                {hasActive && <span className="live-indicator"><span /> Live</span>}
-                <Button size="small" onClick={refresh}><RefreshCw size={14} /> Refresh</Button>
+                {hasActive && <span className="live-indicator"><span /> {t('activity.live')}</span>}
+                <Button size="small" onClick={refresh}><RefreshCw size={14} /> {t('activity.refresh')}</Button>
               </div>
             </div>
             <div className="glass-panel deploy-panel">
               {deploys.length === 0 ? (
                 <div className="empty-state">
                   <Activity size={22} />
-                  <p>No deployments yet.</p>
+                  <p>{t('activity.empty')}</p>
                 </div>
               ) : (
                 <ul className="deploy-list">
@@ -604,6 +615,7 @@ export default function App() {
                       deploy={deploy}
                       call={call}
                       onChanged={refresh}
+                      t={t}
                     />
                   ))}
                 </ul>
@@ -615,7 +627,7 @@ export default function App() {
 
       <footer>
         <span>deployd</span>
-        <span>Private deployment control plane</span>
+        <span>{t('footer.description')}</span>
       </footer>
     </div>
   )

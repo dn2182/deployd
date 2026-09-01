@@ -329,6 +329,12 @@ textarea.code-editor {
   background: var(--danger-soft);
 }
 
+.language-code {
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+}
+
 .tooltip-content {
   z-index: 80;
   padding: 6px 9px;
