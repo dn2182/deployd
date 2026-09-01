@@ -123,6 +123,7 @@ configure_runtime() {
   local repo_root=$1
   local generated_token=""
 
+  [[ ! -L "$repo_root/.env" ]] || die "$repo_root/.env must not be a symbolic link"
   if [[ ! -f "$repo_root/.env" ]]; then
     generated_token=$(openssl rand -hex 32)
     local env_file
@@ -136,9 +137,11 @@ configure_runtime() {
       printf 'DEPLOYD_MAX_REQUEST_BYTES=65536\n'
       printf 'DEPLOYD_ADMIN_TOKEN=%s\n' "$generated_token"
     } >"$env_file"
-    install -o root -g root -m 0600 "$env_file" "$repo_root/.env"
+    install -o root -g deployd -m 0640 "$env_file" "$repo_root/.env"
     unlink "$env_file"
   fi
+  chown root:deployd "$repo_root/.env"
+  chmod 0640 "$repo_root/.env"
 
   if [[ ! -f "$STATE_DIR/apps.yaml" ]]; then
     local apps_file

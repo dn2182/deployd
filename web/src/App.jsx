@@ -58,8 +58,16 @@ const api = async (token, path, opts = {}) => {
       ...opts.headers,
     },
   })
-  if (!resp.ok) throw new Error((await resp.json()).detail ?? `HTTP ${resp.status}`)
-  return resp.json()
+  const body = await resp.text()
+  let payload
+  try {
+    payload = body ? JSON.parse(body) : null
+  } catch {
+    const message = body.trim().slice(0, 200)
+    throw new Error(message || `HTTP ${resp.status}: invalid server response`)
+  }
+  if (!resp.ok) throw new Error(payload?.detail ?? `HTTP ${resp.status}`)
+  return payload
 }
 
 function initialTheme() {

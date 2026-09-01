@@ -43,8 +43,13 @@ function mockFetch(routes) {
   return vi.fn(async (url, opts = {}) => {
     const key = `${opts.method ?? 'GET'} ${url}`
     const hit = Object.entries(routes).find(([k]) => key.startsWith(k))
-    if (!hit) return { ok: false, json: async () => ({ detail: `no route: ${key}` }) }
-    return { ok: true, json: async () => hit[1] }
+    const payload = hit ? hit[1] : { detail: `no route: ${key}` }
+    return {
+      ok: Boolean(hit),
+      status: hit ? 200 : 404,
+      json: async () => payload,
+      text: async () => JSON.stringify(payload),
+    }
   })
 }
 
@@ -160,6 +165,19 @@ describe('App', () => {
     fireEvent.change(screen.getByPlaceholderText(/app name/), { target: { value: 'BAD NAME' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create application' }))
     expect(await screen.findByText(/lowercase/)).toBeInTheDocument()
+  })
+
+  it('shows a useful error when the server returns non-JSON', async () => {
+    global.fetch = vi.fn(async (url) => {
+      if (url === '/api/healthz') {
+        return { ok: true, json: async () => ({ status: 'ok' }) }
+      }
+      return { ok: false, status: 502, text: async () => 'Bad Gateway' }
+    })
+
+    render(<App />)
+
+    expect(await screen.findByText('Bad Gateway')).toBeInTheDocument()
   })
 
   it('persists the selected color theme', async () => {
