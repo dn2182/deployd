@@ -50,6 +50,8 @@ function mockFetch(routes) {
 
 beforeEach(() => {
   sessionStorage.setItem('deployd-admin-token', 't0ken')
+  localStorage.clear()
+  document.documentElement.removeAttribute('data-theme')
 })
 
 describe('App', () => {
@@ -62,7 +64,7 @@ describe('App', () => {
     render(<App />)
     expect(await screen.findByRole('heading', { name: 'my-api' })).toBeInTheDocument()
     expect(screen.getByText('abc123def456')).toBeInTheDocument()
-    expect(screen.getByText('succeeded')).toBeInTheDocument()
+    expect(screen.getAllByText('Succeeded')).toHaveLength(2)
     expect(screen.getByText('aaaaaaaaaaaa')).toBeInTheDocument()
   })
 
@@ -79,7 +81,7 @@ describe('App', () => {
     expect(screen.getByText(/healthy after 1 attempt/)).toBeInTheDocument()
   })
 
-  it('redeploy posts to the admin endpoint after confirm', async () => {
+  it('redeploy posts to the admin endpoint after confirmation', async () => {
     const fetcher = mockFetch({
       'GET /api/healthz': { status: 'ok' },
       'GET /api/admin/apps': APPS,
@@ -87,9 +89,9 @@ describe('App', () => {
       'POST /api/admin/deploys/d1/redeploy': { deploy_id: 'd2', status: 'queued' },
     })
     global.fetch = fetcher
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     render(<App />)
-    fireEvent.click(await screen.findByText('redeploy'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Redeploy my-api' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Redeploy' }))
     await waitFor(() =>
       expect(fetcher).toHaveBeenCalledWith(
         '/api/admin/deploys/d1/redeploy',
@@ -110,11 +112,11 @@ describe('App', () => {
         warning: null,
       },
     })
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     render(<App />)
-    fireEvent.click(await screen.findByText('Rotate secret'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Rotate secret for my-api' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Rotate secret' }))
     expect(await screen.findByText('f'.repeat(64))).toBeInTheDocument()
-    fireEvent.click(screen.getByText('dismiss'))
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
     expect(screen.queryByText('f'.repeat(64))).not.toBeInTheDocument()
   })
 
@@ -126,16 +128,19 @@ describe('App', () => {
       'DELETE /api/admin/apps/my-api': { status: 'deleted', app: 'my-api' },
     })
     global.fetch = fetcher
-    vi.spyOn(window, 'prompt').mockReturnValue('wrong-name')
     render(<App />)
-    fireEvent.click(await screen.findByText('Remove'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove my-api' }))
+    const confirmation = screen.getByLabelText(/Type my-api to confirm/)
+    const removeButton = screen.getByRole('button', { name: 'Remove app' })
+    fireEvent.change(confirmation, { target: { value: 'wrong-name' } })
+    expect(removeButton).toBeDisabled()
     expect(fetcher).not.toHaveBeenCalledWith(
       '/api/admin/apps/my-api',
       expect.objectContaining({ method: 'DELETE' })
     )
 
-    window.prompt.mockReturnValue('my-api')
-    fireEvent.click(screen.getByText('Remove'))
+    fireEvent.change(confirmation, { target: { value: 'my-api' } })
+    fireEvent.click(removeButton)
     await waitFor(() =>
       expect(fetcher).toHaveBeenCalledWith(
         '/api/admin/apps/my-api',
@@ -151,9 +156,22 @@ describe('App', () => {
       'GET /api/admin/deploys': DEPLOYS,
     })
     render(<App />)
-    fireEvent.click(await screen.findByText('+ Add app'))
+    fireEvent.click(await screen.findByRole('button', { name: /Add application/ }))
     fireEvent.change(screen.getByPlaceholderText(/app name/), { target: { value: 'BAD NAME' } })
-    fireEvent.click(screen.getByText('Create'))
+    fireEvent.click(screen.getByRole('button', { name: 'Create application' }))
     expect(await screen.findByText(/lowercase/)).toBeInTheDocument()
+  })
+
+  it('persists the selected color theme', async () => {
+    global.fetch = mockFetch({
+      'GET /api/healthz': { status: 'ok' },
+      'GET /api/admin/apps': APPS,
+      'GET /api/admin/deploys': DEPLOYS,
+    })
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to dark theme' }))
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe('dark'))
+    expect(localStorage.getItem('deployd-theme')).toBe('dark')
+    expect(screen.getByRole('button', { name: 'Switch to light theme' })).toBeInTheDocument()
   })
 })

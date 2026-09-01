@@ -1,14 +1,43 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react'
+import {
+  Activity,
+  AppWindow,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  CircleAlert,
+  CloudCog,
+  Code2,
+  Copy,
+  KeyRound,
+  LoaderCircle,
+  Moon,
+  Pencil,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Server,
+  ShieldCheck,
+  Sun,
+  Trash2,
+  X,
+} from 'lucide-react'
+import { Button, ConfirmDialog, TooltipButton } from './components/ui.jsx'
 
-const STATUS_STYLES = {
-  queued: 'bg-slate-200 text-slate-700',
-  running: 'bg-blue-100 text-blue-700',
-  succeeded: 'bg-green-100 text-green-700',
-  failed: 'bg-red-100 text-red-700',
-  rolled_back: 'bg-amber-100 text-amber-700',
+const STATUS_LABELS = {
+  queued: 'Queued',
+  running: 'Running',
+  succeeded: 'Succeeded',
+  failed: 'Failed',
+  rolled_back: 'Rolled back',
 }
 
-const STEP_ICON = { succeeded: '✓', failed: '✗', running: '…', skipped: '−' }
+const STEP_ICON = {
+  succeeded: <Check size={13} />,
+  failed: <X size={13} />,
+  running: <LoaderCircle className="spin" size={13} />,
+  skipped: <span>–</span>,
+}
 
 const APP_TEMPLATE = {
   releases_dir: '/srv/myapp/releases',
@@ -33,11 +62,31 @@ const api = async (token, path, opts = {}) => {
   return resp.json()
 }
 
+function initialTheme() {
+  try {
+    const saved = localStorage.getItem('deployd-theme')
+    if (saved === 'light' || saved === 'dark') return saved
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  } catch {
+    return 'light'
+  }
+}
+
 function StatusBadge({ status }) {
   return (
-    <span className={`px-2 py-0.5 rounded text-xs font-medium ${STATUS_STYLES[status] ?? 'bg-slate-100'}`}>
-      {status}
+    <span className={`status-badge status-${status}`}>
+      <span className="status-dot" />
+      {STATUS_LABELS[status] ?? status}
     </span>
+  )
+}
+
+function ErrorMessage({ children, compact = false }) {
+  return (
+    <div className={`error-message ${compact ? 'error-message-compact' : ''}`} role="alert">
+      <CircleAlert size={16} />
+      <span>{children}</span>
+    </div>
   )
 }
 
@@ -45,6 +94,7 @@ function AppCard({ name, spec, call, onChanged }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [freshSecret, setFreshSecret] = useState(null)
+  const [copied, setCopied] = useState(false)
   const [error, setError] = useState(null)
 
   const startEdit = () => {
@@ -59,102 +109,145 @@ function AppCard({ name, spec, call, onChanged }) {
       await call(`/admin/apps/${name}`, { method: 'PUT', body: draft })
       setEditing(false)
       onChanged()
-    } catch (e) {
-      setError(e.message)
+    } catch (requestError) {
+      setError(requestError.message)
     }
   }
 
   const rotate = async () => {
-    if (!confirm(`Rotate the HMAC secret for ${name}? CI must be updated with the new value.`)) return
     try {
       const out = await call(`/admin/apps/${name}/rotate-secret`, { method: 'POST' })
       setFreshSecret(out)
       onChanged()
-    } catch (e) {
-      setError(e.message)
+    } catch (requestError) {
+      setError(requestError.message)
     }
   }
 
   const remove = async () => {
-    const typed = prompt(
-      `Remove ${name} from the registry? Deployed releases on disk are NOT touched.\n\nType the app name to confirm:`
-    )
-    if (typed !== name) return
     try {
       await call(`/admin/apps/${name}`, { method: 'DELETE' })
       onChanged()
-    } catch (e) {
-      setError(e.message)
+    } catch (requestError) {
+      setError(requestError.message)
+    }
+  }
+
+  const copySecret = async () => {
+    if (!freshSecret?.secret) return
+    try {
+      await navigator.clipboard.writeText(freshSecret.secret)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1800)
+    } catch {
+      setCopied(false)
     }
   }
 
   return (
-    <div className="bg-white rounded-lg border p-5 space-y-3">
-      <div className="flex items-center justify-between">
-        <h3 className="font-medium">{name}</h3>
-        <div className="flex gap-2 text-sm">
-          <button className="px-3 py-1 rounded border hover:bg-slate-50" onClick={startEdit}>
-            Edit
-          </button>
-          <button className="px-3 py-1 rounded border hover:bg-slate-50" onClick={rotate}>
-            Rotate secret
-          </button>
-          <button
-            className="px-3 py-1 rounded border border-red-200 text-red-600 hover:bg-red-50"
-            onClick={remove}
-          >
-            Remove
-          </button>
+    <article className="glass-panel app-card">
+      <div className="app-card-header">
+        <div className="app-identity">
+          <div className="app-icon" aria-hidden="true">
+            <Server size={19} />
+          </div>
+          <div>
+            <h3>{name}</h3>
+            <span>{spec.health?.url ?? 'No health endpoint'}</span>
+          </div>
+        </div>
+        <div className="app-actions">
+          <TooltipButton label={`Edit ${name}`} onClick={startEdit}>
+            <Pencil size={16} />
+          </TooltipButton>
+          <ConfirmDialog
+            trigger={
+              <TooltipButton label={`Rotate secret for ${name}`}>
+                <KeyRound size={16} />
+              </TooltipButton>
+            }
+            title={`Rotate ${name} secret?`}
+            description="The current HMAC secret will stop working. Update your CI with the new value immediately."
+            confirmLabel="Rotate secret"
+            onConfirm={rotate}
+          />
+          <ConfirmDialog
+            trigger={
+              <TooltipButton label={`Remove ${name}`} className="icon-button-danger">
+                <Trash2 size={16} />
+              </TooltipButton>
+            }
+            title={`Remove ${name}?`}
+            description="The app will be removed from the registry. Existing releases on disk are not touched."
+            confirmLabel="Remove app"
+            confirmationValue={name}
+            destructive
+            onConfirm={remove}
+          />
         </div>
       </div>
 
-      <div className="text-sm text-slate-600">
-        Secret:{' '}
-        {spec.secret?.configured ? (
-          <code className="text-xs bg-slate-100 px-1 rounded">{spec.secret.fingerprint}</code>
-        ) : (
-          <span className="text-amber-600">not configured</span>
-        )}
-        {spec.secret?.env_override && <span className="ml-2 text-xs text-slate-400">(env override)</span>}
-        <span className="mx-2">·</span>
-        Releases: <code className="text-xs">{spec.releases_dir}</code>
+      <div className="app-details">
+        <div className="detail-item">
+          <span className="detail-label">Signing secret</span>
+          {spec.secret?.configured ? (
+            <span className="secret-value">
+              <ShieldCheck size={14} />
+              <code>{spec.secret.fingerprint}</code>
+              {spec.secret.env_override && <span className="mini-badge">ENV</span>}
+            </span>
+          ) : (
+            <span className="warning-value">Not configured</span>
+          )}
+        </div>
+        <div className="detail-item detail-item-wide">
+          <span className="detail-label">Release directory</span>
+          <code className="path-value">{spec.releases_dir}</code>
+        </div>
       </div>
 
       {freshSecret && (
-        <div className="bg-amber-50 border border-amber-200 rounded p-3 text-sm">
-          {freshSecret.secret ? (
-            <>
-              New secret (shown once — copy to your CI now):
-              <code className="block mt-1 text-xs break-all select-all">{freshSecret.secret}</code>
-            </>
-          ) : (
-            <span>{freshSecret.warning}</span>
+        <div className="secret-reveal">
+          <div className="secret-reveal-head">
+            <div>
+              <strong>{freshSecret.secret ? 'New secret generated' : 'Secret not returned'}</strong>
+              <span>{freshSecret.secret ? 'Shown once. Copy it to CI now.' : freshSecret.warning}</span>
+            </div>
+            <TooltipButton label="Dismiss" onClick={() => setFreshSecret(null)}>
+              <X size={15} />
+            </TooltipButton>
+          </div>
+          {freshSecret.secret && (
+            <button className="secret-copy" type="button" onClick={copySecret}>
+              <code>{freshSecret.secret}</code>
+              {copied ? <Check size={15} /> : <Copy size={15} />}
+              <span>{copied ? 'Copied' : 'Copy'}</span>
+            </button>
           )}
-          <button className="mt-2 text-xs underline" onClick={() => setFreshSecret(null)}>
-            dismiss
-          </button>
         </div>
       )}
 
       {editing && (
-        <div className="space-y-2">
+        <div className="editor-panel">
+          <div className="editor-title">
+            <Code2 size={15} />
+            Configuration
+          </div>
           <textarea
-            className="w-full h-56 font-mono text-xs border rounded p-2"
+            className="code-editor"
+            aria-label={`${name} configuration`}
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            spellCheck="false"
+            onChange={(event) => setDraft(event.target.value)}
           />
-          <div className="flex gap-2 text-sm">
-            <button className="px-3 py-1 rounded bg-slate-900 text-white" onClick={save}>
-              Save
-            </button>
-            <button className="px-3 py-1 rounded border" onClick={() => setEditing(false)}>
-              Cancel
-            </button>
+          <div className="form-actions">
+            <Button variant="primary" onClick={save}>Save changes</Button>
+            <Button onClick={() => setEditing(false)}>Cancel</Button>
           </div>
         </div>
       )}
-      {error && <p className="text-sm text-red-600">{error}</p>}
-    </div>
+      {error && <ErrorMessage compact>{error}</ErrorMessage>}
+    </article>
   )
 }
 
@@ -164,9 +257,14 @@ function NewAppCard({ call, onChanged }) {
   const [draft, setDraft] = useState(JSON.stringify(APP_TEMPLATE, null, 2))
   const [error, setError] = useState(null)
 
+  const close = () => {
+    setOpen(false)
+    setError(null)
+  }
+
   const save = async () => {
     if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(name)) {
-      setError('name must use lowercase letters, digits, and interior dashes')
+      setError('Name must use lowercase letters, digits, and interior dashes.')
       return
     }
     try {
@@ -176,44 +274,58 @@ function NewAppCard({ call, onChanged }) {
       setDraft(JSON.stringify(APP_TEMPLATE, null, 2))
       setError(null)
       onChanged()
-    } catch (e) {
-      setError(e.message)
+    } catch (requestError) {
+      setError(requestError.message)
     }
   }
 
   if (!open) {
     return (
-      <button
-        className="w-full border-2 border-dashed rounded-lg p-4 text-sm text-slate-500 hover:bg-white"
-        onClick={() => setOpen(true)}
-      >
-        + Add app
+      <button className="add-app-card" type="button" onClick={() => setOpen(true)}>
+        <span><Plus size={19} /></span>
+        <strong>Add application</strong>
+        <small>Register another deployment target</small>
       </button>
     )
   }
+
   return (
-    <div className="bg-white rounded-lg border p-5 space-y-2">
-      <input
-        className="border rounded px-2 py-1 text-sm w-full"
-        placeholder="app name (e.g. my-api)"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-      />
-      <textarea
-        className="w-full h-56 font-mono text-xs border rounded p-2"
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-      />
-      <div className="flex gap-2 text-sm">
-        <button className="px-3 py-1 rounded bg-slate-900 text-white" onClick={save}>
-          Create
-        </button>
-        <button className="px-3 py-1 rounded border" onClick={() => setOpen(false)}>
-          Cancel
-        </button>
+    <article className="glass-panel app-card new-app-card">
+      <div className="app-card-header">
+        <div className="app-identity">
+          <div className="app-icon app-icon-new" aria-hidden="true"><Plus size={19} /></div>
+          <div>
+            <h3>New application</h3>
+            <span>Define its deployment contract</span>
+          </div>
+        </div>
       </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
-    </div>
+      <label className="field-label">
+        Application name
+        <input
+          className="text-input"
+          placeholder="app name (e.g. my-api)"
+          value={name}
+          autoComplete="off"
+          onChange={(event) => setName(event.target.value)}
+        />
+      </label>
+      <label className="field-label">
+        Configuration
+        <textarea
+          className="code-editor"
+          aria-label="New application configuration"
+          value={draft}
+          spellCheck="false"
+          onChange={(event) => setDraft(event.target.value)}
+        />
+      </label>
+      <div className="form-actions">
+        <Button variant="primary" onClick={save}>Create application</Button>
+        <Button onClick={close}>Cancel</Button>
+      </div>
+      {error && <ErrorMessage compact>{error}</ErrorMessage>}
+    </article>
   )
 }
 
@@ -226,68 +338,85 @@ function DeployRow({ deploy, call, onChanged }) {
     if (!expanded) return
     call(`/deploys/${deploy.deploy_id}`)
       .then(setDetail)
-      .catch((e) => setError(e.message))
+      .catch((requestError) => setError(requestError.message))
   }, [expanded, deploy.status, call, deploy.deploy_id])
 
-  const redeploy = async (e) => {
-    e.stopPropagation()
-    if (!confirm(`Redeploy ${deploy.app} @ ${deploy.commit_sha.slice(0, 12)}?`)) return
+  const redeploy = async () => {
     try {
       await call(`/admin/deploys/${deploy.deploy_id}/redeploy`, { method: 'POST' })
       onChanged()
-    } catch (err) {
-      setError(err.message)
+    } catch (requestError) {
+      setError(requestError.message)
     }
   }
 
   return (
-    <li className="py-2 text-sm">
-      <div
-        className="flex items-center justify-between cursor-pointer"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <span>
-          <span className="text-slate-400 mr-1">{expanded ? '▾' : '▸'}</span>
-          <span className="font-medium">{deploy.app}</span>{' '}
-          <code className="text-xs text-slate-500">{deploy.commit_sha.slice(0, 12)}</code>
-        </span>
-        <span className="flex items-center gap-3">
-          <button className="text-xs underline text-slate-500" onClick={redeploy}>
-            redeploy
-          </button>
-          <span className="text-xs text-slate-400">{deploy.created_at}</span>
+    <li className={`deploy-row ${expanded ? 'deploy-row-expanded' : ''}`}>
+      <div className="deploy-summary">
+        <button
+          className="deploy-expand"
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded(!expanded)}
+        >
+          <span className="chevron" aria-hidden="true">
+            {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+          </span>
+          <span className="deploy-main">
+            <strong>{deploy.app}</strong>
+            <code>{deploy.commit_sha.slice(0, 12)}</code>
+          </span>
+        </button>
+        <div className="deploy-meta">
+          <time>{deploy.created_at}</time>
           <StatusBadge status={deploy.status} />
-        </span>
+          <ConfirmDialog
+            trigger={
+              <TooltipButton label={`Redeploy ${deploy.app}`}>
+                <RotateCcw size={15} />
+              </TooltipButton>
+            }
+            title={`Redeploy ${deploy.app}?`}
+            description={`Commit ${deploy.commit_sha.slice(0, 12)} will be queued using the original artifact.`}
+            confirmLabel="Redeploy"
+            onConfirm={redeploy}
+          />
+        </div>
       </div>
 
       {expanded && (
-        <div className="mt-2 ml-5 border-l pl-3 space-y-1">
-          {!detail && !error && <p className="text-xs text-slate-400">loading…</p>}
-          {detail?.steps.map((s, i) => (
-            <div key={i} className="text-xs">
-              <span
-                className={
-                  s.status === 'failed'
-                    ? 'text-red-600'
-                    : s.status === 'succeeded'
-                      ? 'text-green-600'
-                      : 'text-slate-500'
-                }
-              >
-                {STEP_ICON[s.status] ?? '·'} {s.step}
-              </span>
-              {s.output && <span className="text-slate-500 ml-1">— {s.output}</span>}
+        <div className="deploy-detail">
+          {!detail && !error && (
+            <div className="detail-loading"><LoaderCircle className="spin" size={15} /> Loading steps</div>
+          )}
+          {detail?.steps.map((step, index) => (
+            <div className={`deploy-step step-${step.status}`} key={`${step.step}-${index}`}>
+              <span className="step-icon">{STEP_ICON[step.status] ?? <span>·</span>}</span>
+              <div>
+                <strong>{step.step}</strong>
+                {step.output && <p>{step.output}</p>}
+              </div>
             </div>
           ))}
-          <p className="text-xs text-slate-400">triggered by {detail?.steps ? deploy.triggered_by : ''}</p>
+          {detail && <p className="triggered-by">Triggered by {deploy.triggered_by}</p>}
         </div>
       )}
-      {error && <p className="text-xs text-red-600 ml-5">{error}</p>}
+      {error && <ErrorMessage compact>{error}</ErrorMessage>}
     </li>
   )
 }
 
+function LoadingPanel() {
+  return (
+    <div className="glass-panel loading-panel" aria-label="Loading applications">
+      <LoaderCircle className="spin" size={20} />
+      <span>Loading control plane…</span>
+    </div>
+  )
+}
+
 export default function App() {
+  const [theme, setTheme] = useState(initialTheme)
   const [token, setToken] = useState(() => {
     try {
       return sessionStorage.getItem('deployd-admin-token') ?? ''
@@ -301,6 +430,15 @@ export default function App() {
   const [error, setError] = useState(null)
   const call = useCallback((path, opts = {}) => api(token, path, opts), [token])
 
+  useLayoutEffect(() => {
+    document.documentElement.dataset.theme = theme
+    try {
+      localStorage.setItem('deployd-theme', theme)
+    } catch {
+      return
+    }
+  }, [theme])
+
   const refresh = useCallback(async () => {
     if (!token) return
     try {
@@ -311,16 +449,16 @@ export default function App() {
       setApps(nextApps)
       setDeploys(nextDeploys)
       setError(null)
-    } catch (e) {
+    } catch (requestError) {
       setApps(null)
-      setError(e.message)
+      setError(requestError.message)
     }
   }, [call, token])
 
   useEffect(() => {
     fetch('/api/healthz')
-      .then((r) => r.json())
-      .then((d) => setHealth(d.status))
+      .then((response) => response.json())
+      .then((data) => setHealth(data.status))
       .catch(() => setHealth('unreachable'))
   }, [])
 
@@ -329,7 +467,7 @@ export default function App() {
     return () => clearTimeout(timer)
   }, [refresh])
 
-  const hasActive = deploys.some((d) => d.status === 'queued' || d.status === 'running')
+  const hasActive = deploys.some((deploy) => deploy.status === 'queued' || deploy.status === 'running')
   useEffect(() => {
     if (!hasActive || !token) return
     const timer = setInterval(refresh, 3000)
@@ -341,65 +479,136 @@ export default function App() {
     try {
       sessionStorage.setItem('deployd-admin-token', value)
     } catch {
-      /* storage unavailable — token lives for this page only */
+      return
     }
   }
 
+  const appCount = apps ? Object.keys(apps).length : 0
+  const successfulCount = deploys.filter((deploy) => deploy.status === 'succeeded').length
+
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <header className="border-b bg-white px-6 py-4 flex items-center justify-between">
-        <h1 className="text-lg font-semibold">deployd</h1>
-        <div className="flex items-center gap-4 text-sm">
-          <input
-            type="password"
-            placeholder="admin token"
-            className="border rounded px-2 py-1 text-sm w-48"
-            value={token}
-            onChange={(e) => saveToken(e.target.value)}
-          />
-          <span>
-            API:{' '}
-            <span className={health === 'ok' ? 'text-green-600' : 'text-red-600'}>{health ?? '…'}</span>
-          </span>
+    <div className="app-shell">
+      <div className="ambient ambient-one" />
+      <div className="ambient ambient-two" />
+      <header className="topbar">
+        <div className="topbar-inner">
+          <div className="brand">
+            <div className="brand-mark" aria-hidden="true"><CloudCog size={21} /></div>
+            <div>
+              <strong>deployd</strong>
+              <span>Control plane</span>
+            </div>
+          </div>
+          <div className="topbar-actions">
+            <label className="token-field">
+              <ShieldCheck size={15} />
+              <span className="sr-only">Admin token</span>
+              <input
+                type="password"
+                placeholder="Admin token"
+                value={token}
+                autoComplete="current-password"
+                onChange={(event) => saveToken(event.target.value)}
+              />
+            </label>
+            <span className={`health-pill ${health === 'ok' ? 'health-ok' : 'health-error'}`}>
+              <span /> API {health ?? 'checking'}
+            </span>
+            <TooltipButton
+              label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            >
+              {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+            </TooltipButton>
+          </div>
         </div>
       </header>
 
-      <main className="max-w-3xl mx-auto p-6 space-y-6">
-        {error && (
-          <div className="bg-red-50 border border-red-200 rounded p-3 text-sm text-red-700">{error}</div>
+      <main className="main-content">
+        <section className="hero-section">
+          <div>
+            <span className="eyebrow"><Activity size={14} /> Deployment control</span>
+            <h1>Ship clearly.<br /><span>Recover confidently.</span></h1>
+            <p>Manage application contracts, signing secrets, and release activity from one calm control plane.</p>
+          </div>
+          <div className="metrics glass-panel">
+            <div><strong>{appCount}</strong><span>Applications</span></div>
+            <div><strong>{deploys.length}</strong><span>Recent deploys</span></div>
+            <div><strong>{successfulCount}</strong><span>Succeeded</span></div>
+          </div>
+        </section>
+
+        {error && <ErrorMessage>{error}</ErrorMessage>}
+
+        {!token && (
+          <section className="glass-panel locked-panel">
+            <div className="locked-icon"><KeyRound size={23} /></div>
+            <div>
+              <h2>Connect to the control plane</h2>
+              <p>Enter the admin token above to load applications and deployment history.</p>
+            </div>
+          </section>
         )}
-        {!token && <p className="text-sm text-slate-500">Enter the admin token to load apps and deploys.</p>}
+
+        {token && !apps && !error && <LoadingPanel />}
 
         {apps && (
-          <section className="space-y-4">
-            <h2 className="font-medium">Apps</h2>
-            {Object.entries(apps).map(([name, spec]) => (
-              <AppCard key={name} name={name} spec={spec} call={call} onChanged={refresh} />
-            ))}
-            <NewAppCard call={call} onChanged={refresh} />
+          <section className="content-section">
+            <div className="section-heading">
+              <div>
+                <span className="section-kicker"><AppWindow size={14} /> Registry</span>
+                <h2>Applications</h2>
+              </div>
+              <span>{appCount} configured</span>
+            </div>
+            <div className="app-grid">
+              {Object.entries(apps).map(([name, spec]) => (
+                <AppCard key={name} name={name} spec={spec} call={call} onChanged={refresh} />
+              ))}
+              <NewAppCard call={call} onChanged={refresh} />
+            </div>
           </section>
         )}
 
         {apps && (
-          <section className="bg-white rounded-lg border p-5">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="font-medium">
-                Recent deploys
-                {hasActive && <span className="ml-2 text-xs text-blue-600 animate-pulse">live</span>}
-              </h2>
-              <button className="text-sm underline" onClick={refresh}>
-                refresh
-              </button>
+          <section className="content-section">
+            <div className="section-heading">
+              <div>
+                <span className="section-kicker"><Activity size={14} /> Activity</span>
+                <h2>Recent deploys</h2>
+              </div>
+              <div className="section-actions">
+                {hasActive && <span className="live-indicator"><span /> Live</span>}
+                <Button size="small" onClick={refresh}><RefreshCw size={14} /> Refresh</Button>
+              </div>
             </div>
-            {deploys.length === 0 && <p className="text-sm text-slate-500">No deploys yet.</p>}
-            <ul className="divide-y">
-              {deploys.map((d) => (
-                <DeployRow key={d.deploy_id} deploy={d} call={call} onChanged={refresh} />
-              ))}
-            </ul>
+            <div className="glass-panel deploy-panel">
+              {deploys.length === 0 ? (
+                <div className="empty-state">
+                  <Activity size={22} />
+                  <p>No deployments yet.</p>
+                </div>
+              ) : (
+                <ul className="deploy-list">
+                  {deploys.map((deploy) => (
+                    <DeployRow
+                      key={deploy.deploy_id}
+                      deploy={deploy}
+                      call={call}
+                      onChanged={refresh}
+                    />
+                  ))}
+                </ul>
+              )}
+            </div>
           </section>
         )}
       </main>
+
+      <footer>
+        <span>deployd</span>
+        <span>Private deployment control plane</span>
+      </footer>
     </div>
   )
 }
