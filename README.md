@@ -109,10 +109,21 @@ nonce; deployd returns the original `deploy_id` without enqueueing a duplicate.
 
 ## Production
 
-- **Ubuntu installer:** run `sudo ./deploy/install-ubuntu.sh` for an
-  interactive setup of dependencies, the service user, runtime state, systemd,
-  Nginx, and the management UI. Its Cloudflare Flexible mode is intended only
-  for testing; keep the separate management port restricted by the firewall.
+For a fresh Ubuntu checkout owned by your normal deployment user:
+
+```bash
+sudo install -d -m 0755 -o "$(id -un)" -g "$(id -gn)" /opt/deployd
+git clone https://github.com/dn2182/deployd.git /opt/deployd
+cd /opt/deployd
+./deploy/install-ubuntu.sh
+```
+
+- **Ubuntu installer:** clone the repository as your normal deployment user,
+  then run `./deploy/install-ubuntu.sh` without `sudo`. The installer elevates
+  only package, service-account, systemd, and Nginx operations; dependency
+  installation, tests, and builds remain owned by your user. Its Cloudflare
+  Flexible mode is intended only for testing; keep the separate management
+  port restricted by the firewall.
 - **Ubuntu updates:** run `git pull --ff-only`, `make install`, and `make build`
   as the repository owner. Restart `deployd` when backend code or dependencies
   change. Frontend-only updates need only `make build` and a browser refresh.

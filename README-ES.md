@@ -116,11 +116,21 @@ firmado y nonce; deployd devuelve el `deploy_id` original sin duplicarlo.
 
 ## Producción
 
-- **Instalador para Ubuntu:** ejecuta `sudo ./deploy/install-ubuntu.sh` para
-  configurar interactivamente dependencias, usuario de servicio, estado,
-  systemd, Nginx y la interfaz de administración. El modo Flexible de
-  Cloudflare es solo para pruebas; restringe el puerto de administración con
-  el firewall.
+Para una instalación nueva en Ubuntu propiedad de tu usuario normal de despliegue:
+
+```bash
+sudo install -d -m 0755 -o "$(id -un)" -g "$(id -gn)" /opt/deployd
+git clone https://github.com/dn2182/deployd.git /opt/deployd
+cd /opt/deployd
+./deploy/install-ubuntu.sh
+```
+
+- **Instalador para Ubuntu:** clona el repositorio con tu usuario normal de
+  despliegue y ejecuta `./deploy/install-ubuntu.sh` sin `sudo`. El instalador
+  eleva únicamente las operaciones de paquetes, usuario de servicio, systemd y
+  Nginx; las dependencias, pruebas y compilaciones pertenecen a tu usuario. El
+  modo Flexible de Cloudflare es solo para pruebas; restringe el puerto de
+  administración con el firewall.
 - **Actualizaciones en Ubuntu:** ejecuta `git pull --ff-only`, `make install` y
   `make build` como propietario del repositorio. Reinicia `deployd` cuando
   cambie el backend o sus dependencias. Para cambios solo del frontend basta

@@ -14,8 +14,9 @@ die() {
   exit 1
 }
 
-require_root() {
-  [[ ${EUID} -eq 0 ]] || die "run this installer with sudo"
+require_install_user() {
+  [[ ${EUID} -ne 0 ]] || die "run this installer as the repository owner, without sudo"
+  command -v sudo >/dev/null 2>&1 || die "sudo is required for system configuration"
 }
 
 prompt_default() {
@@ -53,18 +54,19 @@ validate_port() {
 }
 
 install_prerequisites() {
-  apt-get update
-  apt-get install -y ca-certificates curl git make nginx apache2-utils openssl
+  install -d -m 0755 "$HOME/.local/bin"
+  sudo apt-get update
+  sudo apt-get install -y ca-certificates curl git make nginx apache2-utils openssl
 
   if ! command -v node >/dev/null 2>&1; then
-    apt-get install -y nodejs npm
+    sudo apt-get install -y nodejs npm
   fi
 
   if ! command -v uv >/dev/null 2>&1; then
     local installer
     installer=$(mktemp /tmp/uv-installer.XXXXXX)
     curl -LsSf https://astral.sh/uv/install.sh -o "$installer"
-    env UV_INSTALL_DIR=/usr/local/bin sh "$installer"
+    env UV_INSTALL_DIR="$HOME/.local/bin" sh "$installer"
     unlink "$installer"
   fi
 
@@ -75,13 +77,15 @@ install_prerequisites() {
 
   if ! command -v pnpm >/dev/null 2>&1; then
     if command -v corepack >/dev/null 2>&1; then
-      corepack enable
+      corepack enable --install-directory "$HOME/.local/bin"
       corepack prepare "pnpm@${PNPM_VERSION}" --activate
     else
-      command -v npm >/dev/null 2>&1 || apt-get install -y npm
-      npm install --global "pnpm@${PNPM_VERSION}"
+      command -v npm >/dev/null 2>&1 || sudo apt-get install -y npm
+      npm install --global --prefix "$HOME/.local" "pnpm@${PNPM_VERSION}"
     fi
   fi
+  command -v uv >/dev/null 2>&1 || die "uv installation failed"
+  command -v pnpm >/dev/null 2>&1 || die "pnpm installation failed"
 }
 
 check_checkout() {
@@ -89,28 +93,14 @@ check_checkout() {
   [[ $repo_root == "/opt/deployd" ]] || die "clone deployd at /opt/deployd before running"
   [[ -f "$repo_root/pyproject.toml" && -f "$repo_root/web/package.json" ]] ||
     die "installer must run from the deployd repository"
+  [[ $(stat -c '%u' "$repo_root") -eq ${EUID} ]] ||
+    die "$repo_root must be owned by the user running the installer"
   [[ -z $(git -C "$repo_root" status --porcelain --untracked-files=no) ]] ||
     die "tracked repository changes detected; commit or restore them first"
 }
 
-run_as_checkout_owner() {
-  local owner=$1
-  shift
-  if [[ $owner == "root" ]]; then
-    "$@"
-    return
-  fi
-
-  local owner_home
-  owner_home=$(getent passwd "$owner" | cut -d: -f6)
-  [[ -n $owner_home ]] || die "could not determine home directory for $owner"
-  runuser -u "$owner" -- env HOME="$owner_home" PATH="$PATH" "$@"
-}
-
-normalize_build_ownership() {
+repair_legacy_build_ownership() {
   local repo_root=$1
-  local owner=$2
-  local group=$3
   local path
   for path in \
     "$repo_root/.venv" \
@@ -118,28 +108,23 @@ normalize_build_ownership() {
     "$repo_root/.ruff_cache" \
     "$repo_root/web/node_modules" \
     "$repo_root/web/dist"; do
-    if [[ -e $path ]]; then
-      chown -R "$owner:$group" "$path"
+    if [[ -e $path && ! -O $path ]]; then
+      sudo chown -R "$(id -u):$(id -g)" "$path"
     fi
   done
 }
 
 install_application() {
   local repo_root=$1
-  local owner group effective_pnpm
-  owner=$(stat -c '%U' "$repo_root")
-  group=$(stat -c '%G' "$repo_root")
-  id "$owner" >/dev/null 2>&1 || die "repository owner $owner is not a local user"
-  normalize_build_ownership "$repo_root" "$owner" "$group"
-
-  effective_pnpm=$(run_as_checkout_owner "$owner" pnpm --dir "$repo_root/web" --version)
+  local effective_pnpm
+  effective_pnpm=$(pnpm --dir "$repo_root/web" --version)
   [[ $effective_pnpm == "$PNPM_VERSION" ]] ||
     die "web/package.json requires pnpm ${PNPM_VERSION}, got ${effective_pnpm}"
-  run_as_checkout_owner "$owner" make -C "$repo_root" install
-  run_as_checkout_owner "$owner" make -C "$repo_root" lint
-  run_as_checkout_owner "$owner" make -C "$repo_root" test
-  run_as_checkout_owner "$owner" make -C "$repo_root" audit
-  run_as_checkout_owner "$owner" make -C "$repo_root" build
+  make -C "$repo_root" install
+  make -C "$repo_root" lint
+  make -C "$repo_root" test
+  make -C "$repo_root" audit
+  make -C "$repo_root" build
   chmod 0755 "$repo_root" "$repo_root/web" "$repo_root/web/dist"
   chmod -R a+rX "$repo_root/.venv"
   find "$repo_root/src" -type d -exec chmod 0755 {} +
@@ -150,9 +135,9 @@ install_application() {
 
 create_service_user() {
   if ! id deployd >/dev/null 2>&1; then
-    useradd --system --home-dir /opt/deployd --shell /usr/sbin/nologin deployd
+    sudo useradd --system --home-dir /opt/deployd --shell /usr/sbin/nologin deployd
   fi
-  install -d -o deployd -g deployd -m 0700 "$STATE_DIR"
+  sudo install -d -o deployd -g deployd -m 0700 "$STATE_DIR"
 }
 
 configure_runtime() {
@@ -173,21 +158,21 @@ configure_runtime() {
       printf 'DEPLOYD_MAX_REQUEST_BYTES=65536\n'
       printf 'DEPLOYD_ADMIN_TOKEN=%s\n' "$generated_token"
     } >"$env_file"
-    install -o root -g deployd -m 0640 "$env_file" "$repo_root/.env"
+    sudo install -o root -g deployd -m 0640 "$env_file" "$repo_root/.env"
     unlink "$env_file"
   fi
-  chown root:deployd "$repo_root/.env"
-  chmod 0640 "$repo_root/.env"
+  sudo chown root:deployd "$repo_root/.env"
+  sudo chmod 0640 "$repo_root/.env"
 
-  if [[ ! -f "$STATE_DIR/apps.yaml" ]]; then
+  if ! sudo test -f "$STATE_DIR/apps.yaml"; then
     local apps_file
     apps_file=$(mktemp /tmp/deployd-apps.XXXXXX)
     printf 'apps: {}\n' >"$apps_file"
-    install -o deployd -g deployd -m 0600 "$apps_file" "$STATE_DIR/apps.yaml"
+    sudo install -o deployd -g deployd -m 0600 "$apps_file" "$STATE_DIR/apps.yaml"
     unlink "$apps_file"
   fi
-  if [[ ! -f "$STATE_DIR/secrets.env" ]]; then
-    install -o deployd -g deployd -m 0600 /dev/null "$STATE_DIR/secrets.env"
+  if ! sudo test -f "$STATE_DIR/secrets.env"; then
+    sudo install -o deployd -g deployd -m 0600 /dev/null "$STATE_DIR/secrets.env"
   fi
 
   printf '%s' "$generated_token"
@@ -195,13 +180,13 @@ configure_runtime() {
 
 configure_basic_auth() {
   local username=$1
-  if [[ -f $HTPASSWD_FILE ]]; then
+  if sudo test -f "$HTPASSWD_FILE"; then
     printf 'Keeping existing management Basic Auth file: %s\n' "$HTPASSWD_FILE"
   else
     printf 'Choose a separate password for the management web interface.\n'
-    htpasswd -cB "$HTPASSWD_FILE" "$username"
-    chown root:www-data "$HTPASSWD_FILE"
-    chmod 0640 "$HTPASSWD_FILE"
+    sudo htpasswd -cB "$HTPASSWD_FILE" "$username"
+    sudo chown root:www-data "$HTPASSWD_FILE"
+    sudo chmod 0640 "$HTPASSWD_FILE"
   fi
 }
 
@@ -289,58 +274,58 @@ write_nginx_config() {
   candidate=$(mktemp /tmp/deployd-nginx.XXXXXX)
   render_nginx_config "$candidate" "$repo_root" "$domain" "$admin_bind" "$admin_port"
 
-  if [[ -e $NGINX_LINK && ! -L $NGINX_LINK ]]; then
+  if sudo test -e "$NGINX_LINK" && ! sudo test -L "$NGINX_LINK"; then
     unlink "$candidate"
     die "$NGINX_LINK exists and is not a symbolic link"
   fi
-  if [[ -L $NGINX_LINK && $(readlink -f "$NGINX_LINK") != "$NGINX_SITE" ]]; then
+  if sudo test -L "$NGINX_LINK" && [[ $(readlink -f "$NGINX_LINK") != "$NGINX_SITE" ]]; then
     unlink "$candidate"
     die "$NGINX_LINK points to a different site"
   fi
-  if [[ -f $NGINX_SITE ]]; then
+  if sudo test -f "$NGINX_SITE"; then
     backup="${NGINX_SITE}.backup.$(date -u +%Y%m%dT%H%M%SZ)"
-    cp -a "$NGINX_SITE" "$backup"
+    sudo cp -a "$NGINX_SITE" "$backup"
   fi
 
-  install -o root -g root -m 0644 "$candidate" "$NGINX_SITE"
+  sudo install -o root -g root -m 0644 "$candidate" "$NGINX_SITE"
   unlink "$candidate"
-  if [[ ! -L $NGINX_LINK ]]; then
-    ln -s "$NGINX_SITE" "$NGINX_LINK"
+  if ! sudo test -L "$NGINX_LINK"; then
+    sudo ln -s "$NGINX_SITE" "$NGINX_LINK"
     link_created="true"
   fi
 
-  if ! nginx -t; then
+  if ! sudo nginx -t; then
     if [[ -n $backup ]]; then
-      cp -a "$backup" "$NGINX_SITE"
+      sudo cp -a "$backup" "$NGINX_SITE"
     else
-      unlink "$NGINX_SITE"
+      sudo unlink "$NGINX_SITE"
     fi
     if [[ $link_created == "true" ]]; then
-      unlink "$NGINX_LINK"
+      sudo unlink "$NGINX_LINK"
     fi
-    nginx -t || true
+    sudo nginx -t || true
     die "Nginx rejected the generated configuration; the previous configuration was restored"
   fi
-  if ! systemctl reload nginx; then
+  if ! sudo systemctl reload nginx; then
     if [[ -n $backup ]]; then
-      cp -a "$backup" "$NGINX_SITE"
+      sudo cp -a "$backup" "$NGINX_SITE"
     else
-      unlink "$NGINX_SITE"
+      sudo unlink "$NGINX_SITE"
     fi
     if [[ $link_created == "true" ]]; then
-      unlink "$NGINX_LINK"
+      sudo unlink "$NGINX_LINK"
     fi
-    systemctl reload nginx || true
+    sudo systemctl reload nginx || true
     die "Nginx reload failed; the previous configuration was restored"
   fi
 }
 
 install_service() {
   local repo_root=$1
-  install -o root -g root -m 0644 "$repo_root/deploy/deployd.service" "$SERVICE_FILE"
-  systemctl daemon-reload
-  systemctl enable --now deployd
-  systemctl restart deployd
+  sudo install -o root -g root -m 0644 "$repo_root/deploy/deployd.service" "$SERVICE_FILE"
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now deployd
+  sudo systemctl restart deployd
 }
 
 verify_installation() {
@@ -363,7 +348,8 @@ verify_installation() {
 }
 
 main() {
-  require_root
+  require_install_user
+  export PATH="$HOME/.local/bin:$PATH"
   confirm_testing_mode
 
   local script_dir repo_root domain admin_bind admin_port admin_username generated_token
@@ -382,6 +368,7 @@ main() {
   check_checkout "$repo_root"
   install_prerequisites
   create_service_user
+  repair_legacy_build_ownership "$repo_root"
   install_application "$repo_root"
   generated_token=$(configure_runtime "$repo_root")
   configure_basic_auth "$admin_username"
