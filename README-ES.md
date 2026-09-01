@@ -9,17 +9,18 @@
 > sin publicar hasta completar el primer despliegue en producción y una prueba
 > de rollback.
 
-Despliega a tus propios servidores desde GitHub Actions **sin SSH ni FTP
-entrante, sin toolchain de build en producción y sin contenedores**. Un solo
-endpoint HTTPS con un contrato fijo firmado por HMAC es toda la superficie de
-ataque.
+Despliega artefactos de aplicaciones a tus propios servidores desde GitHub
+Actions **sin SSH ni FTP entrante y sin toolchain de compilación ni
+contenedores en la ruta de despliegue**. Un solo endpoint HTTPS con un contrato
+fijo firmado por HMAC es toda la superficie de ataque.
 
 ## Características
 
 - **Despliegues firmados** — HMAC-SHA256 por aplicación sobre timestamp,
   nonce y cuerpo; protección atómica y persistente contra replay
 - **Basado en artefactos** — CI compila y publica; el servidor descarga y
-  verifica el SHA256; producción nunca compila nada
+  verifica el SHA256; las aplicaciones desplegadas nunca se compilan en el
+  servidor
 - **Cutover seguro, rollback instantáneo** — intentos inmutables en
   `releases/<sha>-<deploy_id>/` más un symlink `current` (atómico en Linux) o
   un cambio controlado de junction (Windows); si el health check falla, el
@@ -69,19 +70,70 @@ Worker de despliegue (cola serializada por app)
   de runtime es SQLite. Un agente de despliegue no debe depender de
   infraestructura que él mismo podría estar desplegando.
 
-## Inicio rápido
+## Instalación en Ubuntu
+
+Git es la única dependencia inicial. El instalador guiado instala los demás
+requisitos del sistema y del proyecto, ejecuta las validaciones y configura el
+servicio, Nginx, el estado y la interfaz de administración.
 
 ```bash
-brew install uv pnpm                            # o instálalos para tu sistema
-make install                                   # venv de python + deps, deps web (pnpm)
+sudo apt update
+sudo apt install -y git
+sudo install -d -m 0755 -o "$(id -un)" -g "$(id -gn)" /opt/deployd
+git clone https://github.com/dn2182/deployd.git /opt/deployd
+cd /opt/deployd
+./deploy/install-ubuntu.sh
+```
+
+Ejecuta [`deploy/install-ubuntu.sh`](deploy/install-ubuntu.sh) con el usuario
+normal propietario del repositorio, no con `sudo`. El script eleva únicamente
+las operaciones que necesitan acceso al sistema. El modo Flexible de
+Cloudflare es solo para pruebas; restringe el puerto de administración con el
+firewall y usa Full (strict) antes de producción.
+El instalador solicita el dominio público, bind/puerto de administración y
+usuario de Basic Auth, y genera el token de administración cuando hace falta.
+
+## Actualización en Ubuntu
+
+```bash
+cd /opt/deployd
+git pull --ff-only origin main
+make install
+make build
+sudo systemctl restart deployd
+```
+
+Para cambios únicamente del frontend basta con ejecutar
+`git pull --ff-only origin main` y `make build`; después refresca el navegador.
+
+## Desinstalación en Ubuntu
+
+```bash
+cd /opt/deployd
+./deploy/uninstall-ubuntu.sh
+```
+
+[`deploy/uninstall-ubuntu.sh`](deploy/uninstall-ubuntu.sh) ofrece un respaldo
+con permisos restringidos y exige confirmación explícita. Elimina el servicio
+deployd, la configuración de Nginx, las credenciales, el estado, la cuenta de
+servicio y el repositorio. Conserva los paquetes compartidos y las aplicaciones
+desplegadas porque pueden usarse de forma independiente.
+
+## Desarrollo local
+
+Instala Python 3.11+, `uv`, Node.js 22.19+ y pnpm 11.20.0 para tu sistema
+operativo. Luego ejecuta:
+
+```bash
+make install                                   # dependencias Python y frontend
 cp .env.example .env                           # define DEPLOYD_ADMIN_TOKEN
 cp config/apps.example.yaml config/apps.yaml   # registra tus aplicaciones
 make dev                                       # API en 127.0.0.1:8300
-make dev-web                                   # UI de administración (Vite dev server)
+make dev-web                                   # interfaz Vite de administración
 ```
 
-Abre la UI, ingresa el token de administración y rota el secreto de tu app —
-ese valor es el `DEPLOYD_SECRET` del CI del repo de tu aplicación.
+Abre la interfaz, ingresa el token de administración y rota el secreto de tu
+aplicación. Ese valor será el `DEPLOYD_SECRET` del CI de ese repositorio.
 
 ## Integración con CI
 
@@ -114,33 +166,8 @@ X-Deploy-Signature: sha256=<hmac hex de "{timestamp}.{nonce}.{cuerpo crudo}">
 Si se pierde la respuesta `202`, reintenta exactamente el mismo request
 firmado y nonce; deployd devuelve el `deploy_id` original sin duplicarlo.
 
-## Producción
+## Notas de despliegue
 
-Para una instalación nueva en Ubuntu propiedad de tu usuario normal de despliegue:
-
-```bash
-sudo install -d -m 0755 -o "$(id -un)" -g "$(id -gn)" /opt/deployd
-git clone https://github.com/dn2182/deployd.git /opt/deployd
-cd /opt/deployd
-./deploy/install-ubuntu.sh
-```
-
-- **Instalador para Ubuntu:** clona el repositorio con tu usuario normal de
-  despliegue y ejecuta `./deploy/install-ubuntu.sh` sin `sudo`. El instalador
-  eleva únicamente las operaciones de paquetes, usuario de servicio, systemd y
-  Nginx; las dependencias, pruebas y compilaciones pertenecen a tu usuario. El
-  modo Flexible de Cloudflare es solo para pruebas; restringe el puerto de
-  administración con el firewall.
-- **Actualizaciones en Ubuntu:** ejecuta `git pull --ff-only`, `make install` y
-  `make build` como propietario del repositorio. Reinicia `deployd` cuando
-  cambie el backend o sus dependencias. Para cambios solo del frontend basta
-  con `make build` y refrescar el navegador.
-- **Desinstalación en Ubuntu:** ejecuta `./deploy/uninstall-ubuntu.sh` sin
-  `sudo`. Ofrece un respaldo con permisos restringidos, exige confirmación
-  explícita y elimina el servicio deployd, la configuración de Nginx, las
-  credenciales, el estado, la cuenta de servicio y el repositorio. Conserva
-  los paquetes compartidos y las aplicaciones desplegadas porque pueden usarse
-  de forma independiente.
 - **Linux:** [`deploy/deployd.service`](deploy/deployd.service) — unidad de
   systemd, usuario dedicado, reglas sudoers por app para los restarts.
 - **Windows:** [`deploy/windows.md`](deploy/windows.md) — servicio NSSM,

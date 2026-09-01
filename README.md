@@ -8,16 +8,17 @@
 > **Status:** early preview. The core is tested, but `0.1.0` remains unreleased
 > until the first production deployment and rollback drill are complete.
 
-Deploy to your own servers from GitHub Actions with **no inbound SSH or FTP,
-no build toolchain on prod, and no containers**. One HTTPS endpoint with a
-fixed, HMAC-signed contract is the entire attack surface.
+Deploy application artifacts to your own servers from GitHub Actions with
+**no inbound SSH or FTP and no application build toolchain or containers in
+the deployment path**. One HTTPS endpoint with a fixed, HMAC-signed contract
+is the entire attack surface.
 
 ## Features
 
 - **Signed deploys** — HMAC-SHA256 per app over timestamp, nonce, and body;
   atomic persisted replay protection and constant-time compares
 - **Artifact-based** — CI builds and publishes; the server downloads and
-  verifies the SHA256; prod never compiles anything
+  verifies the SHA256; deployed applications are never compiled on the server
 - **Safe cutover, instant rollback** — immutable `releases/<sha>-<deploy_id>/`
   attempts plus a `current` symlink (atomic on Linux) or guarded junction swap
   (Windows); failed health checks roll back automatically
@@ -63,19 +64,69 @@ Deploy Worker (per-app serialized queue)
 - **No external database.** Config is YAML + env; runtime state is SQLite.
   A deploy agent must not depend on infrastructure it might be deploying.
 
-## Quickstart
+## Install on Ubuntu
+
+Git is the only bootstrap dependency. The guided installer installs the
+remaining system and project requirements, runs validation, and configures the
+service, Nginx, runtime state, and management UI.
 
 ```bash
-brew install uv pnpm                            # or install them for your OS
-make install                                   # python venv + deps, web deps (pnpm)
-cp .env.example .env                           # set DEPLOYD_ADMIN_TOKEN
-cp config/apps.example.yaml config/apps.yaml   # register your apps
-make dev                                       # API on 127.0.0.1:8300
-make dev-web                                   # admin UI (Vite dev server)
+sudo apt update
+sudo apt install -y git
+sudo install -d -m 0755 -o "$(id -un)" -g "$(id -gn)" /opt/deployd
+git clone https://github.com/dn2182/deployd.git /opt/deployd
+cd /opt/deployd
+./deploy/install-ubuntu.sh
 ```
 
-Open the UI, enter the admin token, and rotate your app's secret — that value
-becomes the `DEPLOYD_SECRET` in your app repo's CI.
+Run [`deploy/install-ubuntu.sh`](deploy/install-ubuntu.sh) as the normal
+repository owner, not with `sudo`. It elevates only operations that require
+system access. Cloudflare Flexible mode is provided for testing only; keep the
+management port firewall-restricted and move to Full (strict) before production.
+The installer prompts for the public domain, management bind/port, and Basic
+Auth username, then generates the admin token when needed.
+
+## Update on Ubuntu
+
+```bash
+cd /opt/deployd
+git pull --ff-only origin main
+make install
+make build
+sudo systemctl restart deployd
+```
+
+For frontend-only changes, `git pull --ff-only origin main` followed by
+`make build` is enough; refresh the browser afterward.
+
+## Uninstall from Ubuntu
+
+```bash
+cd /opt/deployd
+./deploy/uninstall-ubuntu.sh
+```
+
+[`deploy/uninstall-ubuntu.sh`](deploy/uninstall-ubuntu.sh) offers a
+permission-restricted backup and requires explicit confirmation. It removes
+deployd's service, Nginx configuration, credentials, runtime state, service
+account, and repository. Shared packages and deployed applications are
+preserved because they may be used independently.
+
+## Local development
+
+Install Python 3.11+, `uv`, Node.js 22.19+, and pnpm 11.20.0 for your operating
+system, then:
+
+```bash
+make install                                   # Python + frontend dependencies
+cp .env.example .env                           # set DEPLOYD_ADMIN_TOKEN
+cp config/apps.example.yaml config/apps.yaml   # register your applications
+make dev                                       # API on 127.0.0.1:8300
+make dev-web                                   # Vite management UI
+```
+
+Open the UI, enter the admin token, and rotate your application's secret. That
+value becomes the `DEPLOYD_SECRET` in the application repository's CI.
 
 ## CI integration
 
@@ -107,31 +158,8 @@ X-Deploy-Signature: sha256=<hex hmac of "{timestamp}.{nonce}.{raw body}">
 If the `202` response is lost, retry the exact signed request with the same
 nonce; deployd returns the original `deploy_id` without enqueueing a duplicate.
 
-## Production
+## Deployment notes
 
-For a fresh Ubuntu checkout owned by your normal deployment user:
-
-```bash
-sudo install -d -m 0755 -o "$(id -un)" -g "$(id -gn)" /opt/deployd
-git clone https://github.com/dn2182/deployd.git /opt/deployd
-cd /opt/deployd
-./deploy/install-ubuntu.sh
-```
-
-- **Ubuntu installer:** clone the repository as your normal deployment user,
-  then run `./deploy/install-ubuntu.sh` without `sudo`. The installer elevates
-  only package, service-account, systemd, and Nginx operations; dependency
-  installation, tests, and builds remain owned by your user. Its Cloudflare
-  Flexible mode is intended only for testing; keep the separate management
-  port restricted by the firewall.
-- **Ubuntu updates:** run `git pull --ff-only`, `make install`, and `make build`
-  as the repository owner. Restart `deployd` when backend code or dependencies
-  change. Frontend-only updates need only `make build` and a browser refresh.
-- **Ubuntu uninstall:** run `./deploy/uninstall-ubuntu.sh` without `sudo`. It
-  offers a permission-restricted backup, requires explicit confirmation, and
-  removes the deployd service, Nginx configuration, credentials, runtime state,
-  service account, and repository. Shared packages and deployed applications
-  are preserved because they may be used independently.
 - **Linux:** [`deploy/deployd.service`](deploy/deployd.service) — systemd
   unit, dedicated user, per-app sudoers rules for restarts.
 - **Windows:** [`deploy/windows.md`](deploy/windows.md) — NSSM service,
