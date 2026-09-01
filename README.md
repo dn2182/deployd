@@ -1,6 +1,12 @@
 # deployd — pull-style deploy agent over HTTPS
 
+[![CI](https://github.com/dn2182/deployd/actions/workflows/ci.yml/badge.svg)](https://github.com/dn2182/deployd/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/dn2182/deployd)](LICENSE)
+
 *Léelo en [español](README-ES.md).*
+
+> **Status:** early preview. The core is tested, but `0.1.0` remains unreleased
+> until the first production deployment and rollback drill are complete.
 
 Deploy to your own servers from GitHub Actions with **no inbound SSH or FTP,
 no build toolchain on prod, and no containers**. One HTTPS endpoint with a

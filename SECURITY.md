@@ -5,8 +5,8 @@ this before exposing it anywhere.
 
 ## Reporting a vulnerability
 
-Please open a [private security advisory](../../security/advisories/new) on
-GitHub. Do not open public issues for vulnerabilities. You should get a
+Please open a [private security advisory](https://github.com/dn2182/deployd/security/advisories/new)
+on GitHub. Do not open public issues for vulnerabilities. You should get a
 response within a few days.
 
 ## Deployment hardening checklist

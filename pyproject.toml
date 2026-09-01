@@ -2,6 +2,7 @@
 name = "deployd"
 version = "0.1.0"
 description = "Pull-style deploy agent over HTTPS — no inbound SSH/FTP"
+readme = "README.md"
 license = "Apache-2.0"
 authors = [{name = "Daniel (dn2182)"}]
 requires-python = ">=3.11"
@@ -13,6 +14,12 @@ dependencies = [
     "PyYAML>=6.0",
     "httpx>=0.27",
 ]
+
+[project.urls]
+Homepage = "https://github.com/dn2182/deployd"
+Documentation = "https://github.com/dn2182/deployd#readme"
+Issues = "https://github.com/dn2182/deployd/issues"
+Repository = "https://github.com/dn2182/deployd.git"
 
 [project.scripts]
 deployd = "deployd.main:run"

@@ -1,6 +1,13 @@
 # deployd — agente de despliegue estilo pull sobre HTTPS
 
+[![CI](https://github.com/dn2182/deployd/actions/workflows/ci.yml/badge.svg)](https://github.com/dn2182/deployd/actions/workflows/ci.yml)
+[![Licencia](https://img.shields.io/github/license/dn2182/deployd)](LICENSE)
+
 *Read this in [English](README.md).*
+
+> **Estado:** versión preliminar. El núcleo está probado, pero `0.1.0` seguirá
+> sin publicar hasta completar el primer despliegue en producción y una prueba
+> de rollback.
 
 Despliega a tus propios servidores desde GitHub Actions **sin SSH ni FTP
 entrante, sin toolchain de build en producción y sin contenedores**. Un solo
