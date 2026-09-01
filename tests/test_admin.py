@@ -108,6 +108,25 @@ def test_upsert_rejects_invalid_backend_app_name(env):
         assert response.status_code == 422
 
 
+def test_upsert_rejects_active_deployments(env):
+    with TestClient(create_app()) as client:
+        client.app.state.store.create_deploy(
+            "app-x", "a" * 40, "https://example.com/a.zip", "b" * 64, "test"
+        )
+        spec = {
+            "releases_dir": str(env / "changed-releases"),
+            "current_link": str(env / "changed-current"),
+            "artifact": {"allowed_url_prefix": "https://example.org/"},
+            "restart": {"command": ["true"]},
+            "health": {"url": "http://127.0.0.1:1/hz"},
+        }
+        response = client.put("/admin/apps/app-x", headers=ADMIN, json=spec)
+        assert response.status_code == 409
+        assert client.get("/admin/apps", headers=ADMIN).json()["app-x"]["releases_dir"] == str(
+            env / "releases"
+        )
+
+
 def test_delete_app(env):
     with TestClient(create_app()) as client:
         assert client.delete("/admin/apps/app-x", headers=ADMIN).status_code == 200
@@ -162,6 +181,25 @@ def test_redeploy_requeues_same_artifact(env, monkeypatch):
         assert new["triggered_by"] == f"redeploy:{did[:8]}"
 
         assert client.post("/admin/deploys/nope/redeploy", headers=ADMIN).status_code == 404
+
+
+def test_redeploy_rejects_artifact_disallowed_by_current_config(env):
+    with TestClient(create_app()) as client:
+        store = client.app.state.store
+        did = store.create_deploy("app-x", "a" * 40, "https://example.com/a.zip", "b" * 64, "test")
+        store.set_status(did, "succeeded", finished=True)
+        spec = {
+            "releases_dir": str(env / "releases"),
+            "current_link": str(env / "current"),
+            "artifact": {"allowed_url_prefix": "https://example.org/"},
+            "restart": {"command": ["true"]},
+            "health": {"url": "http://127.0.0.1:1/hz"},
+        }
+        assert client.put("/admin/apps/app-x", headers=ADMIN, json=spec).status_code == 200
+
+        response = client.post(f"/admin/deploys/{did}/redeploy", headers=ADMIN)
+        assert response.status_code == 409
+        assert response.json()["detail"] == "artifact URL is no longer allowed"
 
 
 def test_list_deploys(env):

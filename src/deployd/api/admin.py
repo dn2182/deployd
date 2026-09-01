@@ -55,8 +55,11 @@ async def list_apps():
 
 
 @router.put("/apps/{name}")
-async def upsert_app_route(name: AppName, spec: AppSpec):
-    upsert_app(name, spec)
+async def upsert_app_route(request: Request, name: AppName, spec: AppSpec):
+    with config_lock():
+        if request.app.state.store.has_active_deploys(name):
+            raise HTTPException(status_code=409, detail="app has queued or running deployments")
+        upsert_app(name, spec)
     return {"status": "saved", "app": name}
 
 
@@ -109,14 +112,18 @@ async def redeploy(request: Request, deploy_id: str):
     old = store.get_deploy(deploy_id)
     if old is None:
         raise HTTPException(status_code=404, detail="unknown deploy")
-    if old["app"] not in get_app_registry():
-        raise HTTPException(status_code=409, detail="app no longer registered")
-    new_id = store.create_deploy(
-        old["app"],
-        old["commit_sha"],
-        old["artifact_url"],
-        old["artifact_sha256"],
-        f"redeploy:{deploy_id[:8]}",
-    )
-    request.app.state.queue.enqueue(old["app"], new_id)
+    with config_lock():
+        spec = get_app_registry().get(old["app"])
+        if spec is None:
+            raise HTTPException(status_code=409, detail="app no longer registered")
+        if not spec.artifact.allows_initial_url(old["artifact_url"]):
+            raise HTTPException(status_code=409, detail="artifact URL is no longer allowed")
+        new_id = store.create_deploy(
+            old["app"],
+            old["commit_sha"],
+            old["artifact_url"],
+            old["artifact_sha256"],
+            f"redeploy:{deploy_id[:8]}",
+        )
+        request.app.state.queue.enqueue(old["app"], new_id)
     return {"deploy_id": new_id, "status": "queued"}
