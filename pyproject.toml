@@ -27,7 +27,7 @@ deployd-migrate = "deployd.migrate:main"
 
 [project.optional-dependencies]
 mssql = ["pyodbc>=5"]
-dev = ["httpx2>=2.12", "pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.5"]
+dev = ["httpx2>=2.12", "pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.16.6"]
 
 [build-system]
 requires = ["hatchling"]
