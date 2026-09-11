@@ -311,7 +311,7 @@ async def test_private_asset_must_match_app_allowlist(spec, monkeypatch):
 
 
 async def test_old_releases_pruned(tmp_path, spec, store, monkeypatch):
-    spec.keep_releases = 2
+    spec.keep_previous = 1
     unrelated = spec.releases_dir / "manual-backup"
     unrelated.mkdir(parents=True)
     shas = [c * 40 for c in "cdef"]
@@ -323,6 +323,126 @@ async def test_old_releases_pruned(tmp_path, spec, store, monkeypatch):
     kept = {p.name for p in spec.releases_dir.iterdir() if not p.name.startswith(".")}
     assert "manual-backup" in kept
     assert {name.split("-", 1)[0] for name in kept if name != "manual-backup"} == set(shas[-2:])
+
+
+@pytest.mark.parametrize(
+    "keep,automatic,expected", [(None, True, 4), (0, True, 1), (2, True, 3), (0, False, 4)]
+)
+async def test_optional_retention(tmp_path, spec, store, monkeypatch, keep, automatic, expected):
+    spec.keep_previous = keep
+    spec.auto_cleanup = automatic
+    for i, sha in enumerate("abcd"):
+        artifact, digest = make_artifact(tmp_path, f"v{i}.zip", str(i))
+        wire(monkeypatch, spec, artifact)
+        await runner.run_deploy(store, "app-x", new_deploy(store, sha * 40, digest))
+    assert len(runner.list_releases(spec)["releases"]) == expected
+    assert (spec.current_link / "app.txt").read_text() == "3"
+    if keep == 0 and automatic:
+        assert not runner._previous_link(spec).is_symlink()
+
+
+async def test_failed_deploy_preserves_current_when_retention_disabled(
+    tmp_path, spec, store, monkeypatch
+):
+    spec.keep_previous = 0
+    artifact, digest = make_artifact(tmp_path, "v1.zip", "v1")
+    wire(monkeypatch, spec, artifact)
+    await runner.run_deploy(store, "app-x", new_deploy(store, SHA_V1, digest))
+    current = spec.current_link.resolve()
+    wire(monkeypatch, spec, artifact, healthy=False)
+    failed = new_deploy(store, SHA_V2, digest)
+    await runner.run_deploy(store, "app-x", failed)
+    assert store.get_deploy(failed)["status"] == "rolled_back"
+    assert spec.current_link.resolve() == current
+    assert current.exists()
+
+
+@pytest.mark.parametrize("healthy", [True, False])
+async def test_activate_retained_version_preserves_history(
+    tmp_path, spec, store, monkeypatch, healthy
+):
+    paths = []
+    for i, sha in enumerate("abc"):
+        artifact, digest = make_artifact(tmp_path, f"v{i}.zip", str(i))
+        wire(monkeypatch, spec, artifact)
+        await runner.run_deploy(store, "app-x", new_deploy(store, sha * 40, digest))
+        paths.append(spec.current_link.resolve())
+    wire(monkeypatch, spec, artifact, healthy=healthy)
+    activation = new_deploy(store, SHA_V1, digest)
+    await runner.run_activation(store, "app-x", activation, paths[0].name)
+    row = store.get_deploy(activation)
+    assert row["status"] == ("succeeded" if healthy else "rolled_back")
+    assert spec.current_link.resolve() == paths[0 if healthy else 2]
+    assert runner._previous_link(spec).resolve() == paths[2 if healthy else 1]
+    assert all(path.exists() for path in paths)
+    assert not {"download", "unpack", "migrate"}.intersection(step["step"] for step in row["steps"])
+    if healthy:
+        spec.keep_previous = 1
+        runner._prune_releases(spec)
+        assert paths[0].exists() and paths[2].exists()
+        assert not paths[1].exists()
+
+
+def test_manual_cleanup_protects_links_and_active_version(spec, tmp_path):
+    paths = [spec.releases_dir / (char * 40 + "-" + char * 32) for char in "abc"]
+    for path in paths:
+        path.mkdir(parents=True)
+    runner._atomic_symlink(paths[2], spec.current_link)
+    runner._atomic_symlink(paths[1], runner._previous_link(spec))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    linked = spec.releases_dir / ("d" * 40 + "-" + "d" * 32)
+    linked.symlink_to(outside, target_is_directory=True)
+    (spec.releases_dir / "broken").symlink_to(tmp_path / "missing")
+    assert len(runner.list_releases(spec)["releases"]) == 3
+    for name in (paths[2].name, paths[1].name, linked.name, "../outside", "previous"):
+        with pytest.raises(ValueError):
+            runner.remove_release(spec, name)
+    runner.remove_release(spec, paths[0].name)
+    assert not paths[0].exists()
+    spec.keep_previous = 0
+    runner.remove_release(spec, paths[1].name)
+    assert not runner._previous_link(spec).is_symlink()
+    assert paths[2].exists() and outside.exists()
+
+
+def test_cutover_does_not_replace_unrelated_file(tmp_path):
+    target = tmp_path / "release"
+    target.mkdir()
+    link = tmp_path / "current.previous"
+    link.write_text("user data")
+    with pytest.raises(RuntimeError, match="non-link"):
+        runner._atomic_symlink(target, link)
+    assert link.read_text() == "user data"
+
+
+async def test_imported_site_can_be_restored_without_download(tmp_path, spec, store, monkeypatch):
+    baseline = tmp_path / "imported-site"
+    baseline.mkdir()
+    (baseline / "index.html").write_text("original")
+    runner._atomic_symlink(baseline, spec.current_link)
+    artifact, digest = make_artifact(tmp_path, "v1.zip", "new")
+    wire(monkeypatch, spec, artifact)
+    await runner.run_deploy(store, "app-x", new_deploy(store, SHA_V1, digest))
+    current = spec.current_link.resolve()
+    imported = next(
+        row for row in runner.list_releases(spec)["releases"] if row["name"] == "previous"
+    )
+    assert imported["protected"]
+    activation = new_deploy(store, "0" * 40, "0" * 64)
+    await runner.run_activation(store, "app-x", activation, "previous")
+    assert store.get_deploy(activation)["status"] == "succeeded"
+    assert spec.current_link.resolve() == baseline
+    assert runner._previous_link(spec).resolve() == current
+    assert (baseline / "index.html").read_text() == "original"
+
+
+async def test_missing_activation_target_fails_without_cutover(spec, store, monkeypatch):
+    monkeypatch.setattr(runner, "get_app_registry", lambda: {"app-x": spec})
+    did = new_deploy(store, SHA_V1, "b" * 64)
+    await runner.run_activation(store, "app-x", did, "previous")
+    assert store.get_deploy(did)["status"] == "failed"
+    assert not spec.current_link.exists()
 
 
 async def test_same_sha_redeploy_failure_preserves_live_release(tmp_path, spec, store, monkeypatch):

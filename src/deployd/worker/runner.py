@@ -75,7 +75,8 @@ async def run_deploy(store: Store, app: str, deploy_id: str) -> None:
             store.add_step(deploy_id, step, "succeeded", output=output or "")
 
         succeeded = True
-        _prune_releases(spec)
+        if spec.auto_cleanup:
+            _prune_releases(spec)
         store.set_status(deploy_id, "succeeded", finished=True)
         log.info("deploy %s: succeeded", deploy_id)
     finally:
@@ -180,6 +181,7 @@ async def _step_unpack(spec: AppSpec, deploy: dict, ctx: dict) -> str:
     ctx["staging_dir"] = staging
     _extract(ctx["artifact_path"], staging, spec)
     staging.rename(release_dir)
+    os.utime(release_dir, None)
     ctx["release_dir"] = release_dir
     return str(release_dir)
 
@@ -234,6 +236,9 @@ async def _step_migrate(spec: AppSpec, deploy: dict, ctx: dict) -> str:
 async def _step_cutover(spec: AppSpec, deploy: dict, ctx: dict) -> str:
     link = spec.current_link
     ctx["previous_release"] = _current_target(link)
+    ctx["older_previous"] = _current_target(_previous_link(spec))
+    if ctx["previous_release"] is not None:
+        _atomic_symlink(ctx["previous_release"], _previous_link(spec))
     _atomic_symlink(ctx["release_dir"], link)
     return f"current -> {ctx['release_dir'].name}"
 
@@ -249,10 +254,21 @@ def _current_target(link: Path) -> Path | None:
         return None
 
 
+def _is_link(path: Path) -> bool:
+    return path.is_symlink() or (
+        os.name == "nt"
+        and os.path.lexists(path)
+        and bool(path.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+    )
+
+
 def _atomic_symlink(target: Path, link: Path) -> None:
     link.parent.mkdir(parents=True, exist_ok=True)
     target = target.resolve(strict=False)
     tmp = link.with_name(link.name + ".new")
+    for candidate in (link, tmp):
+        if os.path.lexists(candidate) and not _is_link(candidate):
+            raise RuntimeError(f"refusing to replace non-link path: {candidate}")
     if os.name == "nt":
         # junctions need no privilege on Windows, unlike symlinks; rename can't
         # overwrite a directory link, so there is a brief window with no link
@@ -378,6 +394,10 @@ async def _maybe_rollback(
         _atomic_symlink(previous, spec.current_link)
         await _run_cmd(spec.restart.command)
         await _STEP_FNS["health"](spec, {}, {**ctx, "rollback_verification": True})
+        if ctx.get("older_previous") is not None:
+            _atomic_symlink(ctx["older_previous"], _previous_link(spec))
+        else:
+            _remove_link(_previous_link(spec))
     except Exception as exc:
         store.add_step(deploy_id, "rollback", "failed", output=_error_text(exc))
         return False
@@ -391,6 +411,8 @@ async def _maybe_rollback(
 
 
 def _remove_link(link: Path) -> None:
+    if os.path.lexists(link) and not _is_link(link):
+        raise RuntimeError(f"refusing to remove non-link path: {link}")
     if os.name == "nt":
         if os.path.lexists(link):
             os.rmdir(link)
@@ -428,29 +450,136 @@ def _cleanup_attempt(spec: AppSpec, ctx: dict, *, succeeded: bool) -> None:
 
 
 def _prune_releases(spec: AppSpec) -> None:
+    if spec.keep_previous is None:
+        return
     try:
-        releases = sorted(
-            (
-                p
-                for p in spec.releases_dir.iterdir()
-                if p.is_dir() and _RELEASE_NAME_RE.fullmatch(p.name)
-            ),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
+        releases = _managed_releases(spec)
         current = _current_target(spec.current_link)
+        if current is None or not current.is_dir():
+            return
         keep = set()
-        if current is not None:
-            keep.add(current)
+        keep.add(current)
+        previous = _current_target(_previous_link(spec))
+        if previous is not None and spec.keep_previous > 0:
+            keep.add(previous)
         for release in releases:
-            if len(keep) >= spec.keep_releases:
+            if len(keep) >= spec.keep_previous + 1:
                 break
             keep.add(release.resolve())
         for release in releases:
             if release.resolve() not in keep:
                 shutil.rmtree(release)
+        if spec.keep_previous == 0:
+            _remove_link(_previous_link(spec))
     except OSError:
         log.warning("release pruning failed", exc_info=True)
+
+
+def _previous_link(spec: AppSpec) -> Path:
+    return spec.current_link.with_name(spec.current_link.name + ".previous")
+
+
+def _managed_releases(spec: AppSpec) -> list[Path]:
+    if not spec.releases_dir.is_dir():
+        return []
+    return sorted(
+        (
+            path
+            for path in spec.releases_dir.iterdir()
+            if _RELEASE_NAME_RE.fullmatch(path.name) and not _is_link(path) and path.is_dir()
+        ),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+
+
+def local_release(spec: AppSpec, name: str) -> Path:
+    if name == "previous":
+        path = _current_target(_previous_link(spec))
+        if path is None or not path.is_dir():
+            raise ValueError("previous release is unavailable")
+        return path
+    if not _RELEASE_NAME_RE.fullmatch(name):
+        raise ValueError("invalid release name")
+    path = spec.releases_dir / name
+    if _is_link(path) or not path.is_dir() or path.resolve().parent != spec.releases_dir.resolve():
+        raise ValueError("local release is unavailable")
+    return path
+
+
+def list_releases(spec: AppSpec) -> dict:
+    current = _current_target(spec.current_link)
+    previous = _current_target(_previous_link(spec))
+    paths = _managed_releases(spec)
+    releases = []
+    for path in paths:
+        resolved = path.resolve()
+        releases.append(
+            {
+                "name": path.name,
+                "commit_sha": path.name[:40],
+                "active": resolved == current,
+                "previous": resolved == previous,
+                "protected": resolved == current
+                or (resolved == previous and spec.keep_previous != 0),
+                "created_at": path.stat().st_mtime,
+            }
+        )
+    if previous and previous.is_dir() and not any(item["previous"] for item in releases):
+        releases.append(
+            {
+                "name": "previous",
+                "commit_sha": None,
+                "active": previous == current,
+                "previous": True,
+                "protected": True,
+                "created_at": previous.stat().st_mtime,
+            }
+        )
+    return {
+        "active_path": str(current) if current else None,
+        "previous_path": str(previous) if previous else None,
+        "releases": releases,
+    }
+
+
+def remove_release(spec: AppSpec, name: str) -> None:
+    if name == "previous":
+        raise ValueError("the previous release is protected")
+    target = local_release(spec, name)
+    protected = {_current_target(spec.current_link)}
+    if spec.keep_previous != 0:
+        protected.add(_current_target(_previous_link(spec)))
+    if target.resolve() in protected:
+        raise ValueError("active and previous releases are protected")
+    shutil.rmtree(target)
+    if target.resolve() == _current_target(_previous_link(spec)):
+        _remove_link(_previous_link(spec))
+
+
+async def run_activation(store: Store, app: str, deploy_id: str, name: str) -> None:
+    spec = get_app_registry()[app]
+    deploy = store.get_deploy(deploy_id)
+    store.set_status(deploy_id, "running")
+    try:
+        ctx = {"release_dir": local_release(spec, name)}
+        if _current_target(spec.current_link) == ctx["release_dir"].resolve():
+            raise ValueError("release is already active")
+    except ValueError as exc:
+        store.add_step(deploy_id, "activation", "failed", output=str(exc))
+        store.set_status(deploy_id, "failed", finished=True)
+        return
+    for step in ("cutover", "restart", "health"):
+        store.add_step(deploy_id, step, "running")
+        try:
+            output = await _STEP_FNS[step](spec, deploy, ctx)
+        except Exception as exc:
+            store.add_step(deploy_id, step, "failed", output=_error_text(exc))
+            rolled_back = await _maybe_rollback(step, spec, ctx, store, deploy_id)
+            store.set_status(deploy_id, "rolled_back" if rolled_back else "failed", finished=True)
+            return
+        store.add_step(deploy_id, step, "succeeded", output=output or "")
+    store.set_status(deploy_id, "succeeded", finished=True)
 
 
 _STEP_FNS = {

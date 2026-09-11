@@ -53,10 +53,22 @@ def test_managed_paths_must_be_safe_and_absolute(tmp_path):
 
 
 def test_runtime_bounds_are_validated(tmp_path):
-    with pytest.raises(ValidationError, match="greater than or equal to 1"):
+    with pytest.raises(ValidationError, match="between 1 and 100"):
         app_spec(tmp_path, keep_releases=0)
     with pytest.raises(ValidationError, match="too_short"):
         app_spec(tmp_path, restart={"command": []})
+
+
+def test_retention_choice_and_legacy_conversion(tmp_path):
+    assert app_spec(tmp_path).keep_previous is None
+    assert app_spec(tmp_path, keep_previous=0).keep_previous == 0
+    assert app_spec(tmp_path, keep_previous=3).keep_previous == 3
+    assert app_spec(tmp_path, keep_releases=5).keep_previous == 4
+    assert app_spec(tmp_path, keep_releases=5, keep_previous=None).keep_previous is None
+    assert "keep_releases" not in app_spec(tmp_path, keep_releases=5).model_dump()
+    for invalid in (-1, 100):
+        with pytest.raises(ValidationError):
+            app_spec(tmp_path, keep_previous=invalid)
 
 
 @pytest.mark.parametrize("name", ["app", "a", "app-1"])

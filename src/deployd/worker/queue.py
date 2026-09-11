@@ -4,7 +4,7 @@ import asyncio
 import logging
 
 from ..store.db import Store
-from .runner import run_deploy
+from .runner import run_activation, run_deploy
 
 log = logging.getLogger("deployd.worker")
 
@@ -15,6 +15,11 @@ class DeployQueue:
         self._queues: dict[str, asyncio.Queue[str]] = {}
         self._tasks: dict[str, asyncio.Task] = {}
         self._pending_ids: set[str] = set()
+        self._activations: dict[str, str] = {}
+
+    def enqueue_activation(self, app: str, deploy_id: str, release: str) -> None:
+        self._activations[deploy_id] = release
+        self.enqueue(app, deploy_id)
 
     def enqueue(self, app: str, deploy_id: str) -> None:
         if deploy_id in self._pending_ids:
@@ -28,6 +33,15 @@ class DeployQueue:
     def recover(self, registered_apps: set[str]) -> int:
         recovered = 0
         for app, deploy_id in self._store.recover_after_restart():
+            if self._store.get_deploy(deploy_id)["triggered_by"].startswith("activate:"):
+                self._store.add_step(
+                    deploy_id,
+                    "recovery",
+                    "failed",
+                    output="activation interrupted; inspect current release before retrying",
+                )
+                self._store.set_status(deploy_id, "failed", finished=True)
+                continue
             if app not in registered_apps:
                 self._store.add_step(
                     deploy_id,
@@ -46,7 +60,11 @@ class DeployQueue:
         while True:
             deploy_id = await q.get()
             try:
-                await run_deploy(self._store, app, deploy_id)
+                release = self._activations.pop(deploy_id, None)
+                if release is None:
+                    await run_deploy(self._store, app, deploy_id)
+                else:
+                    await run_activation(self._store, app, deploy_id, release)
             except Exception:
                 log.exception("deploy %s for %s crashed", deploy_id, app)
                 self._store.add_step(

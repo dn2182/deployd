@@ -9,6 +9,7 @@ import secrets as pysecrets
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request
+from pydantic import BaseModel, Field
 
 from ..config import (
     APP_NAME_PATTERN,
@@ -22,8 +23,7 @@ from ..config import (
     set_app_secret,
     upsert_app,
 )
-
-AppName = Annotated[str, Path(pattern=APP_NAME_PATTERN)]
+from ..worker import runner
 
 
 def require_admin(x_admin_token: str | None = Header(default=None)):
@@ -35,6 +35,85 @@ def require_admin(x_admin_token: str | None = Header(default=None)):
 
 
 router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin)])
+AppName = Annotated[str, Path(pattern=APP_NAME_PATTERN)]
+
+
+class ReleaseSelection(BaseModel):
+    release: str = Field(pattern=r"^(?:[0-9a-f]{40}-[0-9a-f]{32}|previous)$")
+
+
+def _release_app(request: Request, name: str, *, idle: bool = False) -> AppSpec:
+    spec = get_app_registry().get(name)
+    if spec is None:
+        raise HTTPException(status_code=404, detail="unknown app")
+    if idle and request.app.state.store.has_active_deploys(name):
+        raise HTTPException(status_code=409, detail="app has queued or running deployments")
+    return spec
+
+
+@router.get("/apps/{name}/releases")
+async def list_app_releases(request: Request, name: AppName):
+    spec = _release_app(request, name)
+    result = runner.list_releases(spec)
+    store = request.app.state.store
+    for release in result["releases"]:
+        original = store.get_deploy(release["name"][41:]) if release["name"] != "previous" else None
+        release["can_activate"] = not release["active"] and (
+            release["name"] == "previous"
+            or (
+                original is not None
+                and original["app"] == name
+                and original["commit_sha"] == release["commit_sha"]
+                and original["status"] == "succeeded"
+            )
+        )
+    result["busy"] = store.has_active_deploys(name)
+    return result
+
+
+@router.post("/apps/{name}/releases/activate", status_code=202)
+async def activate_app_release(request: Request, name: AppName, selection: ReleaseSelection):
+    store = request.app.state.store
+    with config_lock():
+        spec = _release_app(request, name, idle=True)
+        try:
+            target = runner.local_release(spec, selection.release)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if target.resolve() == runner._current_target(spec.current_link):
+            raise HTTPException(status_code=409, detail="release is already active")
+        original = (
+            store.get_deploy(selection.release[41:]) if selection.release != "previous" else None
+        )
+        if selection.release != "previous" and (
+            original is None
+            or original["app"] != name
+            or original["commit_sha"] != selection.release[:40]
+            or original["status"] != "succeeded"
+        ):
+            raise HTTPException(
+                status_code=409, detail="release has no successful deployment record"
+            )
+        deploy_id = store.create_deploy(
+            name,
+            original["commit_sha"] if original else "0" * 40,
+            original["artifact_url"] if original else "local-release://previous",
+            original["artifact_sha256"] if original else "0" * 64,
+            f"activate:{selection.release}",
+        )
+        request.app.state.queue.enqueue_activation(name, deploy_id, selection.release)
+    return {"deploy_id": deploy_id, "status": "queued"}
+
+
+@router.post("/apps/{name}/releases/cleanup")
+async def cleanup_app_release(request: Request, name: AppName, selection: ReleaseSelection):
+    with config_lock():
+        spec = _release_app(request, name, idle=True)
+        try:
+            runner.remove_release(spec, selection.release)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"removed": selection.release}
 
 
 def _secret_info(app_name: str) -> dict:

@@ -143,11 +143,23 @@ class HealthSpec(BaseModel):
 class AppSpec(BaseModel):
     releases_dir: Path
     current_link: Path
-    keep_releases: int = Field(default=5, ge=1, le=100)
+    keep_previous: int | None = Field(default=None, ge=0, le=99)
+    auto_cleanup: bool = True
     artifact: ArtifactRules
     migrate: MigrateSpec = Field(default_factory=MigrateSpec)
     restart: RestartSpec
     health: HealthSpec
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_retention(cls, value):
+        if isinstance(value, dict) and "keep_releases" in value:
+            value = dict(value)
+            legacy = value.pop("keep_releases")
+            if not isinstance(legacy, int) or isinstance(legacy, bool) or not 1 <= legacy <= 100:
+                raise ValueError("keep_releases must be between 1 and 100")
+            value.setdefault("keep_previous", legacy - 1)
+        return value
 
     @field_validator("releases_dir", "current_link")
     @classmethod

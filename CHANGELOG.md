@@ -14,5 +14,7 @@ Initial release.
   files, versioned table, `GO` batch support (SQL Server via pyodbc).
 - Admin API + React UI: app registry CRUD, secret rotation (shown once),
   deploy history with step drill-down, redeploy, live polling.
+- Local version activation and confirmed cleanup, with optional per-app retention
+  of a chosen number of previous versions and active-version protection.
 - Windows support: junction cutover, NSSM/IIS guide.
 - Examples: GitHub Actions reference workflow, vendorable notify script.

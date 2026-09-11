@@ -24,6 +24,7 @@ import {
 } from 'lucide-react'
 import { Button, ConfirmDialog, TooltipButton } from './components/ui.jsx'
 import { detectLanguage, translate } from './i18n.js'
+import ReleasePanel from './components/ReleasePanel.jsx'
 
 const STEP_ICON = {
   succeeded: <Check size={13} />,
@@ -35,7 +36,8 @@ const STEP_ICON = {
 const APP_TEMPLATE = {
   releases_dir: '/srv/myapp/releases',
   current_link: '/srv/myapp/current',
-  keep_releases: 5,
+  keep_previous: null,
+  auto_cleanup: true,
   artifact: { allowed_url_prefix: 'https://github.com/your-org/' },
   migrate: { command: null },
   restart: { command: ['sudo', 'systemctl', 'restart', 'myapp'] },
@@ -93,6 +95,7 @@ function ErrorMessage({ children, compact = false }) {
 
 function AppCard({ name, spec, call, onChanged, t }) {
   const [editing, setEditing] = useState(false)
+  const [showReleases, setShowReleases] = useState(false)
   const [draft, setDraft] = useState('')
   const [freshSecret, setFreshSecret] = useState(null)
   const [copied, setCopied] = useState(false)
@@ -209,6 +212,11 @@ function AppCard({ name, spec, call, onChanged, t }) {
           <code className="path-value">{spec.releases_dir}</code>
         </div>
       </div>
+
+      <Button onClick={() => setShowReleases(!showReleases)} aria-expanded={showReleases}>
+        {t('releases.manage')}
+      </Button>
+      {showReleases && <ReleasePanel name={name} spec={spec} call={call} onChanged={onChanged} t={t} />}
 
       {freshSecret && (
         <div className="secret-reveal">

@@ -1418,3 +1418,61 @@ footer {
     align-items: flex-start;
   }
 }
+
+.release-panel {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-subtle);
+  min-width: 0;
+}
+
+.release-list {
+  list-style: none;
+  padding: 0;
+  margin: 16px 0;
+}
+
+.release-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.release-identity,
+.release-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.release-identity small,
+.release-identity time {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.release-retention {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.release-retention .text-input {
+  max-width: 110px;
+}
+
+.release-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.release-help {
+  font-size: 12px;
+  color: var(--muted);
+}

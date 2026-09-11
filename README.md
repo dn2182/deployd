@@ -183,6 +183,39 @@ X-Deploy-Signature: sha256=<hex hmac of "{timestamp}.{nonce}.{raw body}">
 If the `202` response is lost, retry the exact signed request with the same
 nonce; deployd returns the original `deploy_id` without enqueueing a duplicate.
 
+## Version management
+
+Open **Manage versions** on an application to view its local releases, activate
+an older version, or delete an unneeded version's files with confirmation.
+Activation uses the same per-app queue, restarts the app, and checks health.
+It does not download artifacts or run migrations; older code must still work
+with the current database. A failed activation attempts to restore the prior
+version. Interrupted activations are marked failed, not replayed on restart;
+inspect the active version before retrying.
+
+On first use, choose whether to retain previous versions and how many. The
+choice is saved per application and can be changed later:
+
+- `keep_previous: null` (default): no choice yet; automatic cleanup is paused.
+- `keep_previous: 3`: retain the active version **plus three previous versions**.
+- `keep_previous: 0`: keep only the active version after automatic cleanup;
+  local rollback is then unavailable.
+- `auto_cleanup: true` (default): trim excess versions after a successful new
+  artifact deployment. Set `false` to keep cleanup entirely manual.
+
+Saving settings does not delete files immediately. During deployment, the old
+version remains available for automatic rollback even when retention is off.
+The active version is always protected from cleanup. With retention enabled
+(or not yet chosen), the immediately previous version is protected too. Other
+retained versions can be removed manually; deployment history stays in SQLite.
+The sibling `current.previous` link tracks the exact prior active version,
+including after switching to an older release. Do not use that path for other
+files. Imported sites outside the managed releases directory are never deleted.
+
+Existing `keep_releases` configurations remain supported: their total count is
+converted to `keep_previous = keep_releases - 1`, preserving the existing policy.
+For example, the old `keep_releases: 5` becomes `keep_previous: 4`.
+
 ## Deployment notes
 
 - **Linux:** [`deploy/deployd.service`](deploy/deployd.service) — systemd

@@ -190,6 +190,39 @@ X-Deploy-Signature: sha256=<hmac hex de "{timestamp}.{nonce}.{cuerpo crudo}">
 Si se pierde la respuesta `202`, reintenta exactamente el mismo request
 firmado y nonce; deployd devuelve el `deploy_id` original sin duplicarlo.
 
+## Administración de versiones
+
+Abre **Administrar versiones** en una aplicación para ver versiones locales,
+activar una anterior o eliminar sus archivos con confirmación. La activación
+usa la misma cola por aplicación, reinicia y verifica la salud. No descarga
+artefactos ni ejecuta migraciones; el código anterior debe ser compatible con
+la base de datos actual. Si falla, intenta restaurar la versión previa. Las
+activaciones interrumpidas se marcan como fallidas y no se repiten al reiniciar;
+revisa la versión activa antes de reintentar.
+
+En el primer uso, elige si deseas guardar versiones anteriores y cuántas. La
+elección se guarda por aplicación y se puede cambiar después:
+
+- `keep_previous: null` (predeterminado): elección pendiente; limpieza automática pausada.
+- `keep_previous: 3`: guarda la versión activa **más tres versiones anteriores**.
+- `keep_previous: 0`: conserva solo la activa después de la limpieza automática;
+  después no habrá rollback local disponible.
+- `auto_cleanup: true` (predeterminado): elimina el exceso después de desplegar
+  correctamente un artefacto nuevo. Usa `false` para limpiar solo manualmente.
+
+Guardar la configuración no elimina archivos inmediatamente. Durante un despliegue,
+la versión previa sigue disponible para rollback automático aunque la retención
+esté desactivada. La versión activa siempre está protegida. Si se guardan versiones
+(o aún no se eligió), la inmediatamente anterior también está protegida. Las demás
+se pueden eliminar manualmente; su historial permanece en SQLite. El enlace hermano
+`current.previous` identifica la versión activa anterior exacta, incluso al activar
+una versión más antigua. No uses esa ruta para otros archivos. Los sitios importados
+fuera del directorio administrado de versiones nunca se eliminan.
+
+Las configuraciones existentes con `keep_releases` siguen funcionando: el total
+se convierte a `keep_previous = keep_releases - 1`, conservando su política.
+Por ejemplo, `keep_releases: 5` equivale a `keep_previous: 4`.
+
 ## Notas de despliegue
 
 - **Linux:** [`deploy/deployd.service`](deploy/deployd.service) — unidad de

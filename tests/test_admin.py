@@ -44,6 +44,105 @@ def test_admin_requires_token(env):
         assert client.get("/admin/apps", headers={"X-Admin-Token": "wrong"}).status_code == 401
 
 
+def saved_release(client, root, sha="a", status="succeeded"):
+    store = client.app.state.store
+    deploy_id = store.create_deploy(
+        "app-x", sha * 40, "https://example.com/a.zip", "b" * 64, "test"
+    )
+    store.set_status(deploy_id, status, finished=True)
+    path = root / "releases" / f"{sha * 40}-{deploy_id}"
+    path.mkdir(parents=True)
+    return path
+
+
+def test_release_endpoints_require_admin(env):
+    with TestClient(create_app()) as client:
+        base = "/admin/apps/app-x/releases"
+        assert client.get(base).status_code == 401
+        for action in ("activate", "cleanup"):
+            assert client.post(f"{base}/{action}", json={"release": "previous"}).status_code == 401
+
+
+def test_local_activation_is_queued_and_locks_cleanup(env, monkeypatch):
+    with TestClient(create_app()) as client:
+        previous = saved_release(client, env)
+        current = saved_release(client, env, "c")
+        (env / "current").symlink_to(current, target_is_directory=True)
+        (env / "current.previous").symlink_to(previous, target_is_directory=True)
+        base = "/admin/apps/app-x/releases"
+        releases = client.get(base, headers=ADMIN).json()["releases"]
+        assert next(row for row in releases if row["name"] == previous.name)["can_activate"]
+        assert not next(row for row in releases if row["name"] == current.name)["can_activate"]
+        queued = []
+        monkeypatch.setattr(
+            client.app.state.queue, "enqueue_activation", lambda *args: queued.append(args)
+        )
+        response = client.post(f"{base}/activate", headers=ADMIN, json={"release": previous.name})
+        assert response.status_code == 202
+        did = response.json()["deploy_id"]
+        assert queued == [("app-x", did, previous.name)]
+        assert client.app.state.store.get_deploy(did)["triggered_by"] == f"activate:{previous.name}"
+        for action in ("activate", "cleanup"):
+            assert (
+                client.post(
+                    f"{base}/{action}", headers=ADMIN, json={"release": previous.name}
+                ).status_code
+                == 409
+            )
+
+
+def test_cleanup_deletes_only_selected_files_and_preserves_history(env):
+    with TestClient(create_app()) as client:
+        old = saved_release(client, env)
+        current = saved_release(client, env, "c")
+        (env / "current").symlink_to(current, target_is_directory=True)
+        base = "/admin/apps/app-x/releases"
+        assert (
+            client.post(
+                f"{base}/cleanup", headers=ADMIN, json={"release": current.name}
+            ).status_code
+            == 409
+        )
+        response = client.post(f"{base}/cleanup", headers=ADMIN, json={"release": old.name})
+        assert response.status_code == 200
+        assert current.exists() and not old.exists()
+        assert client.app.state.store.get_deploy(old.name[41:])["status"] == "succeeded"
+
+
+def test_activation_rejects_failed_unknown_and_invalid_releases(env):
+    with TestClient(create_app()) as client:
+        failed = saved_release(client, env, status="failed")
+        base = "/admin/apps/app-x/releases"
+        assert not client.get(base, headers=ADMIN).json()["releases"][0]["can_activate"]
+        assert (
+            client.post(
+                f"{base}/activate", headers=ADMIN, json={"release": failed.name}
+            ).status_code
+            == 409
+        )
+        assert (
+            client.post(
+                f"{base}/activate", headers=ADMIN, json={"release": "../outside"}
+            ).status_code
+            == 422
+        )
+        assert client.get("/admin/apps/unknown/releases", headers=ADMIN).status_code == 404
+
+
+def test_retention_choice_persists_without_deleting_existing_versions(env):
+    with TestClient(create_app()) as client:
+        old = saved_release(client, env)
+        spec = client.get("/admin/apps", headers=ADMIN).json()["app-x"]
+        assert spec["keep_previous"] is None
+        spec["keep_previous"] = 0
+        spec["auto_cleanup"] = False
+        assert client.put("/admin/apps/app-x", headers=ADMIN, json=spec).status_code == 200
+        config.get_app_registry.cache_clear()
+        saved = client.get("/admin/apps", headers=ADMIN).json()["app-x"]
+        assert saved["keep_previous"] == 0 and saved["auto_cleanup"] is False
+        assert old.exists()
+
+
 def test_list_apps_shows_secret_state_not_secret(env):
     with TestClient(create_app()) as client:
         apps = client.get("/admin/apps", headers=ADMIN).json()
