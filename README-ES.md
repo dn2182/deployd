@@ -92,6 +92,11 @@ Cloudflare es solo para pruebas; restringe el puerto de administración con el
 firewall y usa Full (strict) antes de producción.
 El instalador solicita el dominio público, bind/puerto de administración y
 usuario de Basic Auth, y genera el token de administración cuando hace falta.
+Repara rutas de desarrollo ausentes o sin datos en un `.env` existente,
+conserva tokens y rutas absolutas, y respalda `.env` antes de modificarlo.
+Si una ruta de desarrollo contiene datos, se detiene con instrucciones de
+migración. Valida las rutas y la configuración de aplicaciones con el usuario
+del servicio antes de iniciarlo.
 
 ## Actualización en Ubuntu
 
@@ -126,11 +131,16 @@ operativo. Luego ejecuta:
 
 ```bash
 make install                                   # dependencias Python y frontend
-cp .env.example .env                           # define DEPLOYD_ADMIN_TOKEN
+cp .env.example .env                           # ajusta las rutas y define el token
 cp config/apps.example.yaml config/apps.yaml   # registra tus aplicaciones
 make dev                                       # API en 127.0.0.1:8300
 make dev-web                                   # interfaz Vite de administración
 ```
+
+Antes de `make dev`, define `DEPLOYD_DB_PATH=deployd.sqlite3`,
+`DEPLOYD_APPS_CONFIG=config/apps.yaml` y
+`DEPLOYD_SECRETS_FILE=config/secrets.env` en `.env`. El ejemplo usa las rutas
+del servicio Ubuntu bajo `/var/lib/deployd`.
 
 Abre la interfaz, ingresa el token de administración y rota el secreto de tu
 aplicación. Ese valor será el `DEPLOYD_SECRET` del CI de ese repositorio.

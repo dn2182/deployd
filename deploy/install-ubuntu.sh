@@ -134,6 +134,7 @@ install_application() {
 }
 
 create_service_user() {
+  sudo test ! -L "$STATE_DIR" || die "$STATE_DIR must not be a symbolic link"
   if ! id deployd >/dev/null 2>&1; then
     sudo useradd --system --home-dir /opt/deployd --shell /usr/sbin/nologin deployd
   fi
@@ -142,38 +143,31 @@ create_service_user() {
 
 configure_runtime() {
   local repo_root=$1
-  local generated_token=""
+  local generated_token
+  generated_token=$(sudo "$repo_root/.venv/bin/python" "$repo_root/deploy/runtime_config.py" \
+    prepare --repo "$repo_root" --state "$STATE_DIR") || die "runtime configuration failed"
+  sudo chown root:deployd "$repo_root/.env" || die "could not set .env ownership"
+  sudo chmod 0640 "$repo_root/.env" || die "could not set .env permissions"
 
-  [[ ! -L "$repo_root/.env" ]] || die "$repo_root/.env must not be a symbolic link"
-  if [[ ! -f "$repo_root/.env" ]]; then
-    generated_token=$(openssl rand -hex 32)
-    local env_file
-    env_file=$(mktemp /tmp/deployd-env.XXXXXX)
-    {
-      printf 'DEPLOYD_DB_PATH=%s/deployd.sqlite3\n' "$STATE_DIR"
-      printf 'DEPLOYD_APPS_CONFIG=%s/apps.yaml\n' "$STATE_DIR"
-      printf 'DEPLOYD_SECRETS_FILE=%s/secrets.env\n' "$STATE_DIR"
-      printf 'DEPLOYD_BIND_HOST=127.0.0.1\n'
-      printf 'DEPLOYD_BIND_PORT=8300\n'
-      printf 'DEPLOYD_MAX_REQUEST_BYTES=65536\n'
-      printf 'DEPLOYD_ADMIN_TOKEN=%s\n' "$generated_token"
-    } >"$env_file"
-    sudo install -o root -g deployd -m 0640 "$env_file" "$repo_root/.env"
-    unlink "$env_file"
+  if sudo test -L "$STATE_DIR/apps.yaml" || sudo test -L "$STATE_DIR/secrets.env"; then
+    die "runtime configuration files must not be symbolic links"
   fi
-  sudo chown root:deployd "$repo_root/.env"
-  sudo chmod 0640 "$repo_root/.env"
-
   if ! sudo test -f "$STATE_DIR/apps.yaml"; then
     local apps_file
-    apps_file=$(mktemp /tmp/deployd-apps.XXXXXX)
-    printf 'apps: {}\n' >"$apps_file"
-    sudo install -o deployd -g deployd -m 0600 "$apps_file" "$STATE_DIR/apps.yaml"
-    unlink "$apps_file"
+    apps_file=$(mktemp /tmp/deployd-apps.XXXXXX) || die "could not create temporary app config"
+    printf 'apps: {}\n' >"$apps_file" || die "could not write temporary app config"
+    sudo install -o deployd -g deployd -m 0600 "$apps_file" "$STATE_DIR/apps.yaml" ||
+      die "could not install apps.yaml"
+    unlink "$apps_file" || die "could not remove temporary app config"
   fi
   if ! sudo test -f "$STATE_DIR/secrets.env"; then
-    sudo install -o deployd -g deployd -m 0600 /dev/null "$STATE_DIR/secrets.env"
+    sudo install -o deployd -g deployd -m 0600 /dev/null "$STATE_DIR/secrets.env" ||
+      die "could not install secrets.env"
   fi
+
+  sudo -u deployd env -i PATH=/usr/bin:/bin \
+    "$repo_root/.venv/bin/python" "$repo_root/deploy/runtime_config.py" \
+    check --repo "$repo_root" || die "runtime preflight failed; service was not restarted"
 
   printf '%s' "$generated_token"
 }
@@ -324,23 +318,29 @@ install_service() {
   local repo_root=$1
   sudo install -o root -g root -m 0644 "$repo_root/deploy/deployd.service" "$SERVICE_FILE"
   sudo systemctl daemon-reload
-  sudo systemctl enable --now deployd
+  sudo systemctl enable deployd
   sudo systemctl restart deployd
 }
 
 verify_installation() {
   local domain=$1
   local admin_port=$2
-  systemctl is-active --quiet deployd || die "deployd service is not active"
-  local attempt
-  for ((attempt = 1; attempt <= 20; attempt++)); do
-    if curl --fail --silent http://127.0.0.1:8300/healthz >/dev/null; then
+  local attempt ready="false"
+  for ((attempt = 1; attempt <= 30; attempt++)); do
+    if curl --fail --silent --connect-timeout 1 --max-time 2 \
+      http://127.0.0.1:8300/healthz >/dev/null; then
+      ready="true"
       break
     fi
-    sleep 0.25
+    if systemctl is-failed --quiet deployd; then
+      break
+    fi
+    sleep 1
   done
-  curl --fail --silent --show-error http://127.0.0.1:8300/healthz >/dev/null
-  curl --fail --silent --show-error -H "Host: ${domain}" http://127.0.0.1/healthz >/dev/null
+  [[ $ready == "true" ]] ||
+    die "deployd failed its health check; run: sudo journalctl -u deployd -n 60 --no-pager"
+  curl --fail --silent --show-error --max-time 5 \
+    -H "Host: ${domain}" http://127.0.0.1/healthz >/dev/null
 
   local admin_status
   admin_status=$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:${admin_port}/")
@@ -370,7 +370,7 @@ main() {
   create_service_user
   repair_legacy_build_ownership "$repo_root"
   install_application "$repo_root"
-  generated_token=$(configure_runtime "$repo_root")
+  generated_token=$(configure_runtime "$repo_root") || die "runtime setup failed"
   configure_basic_auth "$admin_username"
   install_service "$repo_root"
   write_nginx_config "$repo_root" "$domain" "$admin_bind" "$admin_port"
@@ -383,7 +383,7 @@ main() {
   if [[ -n $generated_token ]]; then
     printf '\nDEPLOYD_ADMIN_TOKEN (shown once):\n%s\n' "$generated_token"
   else
-    printf 'Existing /opt/deployd/.env retained; its admin token was not displayed.\n'
+    printf 'Existing admin token preserved; it was not displayed.\n'
   fi
   printf '\nSet Cloudflare SSL mode to Flexible only for this test setup.\n'
   printf 'Upgrade to Full (strict) before production use.\n'

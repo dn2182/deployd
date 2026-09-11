@@ -22,8 +22,8 @@ test:
 	cd web && pnpm test
 
 lint:
-	$(VENV)/bin/ruff check src tests
-	$(VENV)/bin/ruff format --check src tests
+	$(VENV)/bin/ruff check src tests deploy/runtime_config.py
+	$(VENV)/bin/ruff format --check src tests deploy/runtime_config.py
 	cd web && pnpm lint
 
 audit:

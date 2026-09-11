@@ -85,6 +85,11 @@ system access. Cloudflare Flexible mode is provided for testing only; keep the
 management port firewall-restricted and move to Full (strict) before production.
 The installer prompts for the public domain, management bind/port, and Basic
 Auth username, then generates the admin token when needed.
+It repairs missing or unused development paths in an existing `.env`, keeps
+existing tokens and absolute paths, and backs up `.env` before changes. If a
+development path contains state, it stops with migration instructions rather
+than switching to an empty database. Runtime paths and app configuration are
+checked as the service user before startup.
 
 ## Update on Ubuntu
 
@@ -119,11 +124,16 @@ system, then:
 
 ```bash
 make install                                   # Python + frontend dependencies
-cp .env.example .env                           # set DEPLOYD_ADMIN_TOKEN
+cp .env.example .env                           # adjust paths below and set admin token
 cp config/apps.example.yaml config/apps.yaml   # register your applications
 make dev                                       # API on 127.0.0.1:8300
 make dev-web                                   # Vite management UI
 ```
+
+Before `make dev`, set `DEPLOYD_DB_PATH=deployd.sqlite3`,
+`DEPLOYD_APPS_CONFIG=config/apps.yaml`, and
+`DEPLOYD_SECRETS_FILE=config/secrets.env` in `.env`. The example defaults to
+Ubuntu service paths under `/var/lib/deployd`.
 
 Open the UI, enter the admin token, and rotate your application's secret. That
 value becomes the `DEPLOYD_SECRET` in the application repository's CI.
