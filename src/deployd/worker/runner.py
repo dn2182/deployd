@@ -15,7 +15,7 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
-from ..config import AppSpec, get_app_registry
+from ..config import AppSpec, get_app_registry, get_settings
 from ..store.db import Store
 
 log = logging.getLogger("deployd.runner")
@@ -27,6 +27,29 @@ CMD_TIMEOUT_SECONDS = 600
 MAX_COMMAND_OUTPUT_BYTES = 1_048_576
 MAX_REDIRECTS = 5
 _RELEASE_NAME_RE = re.compile(r"^[0-9a-f]{40}-[0-9a-f]{32}$")
+_GITHUB_ASSET_PATH_RE = re.compile(
+    r"/repos/[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*/releases/assets/[0-9]+"
+)
+
+
+def _github_asset_headers(url: str) -> dict[str, str]:
+    parsed = urlsplit(url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "api.github.com"
+        or parsed.port not in (None, 443)
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or not _GITHUB_ASSET_PATH_RE.fullmatch(parsed.path)
+    ):
+        return {}
+    headers = {"Accept": "application/octet-stream", "X-GitHub-Api-Version": "2022-11-28"}
+    token = get_settings().github_token
+    if token and token.get_secret_value():
+        headers["Authorization"] = f"Bearer {token.get_secret_value()}"
+    return headers
 
 
 async def run_deploy(store: Store, app: str, deploy_id: str) -> None:
@@ -60,16 +83,19 @@ async def run_deploy(store: Store, app: str, deploy_id: str) -> None:
 
 
 async def _step_download(spec: AppSpec, deploy: dict, ctx: dict) -> str:
+    url = deploy["artifact_url"]
+    if not spec.artifact.allows_initial_url(url):
+        raise RuntimeError("artifact URL is not allowlisted")
+    headers = _github_asset_headers(url)
     incoming = spec.releases_dir / ".incoming"
     incoming.mkdir(parents=True, exist_ok=True)
     dest = incoming / f"{deploy['deploy_id']}.artifact"
     timeout = httpx.Timeout(30, read=300)
-    url = deploy["artifact_url"]
     try:
         async with httpx.AsyncClient(follow_redirects=False, timeout=timeout) as client:
             for redirect_count in range(MAX_REDIRECTS + 1):
                 await _validate_network_target(url, spec.artifact.allow_private_networks)
-                async with client.stream("GET", url) as resp:
+                async with client.stream("GET", url, headers=headers) as resp:
                     if resp.is_redirect:
                         if redirect_count == MAX_REDIRECTS:
                             raise RuntimeError(
@@ -82,8 +108,15 @@ async def _step_download(spec: AppSpec, deploy: dict, ctx: dict) -> str:
                         if not spec.artifact.allows_redirect_url(redirected):
                             raise RuntimeError("artifact redirect target is not allowlisted")
                         url = redirected
+                        # GitHub redirects to signed storage URLs; never forward the API token.
+                        headers = {}
                         continue
 
+                    if "Authorization" in headers and resp.status_code in (401, 403, 404):
+                        raise RuntimeError(
+                            f"GitHub release download returned HTTP {resp.status_code}; check "
+                            "DEPLOYD_GITHUB_TOKEN expiry and Contents read access to the repository"
+                        )
                     resp.raise_for_status()
                     declared = resp.headers.get("content-length")
                     if declared is not None and int(declared) > spec.artifact.max_download_bytes:

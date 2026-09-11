@@ -7,9 +7,9 @@
 #   variables: DEPLOYD_URL   (e.g. https://deploy.example.com)
 #   secrets:   DEPLOYD_SECRET (the app's HMAC secret)
 #
-# Private repos: the release asset URL requires auth to download; either make
-# the repo public, host artifacts elsewhere (S3 presigned URL), or front the
-# download with a  deployd can use.
+# Private repos: set DEPLOYD_GITHUB_TOKEN on the server with Contents: read.
+# Allowlist https://api.github.com/repos/OWNER/REPO/releases/assets/ and
+# the redirect host release-assets.githubusercontent.com in the app registry.
 
 name: Deploy
 
@@ -42,7 +42,7 @@ jobs:
 
       - name: Publish immutable release asset
         env:
-          GH_: ${{ github. }}
+          GH_TOKEN: ${{ github.token }}
           ARTIFACT_SHA256: ${{ steps.hash.outputs.sha256 }}
         run: |
           tag="deploy-${GITHUB_SHA}"
@@ -59,6 +59,16 @@ jobs:
               --title "deploy ${GITHUB_SHA:0:12}" --notes "automated deploy artifact"
           fi
 
+      - name: Resolve release asset URL
+        id: asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          asset_url=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/deploy-${GITHUB_SHA}" \
+            --jq '.assets[] | select(.name == "app.zip") | .url')
+          test -n "$asset_url"
+          echo "url=$asset_url" >> "$GITHUB_OUTPUT"
+
       - name: Notify deployd and wait
         env:
           DEPLOYD_URL: ${{ vars.DEPLOYD_URL }}
@@ -67,6 +77,6 @@ jobs:
           python3 scripts/notify_deploy.py \
             --app example-api \
             --commit-sha "${GITHUB_SHA}" \
-            --artifact-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/deploy-${GITHUB_SHA}/app.zip" \
+            --artifact-url "${{ steps.asset.outputs.url }}" \
             --artifact-sha256 "${{ steps.hash.outputs.sha256 }}" \
             --triggered-by "github-actions:${GITHUB_RUN_ID}"

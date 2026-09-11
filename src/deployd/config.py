@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 import yaml
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 APP_NAME_PATTERN = r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$"
@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     apps_config: Path = Path("config/apps.yaml")
     secrets_file: Path = Path("config/secrets.env")
     admin_token: str | None = None
+    github_token: SecretStr | None = None
     bind_host: str = "127.0.0.1"
     bind_port: int = Field(default=8300, ge=1, le=65_535)
     max_request_bytes: int = Field(default=65_536, ge=1_024, le=1_048_576)

@@ -151,8 +151,22 @@ Copia [`examples/github-actions-deploy.yml`](examples/github-actions-deploy.yml)
 al repo de tu aplicación e incorpora
 [`examples/notify_deploy.py`](examples/notify_deploy.py) como
 `scripts/notify_deploy.py`. El repo necesita un secreto (`DEPLOYD_SECRET`) y
-una variable (`DEPLOYD_URL`) — el servidor no guarda credenciales de GitHub
-en absoluto.
+una variable (`DEPLOYD_URL`). Las descargas públicas no necesitan una credencial
+de GitHub en el servidor.
+
+Para un repositorio privado, configura `DEPLOYD_GITHUB_TOKEN` en el `.env`
+protegido del servidor con un token granular que tenga **Contents: read** solo
+para ese repositorio y reinicia deployd. Es distinto del token de administración
+y del secreto HMAC de la aplicación. El workflow publica con su `github.token`.
+
+El workflow de referencia envía la URL de API del artefacto:
+`https://api.github.com/repos/OWNER/REPO/releases/assets/ASSET_ID`.
+Configura `artifact.allowed_url_prefix` con el prefijo de ese repositorio,
+`https://api.github.com/repos/OWNER/REPO/releases/assets/`, y agrega
+`release-assets.githubusercontent.com` a `artifact.allowed_redirect_hosts`.
+Deployd solicita el archivo binario y envía el token solo en la solicitud HTTPS
+inicial a esa API; nunca lo reenvía en redirecciones. Los repositorios públicos
+pueden usar las mismas URLs sin `DEPLOYD_GITHUB_TOKEN`.
 
 El contrato del request:
 

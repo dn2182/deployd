@@ -3,7 +3,15 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from deployd.config import AppSpec, ArtifactRules, validate_app_name
+from deployd.config import AppSpec, ArtifactRules, Settings, validate_app_name
+
+
+def test_github_token_is_redacted(monkeypatch):
+    monkeypatch.setenv("DEPLOYD_GITHUB_TOKEN", "github_pat_test_secret")
+    settings = Settings()
+    assert settings.github_token.get_secret_value() == "github_pat_test_secret"
+    assert "github_pat_test_secret" not in repr(settings)
+    assert "github_pat_test_secret" not in settings.model_dump_json()
 
 
 def app_spec(tmp_path, **overrides):

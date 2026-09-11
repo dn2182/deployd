@@ -16,6 +16,43 @@ from deployd.worker import runner
 SHA_V1 = "a" * 40
 SHA_V2 = "b" * 40
 
+GITHUB_ASSET_URL = "https://api.github.com/repos/acme/site/releases/assets/123"
+
+
+@pytest.mark.parametrize("token", [None, "", "github_pat_test_secret"])
+def test_github_asset_headers(token, monkeypatch):
+    monkeypatch.delenv("DEPLOYD_GITHUB_TOKEN", raising=False)
+    if token is not None:
+        monkeypatch.setenv("DEPLOYD_GITHUB_TOKEN", token)
+    headers = runner._github_asset_headers(GITHUB_ASSET_URL)
+    assert headers["Accept"] == "application/octet-stream"
+    if token:
+        assert headers["Authorization"] == f"Bearer {token}"
+    else:
+        assert "Authorization" not in headers
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://api.github.com/repos/acme/site/releases/assets/123",
+        "https://api.github.com:8443/repos/acme/site/releases/assets/123",
+        "https://api.github.com.evil.example/repos/acme/site/releases/assets/123",
+        "https://api.github.com@evil.example/repos/acme/site/releases/assets/123",
+        "https://user@api.github.com/repos/acme/site/releases/assets/123",
+        "https://api.github.com/repos/../site/releases/assets/123",
+        "https://api.github.com/repos/acme/site/releases/assets/%31%32%33",
+        GITHUB_ASSET_URL + "?download=1",
+        GITHUB_ASSET_URL + "#fragment",
+        "https://api.github.com/repos/acme/site/contents/index.html",
+        "https://github.com/acme/site/releases/download/v1/app.zip",
+        "https://release-assets.githubusercontent.com/file.zip",
+    ],
+)
+def test_github_headers_are_restricted_to_asset_api(url, monkeypatch):
+    monkeypatch.setenv("DEPLOYD_GITHUB_TOKEN", "github_pat_test_secret")
+    assert runner._github_asset_headers(url) == {}
+
 
 def make_artifact(tmp_path: Path, name: str, content: str) -> tuple[Path, str]:
     buf = io.BytesIO()
@@ -205,6 +242,72 @@ async def test_unlisted_redirect_target_is_rejected(spec, monkeypatch):
 
     with pytest.raises(RuntimeError, match="redirect target"):
         await runner._step_download(spec, deploy, {})
+
+
+@pytest.mark.parametrize(
+    "redirect",
+    [None, "https://release-assets.githubusercontent.com/file.zip", GITHUB_ASSET_URL + "4"],
+)
+async def test_private_asset_download_drops_auth_on_every_redirect(spec, monkeypatch, redirect):
+    spec.artifact.allowed_url_prefix = "https://api.github.com/repos/acme/site/releases/assets/"
+    spec.artifact.allowed_redirect_hosts = ["release-assets.githubusercontent.com"]
+    spec.artifact.allow_private_networks = True
+    monkeypatch.setenv("DEPLOYD_GITHUB_TOKEN", "github_pat_test_secret")
+    requests = []
+
+    def serve(request):
+        requests.append(request)
+        if len(requests) == 1:
+            assert request.headers["authorization"] == "Bearer github_pat_test_secret"
+            assert request.headers["accept"] == "application/octet-stream"
+            if redirect:
+                return httpx.Response(302, headers={"location": redirect})
+        else:
+            assert "authorization" not in request.headers
+        return httpx.Response(200, content=b"artifact")
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(serve), **kwargs),
+    )
+    ctx = {}
+    await runner._step_download(
+        spec, {"deploy_id": "f" * 32, "artifact_url": GITHUB_ASSET_URL}, ctx
+    )
+    assert ctx["artifact_path"].read_bytes() == b"artifact"
+    assert len(requests) == (2 if redirect else 1)
+
+
+@pytest.mark.parametrize("status", [401, 403, 404])
+async def test_private_asset_auth_failure_is_actionable_and_redacted(spec, monkeypatch, status):
+    spec.artifact.allowed_url_prefix = "https://api.github.com/repos/acme/site/releases/assets/"
+    spec.artifact.allow_private_networks = True
+    monkeypatch.setenv("DEPLOYD_GITHUB_TOKEN", "github_pat_test_secret")
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: real_client(
+            transport=httpx.MockTransport(lambda request: httpx.Response(status)), **kwargs
+        ),
+    )
+    with pytest.raises(RuntimeError, match="Contents read") as error:
+        await runner._step_download(
+            spec, {"deploy_id": "f" * 32, "artifact_url": GITHUB_ASSET_URL}, {}
+        )
+    assert "github_pat_test_secret" not in str(error.value)
+    assert not list((spec.releases_dir / ".incoming").iterdir())
+
+
+async def test_private_asset_must_match_app_allowlist(spec, monkeypatch):
+    monkeypatch.setenv("DEPLOYD_GITHUB_TOKEN", "github_pat_test_secret")
+    with pytest.raises(RuntimeError, match="not allowlisted"):
+        await runner._step_download(
+            spec, {"deploy_id": "f" * 32, "artifact_url": GITHUB_ASSET_URL}, {}
+        )
+    assert not spec.releases_dir.exists()
 
 
 async def test_old_releases_pruned(tmp_path, spec, store, monkeypatch):

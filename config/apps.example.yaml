@@ -7,7 +7,7 @@ apps:
     keep_releases: 5
     artifact:
       # only URLs matching this prefix are accepted (defense in depth on top of HMAC)
-      allowed_url_prefix: "https://github.com/your-org/"
+      allowed_url_prefix: "https://api.github.com/repos/your-org/your-repo/releases/assets/"
       # GitHub release downloads redirect here; every redirect host must be explicit.
       allowed_redirect_hosts: ["release-assets.githubusercontent.com"]
       allow_private_networks: false
