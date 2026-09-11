@@ -450,8 +450,6 @@ def _cleanup_attempt(spec: AppSpec, ctx: dict, *, succeeded: bool) -> None:
 
 
 def _prune_releases(spec: AppSpec) -> None:
-    if spec.keep_previous is None:
-        return
     try:
         releases = _managed_releases(spec)
         current = _current_target(spec.current_link)

@@ -20,10 +20,11 @@ function setup(spec = {}, language = 'en', busy = false) {
 }
 
 describe('ReleasePanel', () => {
-  it('asks once for a retention choice and saves the number of previous versions', async () => {
+  it('defaults to one previous version and lets the user change the count', async () => {
     const call = setup({ keep_previous: null, secret: { configured: true } })
-    expect(await screen.findByText(/Until you save a choice/)).toBeInTheDocument()
     await screen.findByText('aaaaaaaaaaaa')
+    expect(screen.getByRole('spinbutton')).toHaveValue(1)
+    expect(screen.getByLabelText('Keep previous versions')).toBeChecked()
     fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '3' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() => expect(call).toHaveBeenCalledWith('/admin/apps/site', {
@@ -34,7 +35,6 @@ describe('ReleasePanel', () => {
   it('requires confirmation to disable retention', async () => {
     const call = setup({ keep_previous: 3 })
     await screen.findByText('aaaaaaaaaaaa')
-    expect(screen.queryByText(/Until you save a choice/)).not.toBeInTheDocument()
     fireEvent.click(screen.getByLabelText('Keep previous versions'))
     expect(screen.getByRole('spinbutton')).toBeDisabled()
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))

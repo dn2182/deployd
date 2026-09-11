@@ -36,7 +36,7 @@ const STEP_ICON = {
 const APP_TEMPLATE = {
   releases_dir: '/srv/myapp/releases',
   current_link: '/srv/myapp/current',
-  keep_previous: null,
+  keep_previous: 1,
   auto_cleanup: true,
   artifact: { allowed_url_prefix: 'https://github.com/your-org/' },
   migrate: { command: null },

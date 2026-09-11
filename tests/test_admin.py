@@ -133,7 +133,7 @@ def test_retention_choice_persists_without_deleting_existing_versions(env):
     with TestClient(create_app()) as client:
         old = saved_release(client, env)
         spec = client.get("/admin/apps", headers=ADMIN).json()["app-x"]
-        assert spec["keep_previous"] is None
+        assert spec["keep_previous"] == 1
         spec["keep_previous"] = 0
         spec["auto_cleanup"] = False
         assert client.put("/admin/apps/app-x", headers=ADMIN, json=spec).status_code == 200

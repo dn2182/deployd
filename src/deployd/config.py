@@ -143,7 +143,7 @@ class HealthSpec(BaseModel):
 class AppSpec(BaseModel):
     releases_dir: Path
     current_link: Path
-    keep_previous: int | None = Field(default=None, ge=0, le=99)
+    keep_previous: int = Field(default=1, ge=0, le=99)
     auto_cleanup: bool = True
     artifact: ArtifactRules
     migrate: MigrateSpec = Field(default_factory=MigrateSpec)
@@ -160,6 +160,12 @@ class AppSpec(BaseModel):
                 raise ValueError("keep_releases must be between 1 and 100")
             value.setdefault("keep_previous", legacy - 1)
         return value
+
+    @field_validator("keep_previous", mode="before")
+    @classmethod
+    def default_unset_retention(cls, value):
+        # Earlier configurations used null for a choice that had not yet been made.
+        return 1 if value is None else value
 
     @field_validator("releases_dir", "current_link")
     @classmethod

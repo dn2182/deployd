@@ -4,8 +4,8 @@ apps:
   example-api:
     releases_dir: /srv/example-api/releases      # releases/<sha>-<deploy_id>/
     current_link: /srv/example-api/current       # atomic cutover target
-    # Choose in the management UI: null pauses cleanup; 0 keeps only the active version.
-    keep_previous: null
+    # Active version plus one rollback version; 0 disables retention of previous versions.
+    keep_previous: 1
     auto_cleanup: true
     artifact:
       # only URLs matching this prefix are accepted (defense in depth on top of HMAC)

@@ -200,10 +200,10 @@ la base de datos actual. Si falla, intenta restaurar la versión previa. Las
 activaciones interrumpidas se marcan como fallidas y no se repiten al reiniciar;
 revisa la versión activa antes de reintentar.
 
-En el primer uso, elige si deseas guardar versiones anteriores y cuántas. La
-elección se guarda por aplicación y se puede cambiar después:
+Por defecto se conservan dos versiones en total: la activa y una anterior para
+rollback. La configuración se guarda por aplicación y se puede cambiar:
 
-- `keep_previous: null` (predeterminado): elección pendiente; limpieza automática pausada.
+- `keep_previous: 1` (predeterminado): guarda la activa **más una versión anterior**.
 - `keep_previous: 3`: guarda la versión activa **más tres versiones anteriores**.
 - `keep_previous: 0`: conserva solo la activa después de la limpieza automática;
   después no habrá rollback local disponible.
@@ -212,8 +212,8 @@ elección se guarda por aplicación y se puede cambiar después:
 
 Guardar la configuración no elimina archivos inmediatamente. Durante un despliegue,
 la versión previa sigue disponible para rollback automático aunque la retención
-esté desactivada. La versión activa siempre está protegida. Si se guardan versiones
-(o aún no se eligió), la inmediatamente anterior también está protegida. Las demás
+esté desactivada. La versión activa siempre está protegida. Si se guardan versiones,
+la inmediatamente anterior también está protegida. Las demás
 se pueden eliminar manualmente; su historial permanece en SQLite. El enlace hermano
 `current.previous` identifica la versión activa anterior exacta, incluso al activar
 una versión más antigua. No uses esa ruta para otros archivos. Los sitios importados
@@ -222,6 +222,7 @@ fuera del directorio administrado de versiones nunca se eliminan.
 Las configuraciones existentes con `keep_releases` siguen funcionando: el total
 se convierte a `keep_previous = keep_releases - 1`, conservando su política.
 Por ejemplo, `keep_releases: 5` equivale a `keep_previous: 4`.
+Un valor anterior `keep_previous: null` ahora usa el valor predeterminado de una versión anterior.
 
 ## Notas de despliegue
 

@@ -9,7 +9,7 @@ export default function ReleasePanel({ name, spec, call, onChanged, t }) {
   const [draft, setDraft] = useState(null)
   const policyKey = JSON.stringify([spec.keep_previous, spec.auto_cleanup])
   const policy = draft?.key === policyKey ? draft : {
-    keep: spec.keep_previous || 4,
+    keep: spec.keep_previous || 1,
     retain: spec.keep_previous !== 0,
     automatic: spec.auto_cleanup ?? true,
   }
@@ -114,7 +114,6 @@ export default function ReleasePanel({ name, spec, call, onChanged, t }) {
         {!data.releases.length && <p>{t('releases.empty')}</p>}
       </>}
       <form className="release-retention" onSubmit={(event) => { event.preventDefault(); if (retain) saveRetention() }}>
-        {spec.keep_previous == null && <p role="status">{t('releases.choose')}</p>}
         <label className="release-checkbox">
           <input type="checkbox" checked={retain} disabled={busy}
             onChange={(event) => updatePolicy({ retain: event.target.checked })} />

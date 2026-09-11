@@ -326,7 +326,7 @@ async def test_old_releases_pruned(tmp_path, spec, store, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "keep,automatic,expected", [(None, True, 4), (0, True, 1), (2, True, 3), (0, False, 4)]
+    "keep,automatic,expected", [(1, True, 2), (0, True, 1), (2, True, 3), (0, False, 4)]
 )
 async def test_optional_retention(tmp_path, spec, store, monkeypatch, keep, automatic, expected):
     spec.keep_previous = keep

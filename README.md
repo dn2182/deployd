@@ -193,10 +193,10 @@ with the current database. A failed activation attempts to restore the prior
 version. Interrupted activations are marked failed, not replayed on restart;
 inspect the active version before retrying.
 
-On first use, choose whether to retain previous versions and how many. The
-choice is saved per application and can be changed later:
+By default, retain two releases total: the active version and one previous
+version for rollback. Settings are saved per application and can be changed:
 
-- `keep_previous: null` (default): no choice yet; automatic cleanup is paused.
+- `keep_previous: 1` (default): retain the active version **plus one previous version**.
 - `keep_previous: 3`: retain the active version **plus three previous versions**.
 - `keep_previous: 0`: keep only the active version after automatic cleanup;
   local rollback is then unavailable.
@@ -205,8 +205,8 @@ choice is saved per application and can be changed later:
 
 Saving settings does not delete files immediately. During deployment, the old
 version remains available for automatic rollback even when retention is off.
-The active version is always protected from cleanup. With retention enabled
-(or not yet chosen), the immediately previous version is protected too. Other
+The active version is always protected from cleanup. With retention enabled,
+the immediately previous version is protected too. Other
 retained versions can be removed manually; deployment history stays in SQLite.
 The sibling `current.previous` link tracks the exact prior active version,
 including after switching to an older release. Do not use that path for other
@@ -215,6 +215,7 @@ files. Imported sites outside the managed releases directory are never deleted.
 Existing `keep_releases` configurations remain supported: their total count is
 converted to `keep_previous = keep_releases - 1`, preserving the existing policy.
 For example, the old `keep_releases: 5` becomes `keep_previous: 4`.
+An earlier `keep_previous: null` now uses the default of one previous version.
 
 ## Deployment notes
 

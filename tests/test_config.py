@@ -60,11 +60,12 @@ def test_runtime_bounds_are_validated(tmp_path):
 
 
 def test_retention_choice_and_legacy_conversion(tmp_path):
-    assert app_spec(tmp_path).keep_previous is None
+    assert app_spec(tmp_path).keep_previous == 1
+    assert app_spec(tmp_path, keep_previous=None).keep_previous == 1
     assert app_spec(tmp_path, keep_previous=0).keep_previous == 0
     assert app_spec(tmp_path, keep_previous=3).keep_previous == 3
     assert app_spec(tmp_path, keep_releases=5).keep_previous == 4
-    assert app_spec(tmp_path, keep_releases=5, keep_previous=None).keep_previous is None
+    assert app_spec(tmp_path, keep_releases=5, keep_previous=None).keep_previous == 1
     assert "keep_releases" not in app_spec(tmp_path, keep_releases=5).model_dump()
     for invalid in (-1, 100):
         with pytest.raises(ValidationError):
