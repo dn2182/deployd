@@ -46,12 +46,12 @@ def prepare(repo: Path, state: Path) -> str:
     }.items():
         if not values.get(key):
             updates[key] = default
-    token = ""
-    if not values.get("DEPLOYD_ADMIN_TOKEN"):
-        token = secrets.token_hex(32)
-        updates["DEPLOYD_ADMIN_TOKEN"] = token
+     = ""
+    if not values.get("DEPLOYD_ADMIN_"):
+         = secrets._hex(32)
+        updates["DEPLOYD_ADMIN_"] = 
     if not updates:
-        return token
+        return 
 
     fd, name = tempfile.mkstemp(prefix=".env.install-", dir=repo)
     os.close(fd)
@@ -69,7 +69,7 @@ def prepare(repo: Path, state: Path) -> str:
         os.replace(candidate, env)
     finally:
         candidate.unlink(missing_ok=True)
-    return token
+    return 
 
 
 def check() -> None:

@@ -9,7 +9,7 @@
 #
 # Private repos: the release asset URL requires auth to download; either make
 # the repo public, host artifacts elsewhere (S3 presigned URL), or front the
-# download with a token deployd can use.
+# download with a  deployd can use.
 
 name: Deploy
 
@@ -42,7 +42,7 @@ jobs:
 
       - name: Publish immutable release asset
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_: ${{ github. }}
           ARTIFACT_SHA256: ${{ steps.hash.outputs.sha256 }}
         run: |
           tag="deploy-${GITHUB_SHA}"
