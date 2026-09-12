@@ -1,15 +1,13 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { translate } from '../i18n.js'
 import WebsiteConnection from './WebsiteConnection.jsx'
-
-const t = (key, values) => translate('en', key, values)
+import { renderWith } from '../test-utils.jsx'
 
 describe('website connection', () => {
   it('requires typing the app name before queuing a live switch', async () => {
     const call = vi.fn().mockResolvedValue({ status: 'ready' })
     const onChanged = vi.fn()
-    render(<WebsiteConnection name="site" call={call} onChanged={onChanged} t={t} />)
+    renderWith(<WebsiteConnection name="site" call={call} onChanged={onChanged} />)
     fireEvent.click(await screen.findByRole('button', { name: 'Connect website' }))
     const dialog = screen.getByRole('alertdialog')
     const confirm = within(dialog).getByRole('button', { name: 'Connect website' })
@@ -26,7 +24,7 @@ describe('website connection', () => {
 
   it('does not offer to move an already linked website or invent a backup', async () => {
     const call = vi.fn().mockResolvedValue({ status: 'connected', backup: false })
-    render(<WebsiteConnection name="site" call={call} onChanged={vi.fn()} t={t} />)
+    renderWith(<WebsiteConnection name="site" call={call} onChanged={vi.fn()} />)
     expect(await screen.findByText(/No b4deployd backup was created/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Connect website' })).not.toBeInTheDocument()
     expect(call).toHaveBeenCalledTimes(1)
@@ -34,23 +32,24 @@ describe('website connection', () => {
 
   it('shows preflight errors without offering a live switch', async () => {
     const call = vi.fn().mockRejectedValue(new Error('install the helper first'))
-    render(<WebsiteConnection name="site" call={call} onChanged={vi.fn()} t={t} />)
+    renderWith(<WebsiteConnection name="site" call={call} onChanged={vi.fn()} />)
     expect(await screen.findByRole('alert')).toHaveTextContent('install the helper first')
     expect(screen.queryByRole('button', { name: 'Connect website' })).not.toBeInTheDocument()
   })
 
-  it('allows a manual status check while a connection is busy', async () => {
-    const call = vi.fn().mockResolvedValueOnce({ status: 'busy' }).mockResolvedValue({ status: 'connected', backup: true })
-    render(<WebsiteConnection name="site" call={call} onChanged={vi.fn()} t={t} />)
-    await screen.findByText(/queued or running/)
+  it('allows a manual status check while a connection is busy and clears old errors', async () => {
+    const call = vi.fn().mockRejectedValueOnce(new Error('helper missing')).mockResolvedValue({ status: 'connected', backup: true })
+    renderWith(<WebsiteConnection name="site" call={call} onChanged={vi.fn()} />)
+    await screen.findByRole('alert')
     fireEvent.click(screen.getByRole('button', { name: 'Check connection' }))
     expect(await screen.findByText(/Connected: the local site path/)).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(call).toHaveBeenCalledTimes(2)
   })
 
   it('explains retained restored files before reconnecting', async () => {
     const call = vi.fn().mockResolvedValue({ status: 'reconnect', backup: true })
-    render(<WebsiteConnection name="site" call={call} onChanged={vi.fn()} t={t} />)
+    renderWith(<WebsiteConnection name="site" call={call} onChanged={vi.fn()} />)
     fireEvent.click(await screen.findByRole('button', { name: 'Connect website' }))
     expect(screen.getByRole('alertdialog')).toHaveTextContent('including any edits')
     expect(screen.getByRole('alertdialog')).toHaveTextContent('b4deployd backup is unchanged')

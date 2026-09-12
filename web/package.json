@@ -12,8 +12,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@radix-ui/react-alert-dialog": "^1.1.23",
-    "@radix-ui/react-tooltip": "^1.2.16",
     "@tailwindcss/vite": "^4.3.3",
     "lucide-react": "^1.41.0",
     "react": "^19.2.8",

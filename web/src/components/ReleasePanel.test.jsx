@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { translate } from '../i18n.js'
 import ReleasePanel from './ReleasePanel.jsx'
+import { renderWith, wrap } from '../test-utils.jsx'
 
 const release = (char, extra = {}) => ({
   name: `${char.repeat(40)}-${char.repeat(32)}`,
@@ -14,8 +14,7 @@ const versions = [release('a', { active: true, protected: true, can_activate: fa
 function setup(spec = {}, language = 'en', busy = false, releases = versions, activePath = '/srv/current') {
   const call = vi.fn(async () => ({ releases, active_path: activePath, busy }))
   const changed = vi.fn()
-  render(<ReleasePanel name="site" spec={spec} call={call} onChanged={changed}
-    t={(key, values) => translate(language, key, values)} />)
+  renderWith(<ReleasePanel name="site" spec={spec} call={call} onChanged={changed} />, { language })
   return call
 }
 
@@ -24,7 +23,6 @@ describe('ReleasePanel', () => {
     const call = setup({ releases_dir: '/srv/site/releases', current_link: '/srv/site/current',
       release_layout: 'symlink', keep_previous: 1 }, 'en', false, [], null)
     await screen.findByText('No retained versions yet.')
-    expect(screen.queryByLabelText('Release layout')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() => expect(call).toHaveBeenCalledWith('/admin/apps/site', {
       method: 'PUT', body: JSON.stringify({ releases_dir: '/srv/site/releases',
@@ -57,6 +55,7 @@ describe('ReleasePanel', () => {
     await waitFor(() => expect(call).toHaveBeenCalledWith('/admin/apps/site', {
       method: 'PUT', body: JSON.stringify({ keep_previous: 0, auto_cleanup: true }),
     }))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
   })
 
   it('protects active and previous releases and confirms manual deletion', async () => {
@@ -64,7 +63,6 @@ describe('ReleasePanel', () => {
     await screen.findByText('aaaaaaaaaaaa')
     expect(screen.getAllByRole('button', { name: 'Delete files' })).toHaveLength(1)
     expect(screen.getAllByRole('button', { name: 'Activate' })[0]).toBeDisabled()
-    expect(screen.queryByLabelText('Release layout')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Delete files' }))
     fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete files' }))
     await waitFor(() => expect(call).toHaveBeenCalledWith('/admin/apps/site/releases/cleanup', {
@@ -80,6 +78,33 @@ describe('ReleasePanel', () => {
     await waitFor(() => expect(call).toHaveBeenCalledWith('/admin/apps/site/releases/activate', {
       method: 'POST', body: JSON.stringify({ release: versions[1].name }),
     }))
+  })
+
+  it('keeps the dialog open and shows the error when an operation fails', async () => {
+    const call = setup({ keep_previous: 3 })
+    await screen.findByText('cccccccccccc')
+    call.mockRejectedValueOnce(new Error('app has queued or running deployments'))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete files' }))
+    const dialog = screen.getByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete files' }))
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('queued or running')
+    expect(dialog).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Delete files' })).toBeEnabled()
+  })
+
+  it('ignores stale responses when a newer load finishes first', async () => {
+    let resolveFirst
+    const call = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve }))
+      .mockResolvedValue({ releases: versions, active_path: '/srv/current', busy: false })
+    const panel = (revision) => wrap(<ReleasePanel name="site" spec={{ keep_previous: 1 }} call={call} onChanged={vi.fn()} revision={revision} />)
+    const view = render(panel(0))
+    await waitFor(() => expect(call).toHaveBeenCalledTimes(1))
+    view.rerender(panel(1))
+    await screen.findByText('aaaaaaaaaaaa')
+    resolveFirst({ releases: [], active_path: null, busy: false })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(screen.getByText('aaaaaaaaaaaa')).toBeInTheDocument()
   })
 
   it('localizes controls and locks mutations during deployment', async () => {

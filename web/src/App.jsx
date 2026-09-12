@@ -1,653 +1,188 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import {
-  Activity,
-  AppWindow,
-  Check,
-  ChevronDown,
-  ChevronRight,
-  CircleAlert,
-  CloudCog,
-  Copy,
-  KeyRound,
-  LoaderCircle,
-  Moon,
-  Pencil,
-  Plus,
-  RefreshCw,
-  RotateCcw,
-  Search,
-  Server,
-  ShieldCheck,
-  Sun,
-  Trash2,
-  X,
-} from 'lucide-react'
-import { Button, ConfirmDialog, TooltipButton } from './components/ui.jsx'
-import { detectLanguage, translate } from './i18n.js'
-import ReleasePanel from './components/ReleasePanel.jsx'
-import AppEditor from './components/AppEditor.jsx'
-import SetupSummary from './components/SetupSummary.jsx'
-import AppPaths from './components/AppPaths.jsx'
-import WebsiteConnection from './components/WebsiteConnection.jsx'
-import GitHubSetup from './components/GitHubSetup.jsx'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
+import { Activity, AppWindow, CloudCog, LogOut, Moon, RefreshCw, ScrollText, Sun } from 'lucide-react'
+import { LanguageProvider, detectLanguage, useT } from './i18n/index.js'
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.js'
+import { useRegistry } from './hooks/useRegistry.js'
+import { useSession } from './hooks/useSession.js'
+import { useTheme } from './hooks/useTheme.js'
+import { ToastProvider } from './components/Toasts.jsx'
+import { useToast } from './hooks/useToast.js'
+import { Button, ErrorMessage, IconButton, Kicker, Panel } from './components/ui.jsx'
+import AppRegistry, { RegistrySkeleton } from './components/AppRegistry.jsx'
+import AuditLog from './components/AuditLog.jsx'
+import DeployHistory from './components/DeployHistory.jsx'
+import SecretModal from './components/SecretModal.jsx'
+import TokenGate from './components/TokenGate.jsx'
 
-const STEP_ICON = {
-  succeeded: <Check size={13} />,
-  failed: <X size={13} />,
-  running: <LoaderCircle className="spin" size={13} />,
-  skipped: <span>–</span>,
-}
+const TERMINAL_TOAST = { succeeded: 'success', failed: 'error', rolled_back: 'error', cancelled: 'info' }
 
-const api = async (token, path, opts = {}) => {
-  const resp = await fetch(`/api${path}`, {
-    ...opts,
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Admin-Token': token,
-      ...opts.headers,
-    },
-  })
-  const body = await resp.text()
-  let payload
-  try {
-    payload = body ? JSON.parse(body) : null
-  } catch {
-    const message = body.trim().slice(0, 200)
-    throw new Error(message || `HTTP ${resp.status}: invalid server response`)
-  }
-  if (!resp.ok) {
-    const detail = payload?.detail
-    throw new Error(Array.isArray(detail)
-      ? detail.map((item) => `${item.loc?.filter((part) => part !== 'body').join('.')}: ${item.msg}`).join('; ')
-      : detail ?? `HTTP ${resp.status}`)
-  }
-  return payload
-}
-
-function initialTheme() {
-  try {
-    const saved = localStorage.getItem('deployd-theme')
-    if (saved === 'light' || saved === 'dark') return saved
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-  } catch {
-    return 'light'
-  }
-}
-
-function StatusBadge({ status, t }) {
+function HealthPill({ health }) {
+  const t = useT()
+  const status = health?.status ?? 'checking'
+  const tone = status === 'ok' ? 'bg-success-soft text-success' : status === 'checking' ? 'bg-surface-soft text-muted' : 'bg-danger-soft text-danger'
+  const details = health && status !== 'unreachable' ? `db: ${health.db ?? '?'}, worker: ${health.worker ?? '?'}` : undefined
   return (
-    <span className={`status-badge status-${status}`}>
-      <span className="status-dot" />
-      {t(`status.${status}`)}
+    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${tone}`} title={details}>
+      <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
+      {t('topbar.api', { status: t(`health.${status}`) })}
     </span>
   )
 }
 
-function ErrorMessage({ children, compact = false }) {
+function SectionHeading({ icon, kicker, title, aside, children }) {
   return (
-    <div className={`error-message ${compact ? 'error-message-compact' : ''}`} role="alert">
-      <CircleAlert size={16} />
-      <span>{children}</span>
+    <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <Kicker icon={icon}>{kicker}</Kicker>
+        <h2 className="m-0 mt-1 text-2xl font-semibold tracking-tight text-text-strong">{title}</h2>
+      </div>
+      {aside && <span className="text-xs text-muted">{aside}</span>}
+      {children}
     </div>
   )
 }
 
-function AppCard({ name, spec, call, onChanged, revision, busy, t }) {
-  const [editing, setEditing] = useState(false)
-  const [tab, setTab] = useState(spec.site_path ? 'website' : 'releases')
-  const tabs = [...(spec.site_path ? ['website'] : []), 'releases', 'github']
-  const activeTab = tabs.includes(tab) ? tab : 'releases'
-  const tabId = useId()
-  const tabLabels = { website: 'website.title', releases: 'releases.manage', github: 'github.title' }
-  const [removeWebsite, setRemoveWebsite] = useState('restore')
-  const [removing, setRemoving] = useState(false)
-  const [freshSecret, setFreshSecret] = useState(null)
-  const [copied, setCopied] = useState(false)
-  const [error, setError] = useState(null)
-  const [notice, setNotice] = useState(null)
-
-  const startEdit = () => {
-    setEditing(true)
-    setError(null)
-  }
-
-  const rotate = async () => {
-    try {
-      const out = await call(`/admin/apps/${name}/rotate-secret`, { method: 'POST' })
-      setFreshSecret(out)
-      onChanged()
-    } catch (requestError) {
-      setError(requestError.message)
-    }
-  }
-
-  const remove = async () => {
-    setRemoving(true)
-    try {
-      const result = await call(`/admin/apps/${name}`, {
-        method: 'DELETE',
-        ...(spec.site_path && { body: JSON.stringify({ confirm: name, website: removeWebsite }) }),
-      })
-      if (result.status === 'queued') setNotice(t('app.removal_queued'))
-      onChanged()
-    } catch (requestError) {
-      setError(requestError.message)
-    } finally {
-      setRemoving(false)
-    }
-  }
-
-  const copySecret = async () => {
-    if (!freshSecret?.secret) return
-    try {
-      await navigator.clipboard.writeText(freshSecret.secret)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1800)
-    } catch {
-      setCopied(false)
-    }
-  }
-
-  return (
-    <article className="glass-panel app-card">
-      <div className="app-card-header">
-        <div className="app-identity">
-          <div className="app-icon" aria-hidden="true">
-            <Server size={19} />
-          </div>
-          <div>
-            <h3>{name}</h3>
-            <span>{spec.health?.url ?? t('app.no_health')}</span>
-          </div>
-        </div>
-        <div className="app-actions">
-          <TooltipButton label={t('app.edit', { name })} onClick={startEdit} disabled={busy || removing}>
-            <Pencil size={16} />
-          </TooltipButton>
-          <ConfirmDialog
-            trigger={
-              <TooltipButton label={t('app.rotate', { name })} disabled={busy || removing}>
-                <KeyRound size={16} />
-              </TooltipButton>
-            }
-            title={t('app.rotate_title', { name })}
-            description={t('app.rotate_description')}
-            confirmLabel={t('app.rotate_confirm')}
-            cancelLabel={t('common.cancel')}
-            onConfirm={rotate}
-          />
-          <ConfirmDialog
-            trigger={
-              <TooltipButton label={t('app.remove', { name })} className="icon-button-danger" disabled={busy || removing}>
-                <Trash2 size={16} />
-              </TooltipButton>
-            }
-            title={t('app.remove_title', { name })}
-            description={t(spec.site_path ? 'website.remove_description' : 'app.remove_description')}
-            confirmLabel={t('app.remove_confirm')}
-            confirmationValue={name}
-            confirmationLabel={t('common.confirm_type', { value: name })}
-            cancelLabel={t('common.cancel')}
-            destructive
-            onConfirm={remove}
-          >
-            {spec.site_path && <label className="field-label">
-              {t('website.remove_choice')}
-              <select className="text-input" value={removeWebsite} onChange={(event) => setRemoveWebsite(event.target.value)}>
-                <option value="restore">{t('website.remove_restore')}</option>
-                <option value="keep">{t('website.remove_keep')}</option>
-              </select>
-              <span className="release-help">{t('website.remove_help')}</span>
-            </label>}
-          </ConfirmDialog>
-        </div>
-      </div>
-
-      <div className="app-details">
-        <div className="detail-item">
-          <span className="detail-label">{t('app.signing_secret')}</span>
-          {spec.secret?.configured ? (
-            <span className="secret-value">
-              <ShieldCheck size={14} />
-              <code>{spec.secret.fingerprint}</code>
-              {spec.secret.env_override && <span className="mini-badge">ENV</span>}
-            </span>
-          ) : (
-            <span className="warning-value">{t('app.not_configured')}</span>
-          )}
-        </div>
-      </div>
-      {notice && <p role="status">{notice}</p>}
-      {busy && <p className="release-help">{t('activity.pending')}</p>}
-      <details className="app-folders">
-        <summary>{t('app.folders')}</summary>
-        <AppPaths spec={spec} t={t} />
-      </details>
-      {!editing && <><div className="app-tabs" role="tablist" aria-label={t('app.sections', { name })}>
-        {tabs.map((value, index) => <button key={value} type="button" role="tab"
-          id={`${tabId}-${value}`} aria-controls={`${tabId}-panel`}
-          aria-selected={activeTab === value} tabIndex={activeTab === value ? 0 : -1}
-          onClick={() => setTab(value)} onKeyDown={(event) => {
-            const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length
-              : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length
-                : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : null
-            if (next === null) return
-            event.preventDefault()
-            setTab(tabs[next])
-            event.currentTarget.parentElement.children[next].focus()
-          }}>{t(tabLabels[value])}</button>)}
-      </div>
-      <div role="tabpanel" id={`${tabId}-panel`} aria-labelledby={`${tabId}-${activeTab}`} tabIndex={0}>
-        {activeTab === 'website' && <WebsiteConnection name={name} call={call} onChanged={onChanged} revision={revision} t={t} />}
-        {activeTab === 'releases' && <ReleasePanel name={name} spec={spec} call={call} onChanged={onChanged} revision={revision} t={t} />}
-        {activeTab === 'github' && <GitHubSetup name={name} spec={spec} call={call} onChanged={onChanged} t={t} />}
-      </div></>}
-
-      {freshSecret && (
-        <div className="secret-reveal">
-          <div className="secret-reveal-head">
-            <div>
-              <strong>{freshSecret.secret ? t('app.secret_generated') : t('app.secret_missing')}</strong>
-              <span>{freshSecret.secret ? t('app.secret_once') : freshSecret.warning}</span>
-            </div>
-            <TooltipButton label={t('app.dismiss')} onClick={() => setFreshSecret(null)}>
-              <X size={15} />
-            </TooltipButton>
-          </div>
-          {freshSecret.secret && (
-            <button className="secret-copy" type="button" onClick={copySecret}>
-              <code>{freshSecret.secret}</code>
-              {copied ? <Check size={15} /> : <Copy size={15} />}
-              <span>{copied ? t('app.copied') : t('app.copy')}</span>
-            </button>
-          )}
-        </div>
-      )}
-
-      {editing && (
-        <div className="editor-panel">
-          <AppEditor name={name} initialSpec={spec} call={call} t={t}
-            onCancel={() => setEditing(false)} onSaved={(result) => {
-              setEditing(false)
-              if (result.secret) setFreshSecret(result)
-              onChanged()
-            }} />
-        </div>
-      )}
-      {error && <ErrorMessage compact>{error}</ErrorMessage>}
-    </article>
-  )
-}
-
-function NewAppCard({ call, onChanged, t }) {
-  const [open, setOpen] = useState(false)
-  const [setup, setSetup] = useState(null)
-  if (setup) return <SetupSummary {...setup} call={call} onChanged={onChanged} t={t} onDismiss={() => setSetup(null)} />
-  if (!open) return (
-    <button className="add-app-card" type="button" onClick={() => setOpen(true)}>
-      <span><Plus size={19} /></span>
-      <strong>{t('new.add')}</strong>
-      <small>{t('new.add_description')}</small>
-    </button>
-  )
-  return <article className="glass-panel app-card new-app-card">
-    <h3>{t('new.title')}</h3>
-    <AppEditor call={call} t={t} onCancel={() => setOpen(false)}
-      onSaved={(result, spec) => {
-        setSetup({ result, spec })
-        setOpen(false)
-        onChanged()
-      }} />
-  </article>
-}
-
-function AppRegistry({ apps, deploys, call, refresh, revision, t }) {
+function Console({ language, setLanguage }) {
+  const t = useT()
+  const toast = useToast()
+  const { theme, toggleTheme } = useTheme()
+  const session = useSession()
+  const [secret, setSecret] = useState(null)
   const [query, setQuery] = useState('')
-  const [selected, setSelected] = useState(null)
-  const [page, setPage] = useState(0)
-  const entries = Object.entries(apps).sort(([a], [b]) => a.localeCompare(b))
-    .filter(([name, spec]) => [name, spec.github_repository, spec.site_path]
-      .some((value) => value?.toLowerCase().includes(query.trim().toLowerCase())))
-  const pageCount = Math.max(1, Math.ceil(entries.length / 10))
-  const currentPage = Math.min(page, pageCount - 1)
-  const visible = entries.slice(currentPage * 10, currentPage * 10 + 10)
-  const active = entries.find(([name]) => name === selected) ?? visible[0]
-  const isBusy = (name) => deploys.some((deploy) => deploy.app === name && ['queued', 'running'].includes(deploy.status))
+  const [view, setView] = useState('deploys')
+  const searchRef = useRef(null)
 
-  return <>
-    <NewAppCard call={call} onChanged={refresh} t={t} />
-    {Object.keys(apps).length > 0 && <div className="project-workspace">
-      <aside className="glass-panel project-browser" aria-label={t('registry.title')}>
-        <label className="project-search">
-          <Search size={16} aria-hidden="true" />
-          <input type="search" aria-label={t('registry.search')} placeholder={t('registry.search')}
-            value={query} onChange={(event) => { setQuery(event.target.value); setPage(0) }} />
-        </label>
-        <p className="project-count">{t('registry.matches', { count: entries.length })}</p>
-        <nav aria-label={t('registry.select')} className="project-list">
-          {visible.map(([name, spec]) => <button type="button" key={name}
-            aria-current={active?.[0] === name ? 'true' : undefined} onClick={() => setSelected(name)}>
-            <span><Server size={15} aria-hidden="true" /><strong>{name}</strong>
-              {isBusy(name) && <LoaderCircle size={14} className="spin" aria-label={t('status.running')} />}</span>
-            <small>{spec.github_repository || spec.site_path || t('registry.no_repository')}</small>
-          </button>)}
-        </nav>
-        {pageCount > 1 && <div className="project-pagination">
-          <Button size="small" disabled={currentPage === 0} onClick={() => { setPage(currentPage - 1); setSelected(null) }} aria-label={t('registry.previous')}>←</Button>
-          <span>{currentPage + 1} / {pageCount}</span>
-          <Button size="small" disabled={currentPage + 1 === pageCount} onClick={() => { setPage(currentPage + 1); setSelected(null) }} aria-label={t('registry.next')}>→</Button>
-        </div>}
-      </aside>
-      {active ? <AppCard key={active[0]} name={active[0]} spec={active[1]} call={call}
-        onChanged={refresh} revision={revision} busy={isBusy(active[0])} t={t} />
-        : <div className="glass-panel empty-state"><Search size={22} /><p>{t('registry.no_matches')}</p></div>}
-    </div>}
-  </>
-}
+  const onTerminal = useCallback((deploy) => {
+    toast({
+      kind: TERMINAL_TOAST[deploy.status] ?? 'info',
+      message: t('deploy.finished_toast', { name: deploy.app, status: t(`status.${deploy.status}`) }),
+    })
+  }, [toast, t])
 
-function DeployRow({ deploy, call, onChanged, revision, t }) {
-  const [expanded, setExpanded] = useState(false)
-  const [detail, setDetail] = useState(null)
-  const [error, setError] = useState(null)
-  const localOperation = deploy.artifact_url === 'local-website://connect' ? 'connect'
-    : deploy.artifact_url === 'local-website://remove' ? 'remove'
-      : deploy.artifact_url?.startsWith('local-release://') ? 'activate' : null
+  const registry = useRegistry({ token: session.token, api: session.api, onTerminal })
+  const { apps, deploys, refresh, refreshing } = registry
+  const doRefresh = useCallback(() => { if (session.token && !session.rejected) refresh() }, [refresh, session.token, session.rejected])
+  const focusSearch = useCallback(() => searchRef.current?.focus(), [])
+  const clearSearch = useCallback(() => setQuery(''), [])
+  useKeyboardShortcuts({ onSearch: focusSearch, onRefresh: doRefresh, onClear: clearSearch })
 
-  useEffect(() => {
-    if (!expanded) return
-    call(`/deploys/${deploy.deploy_id}`)
-      .then(setDetail)
-      .catch((requestError) => setError(requestError.message))
-  }, [expanded, deploy.status, call, deploy.deploy_id, revision])
-
-  const redeploy = async () => {
-    try {
-      await call(`/admin/deploys/${deploy.deploy_id}/redeploy`, { method: 'POST' })
-      onChanged()
-    } catch (requestError) {
-      setError(requestError.message)
-    }
-  }
+  const locked = !session.token || session.rejected
+  const appCount = apps ? Object.keys(apps).length : 0
+  const successfulCount = deploys.filter((deploy) => deploy.status === 'succeeded').length
 
   return (
-    <li className={`deploy-row ${expanded ? 'deploy-row-expanded' : ''}`}>
-      <div className="deploy-summary">
-        <button
-          className="deploy-expand"
-          type="button"
-          aria-expanded={expanded}
-          onClick={() => setExpanded(!expanded)}
-        >
-          <span className="chevron" aria-hidden="true">
-            {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-          </span>
-          <span className="deploy-main">
-            <strong>{deploy.app}</strong>
-            <code>{localOperation ? t(`deploy.operation_${localOperation}`) : deploy.commit_sha.slice(0, 12)}</code>
-          </span>
-        </button>
-        <div className="deploy-meta">
-          <time>{deploy.created_at}</time>
-          <StatusBadge status={deploy.status} t={t} />
-          {!localOperation && <ConfirmDialog
-            trigger={
-              <TooltipButton label={t('deploy.redeploy', { name: deploy.app })}>
-                <RotateCcw size={15} />
-              </TooltipButton>
-            }
-            title={t('deploy.redeploy_title', { name: deploy.app })}
-            description={t('deploy.redeploy_description', { commit: deploy.commit_sha.slice(0, 12) })}
-            confirmLabel={t('deploy.redeploy_confirm')}
-            cancelLabel={t('common.cancel')}
-            onConfirm={redeploy}
-          />}
-        </div>
-      </div>
-
-      {expanded && (
-        <div className="deploy-detail">
-          {!detail && !error && (
-            <div className="detail-loading"><LoaderCircle className="spin" size={15} /> {t('deploy.loading_steps')}</div>
-          )}
-          {detail?.steps.map((step, index) => (
-            <div className={`deploy-step step-${step.status}`} key={`${step.step}-${index}`}>
-              <span className="step-icon">{STEP_ICON[step.status] ?? <span>·</span>}</span>
-              <div>
-                <strong>{step.step}</strong>
-                {step.output && <p>{step.output}</p>}
-              </div>
+    <div className="relative min-h-screen overflow-x-hidden bg-[radial-gradient(circle_at_50%_-15%,rgba(118,137,255,0.14),transparent_36rem),linear-gradient(155deg,var(--background),var(--background-deep))]">
+      <header className="sticky top-0 z-30 border-b border-border-subtle bg-bg/70 backdrop-blur-2xl backdrop-saturate-150">
+        <div className="mx-auto flex w-[min(1120px,calc(100%-32px))] flex-wrap items-center justify-between gap-x-6 gap-y-2 py-3">
+          <div className="flex items-center gap-3">
+            <div className="grid size-10 place-items-center rounded-card bg-linear-to-br from-[#7488ff] via-[#405bef] to-[#3947c4] text-white shadow-soft" aria-hidden="true"><CloudCog size={21} /></div>
+            <div className="flex flex-col">
+              <strong className="text-[15px] leading-tight tracking-tight text-text-strong">deployd</strong>
+              <span className="text-[10px] uppercase tracking-[0.09em] text-muted">{t('brand.control_plane')}</span>
             </div>
-          ))}
-          {detail && <p className="triggered-by">{t('deploy.triggered_by', { name: deploy.triggered_by })}</p>}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <HealthPill health={registry.health} />
+            <IconButton label={t('activity.refresh')} disabled={refreshing || locked} onClick={doRefresh}>
+              <RefreshCw size={17} className={refreshing ? 'animate-spin' : undefined} />
+            </IconButton>
+            <IconButton label={t('theme.switch', { theme: t(`theme.${theme === 'dark' ? 'light' : 'dark'}`) })} onClick={toggleTheme}>
+              {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+            </IconButton>
+            <IconButton label={t('language.switch')} onClick={() => setLanguage(language === 'es' ? 'en' : 'es')}>
+              <span className="text-[11px] font-bold tracking-wider">{language === 'es' ? 'ES' : 'EN'}</span>
+            </IconButton>
+            {session.token && (
+              <Button size="small" onClick={session.logout}><LogOut size={14} /> {t('token.logout')}</Button>
+            )}
+          </div>
         </div>
-      )}
-      {error && <ErrorMessage compact>{error}</ErrorMessage>}
-    </li>
-  )
-}
+      </header>
 
-function LoadingPanel({ t }) {
-  return (
-    <div className="glass-panel loading-panel" aria-label={t('loading.applications')}>
-      <LoaderCircle className="spin" size={20} />
-      <span>{t('loading.control_plane')}</span>
+      <main className="relative z-10 mx-auto flex w-[min(1120px,calc(100%-32px))] flex-col gap-8 py-7 sm:py-9">
+        <section className="grid grid-cols-1 items-center gap-5 md:grid-cols-[minmax(0,1fr)_auto]">
+          <div>
+            <Kicker icon={<Activity size={14} />}>{t('hero.kicker')}</Kicker>
+            <h1 className="mt-2 mb-3 max-w-2xl text-[clamp(28px,3vw,38px)] leading-[1.1] font-semibold tracking-[-0.04em] text-text-strong">{t('hero.title')}</h1>
+            <p className="m-0 max-w-xl text-[13px] leading-relaxed text-muted">{t('hero.description')}</p>
+          </div>
+          <Panel className="grid min-w-0 grid-cols-3 divide-x divide-border-subtle p-1.5 md:min-w-72">
+            {[[appCount, 'metrics.applications'], [deploys.length, 'metrics.recent'], [successfulCount, 'metrics.succeeded']].map(([value, key]) => (
+              <div key={key} className="flex flex-col gap-0.5 px-3 py-2.5 sm:px-4">
+                <strong className="text-[22px] font-semibold tracking-tight text-text-strong tabular-nums">{value}</strong>
+                <span className="text-[11px] text-muted">{t(key)}</span>
+              </div>
+            ))}
+          </Panel>
+        </section>
+
+        {registry.error && !session.rejected && <ErrorMessage>{registry.error}</ErrorMessage>}
+
+        {locked && <TokenGate rejected={session.rejected} onSubmit={session.login} />}
+
+        {!locked && (
+          <section>
+            <SectionHeading icon={<AppWindow size={14} />} kicker={t('registry.kicker')} title={t('registry.title')}
+              aside={apps ? t('registry.configured', { count: appCount }) : null} />
+            {apps ? (
+              <AppRegistry apps={apps} call={session.call} api={session.api} refresh={refresh} revision={registry.revision}
+                isBusy={registry.isBusy} onSecret={setSecret} query={query} onQueryChange={setQuery} searchRef={searchRef} />
+            ) : !registry.error && <RegistrySkeleton />}
+          </section>
+        )}
+
+        {!locked && (
+          <section>
+            <SectionHeading icon={view === 'audit' ? <ScrollText size={14} /> : <Activity size={14} />}
+              kicker={t('activity.kicker')} title={t(view === 'audit' ? 'audit.title' : 'activity.title')}>
+              <div className="flex flex-wrap items-center gap-2">
+                <div role="tablist" aria-label={t('activity.views')} className="flex gap-1 rounded-full bg-surface-soft p-1">
+                  {['deploys', 'audit'].map((value) => (
+                    <button key={value} type="button" role="tab" aria-selected={view === value} onClick={() => setView(value)}
+                      className={`rounded-full px-3 py-1 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${view === value ? 'bg-accent text-white' : 'text-muted hover:text-text-strong'}`}>
+                      {t(value === 'audit' ? 'audit.title' : 'activity.title')}
+                    </button>
+                  ))}
+                </div>
+                {view === 'deploys' && (
+                  <>
+                    <span className="text-[11px] text-muted">{t(registry.hasActive ? 'activity.live' : 'activity.manual')}</span>
+                    <Button size="small" disabled={refreshing} onClick={doRefresh}>
+                      <RefreshCw size={14} className={refreshing ? 'animate-spin' : undefined} /> {t('activity.refresh')}
+                    </Button>
+                  </>
+                )}
+              </div>
+            </SectionHeading>
+            {view === 'audit' ? <AuditLog api={session.api} /> : (
+              <DeployHistory deploys={deploys} apps={apps} filters={registry.filters} onFilters={registry.setFilters}
+                hasMore={registry.hasMore} loadMore={registry.loadMore} loadingMore={registry.loadingMore}
+                loading={!apps && !registry.error} api={session.api} onChanged={refresh} revision={registry.revision} />
+            )}
+          </section>
+        )}
+      </main>
+
+      <footer className="relative z-10 mx-auto flex w-[min(1120px,calc(100%-32px))] flex-wrap justify-between gap-2 pb-7 text-[9px] tracking-wider text-muted-soft uppercase">
+        <span>deployd</span>
+        <span>{t('footer.description')}</span>
+      </footer>
+
+      {secret && <SecretModal secret={secret} onDismiss={() => setSecret(null)} />}
     </div>
   )
 }
 
 export default function App() {
-  const [theme, setTheme] = useState(initialTheme)
   const [language, setLanguage] = useState(detectLanguage)
-  const [token, setToken] = useState(() => {
-    try {
-      return sessionStorage.getItem('deployd-admin-token') ?? ''
-    } catch {
-      return ''
-    }
-  })
-  const [health, setHealth] = useState(null)
-  const [apps, setApps] = useState(null)
-  const [deploys, setDeploys] = useState([])
-  const [error, setError] = useState(null)
-  const [refreshing, setRefreshing] = useState(false)
-  const [revision, setRevision] = useState(0)
-  const requestId = useRef(0)
-  const t = useCallback((key, values) => translate(language, key, values), [language])
-  const call = useCallback((path, opts = {}) => api(token, path, opts), [token])
-
-  useLayoutEffect(() => {
-    document.documentElement.dataset.theme = theme
-    try {
-      localStorage.setItem('deployd-theme', theme)
-    } catch {
-      return
-    }
-  }, [theme])
-
   useLayoutEffect(() => {
     document.documentElement.lang = language
   }, [language])
-
-  const refresh = useCallback(async () => {
-    const id = ++requestId.current
-    setRefreshing(true)
-    const healthRequest = fetch('/api/healthz')
-      .then((response) => { if (!response.ok) throw new Error('health'); return response.json() })
-      .then((data) => { if (id === requestId.current) setHealth(data.status) })
-      .catch(() => { if (id === requestId.current) setHealth('unreachable') })
-    try {
-      if (!token) { setApps(null); setDeploys([]); return }
-      const [nextApps, nextDeploys] = await Promise.all([
-        call('/admin/apps'),
-        call('/admin/deploys?limit=20'),
-      ])
-      if (id !== requestId.current) return
-      setApps(nextApps)
-      setDeploys(nextDeploys)
-      setError(null)
-      setRevision((value) => value + 1)
-    } catch (requestError) {
-      if (id !== requestId.current) return
-      setError(requestError.message)
-    } finally {
-      await healthRequest
-      if (id === requestId.current) setRefreshing(false)
-    }
-  }, [call, token])
-
-  useEffect(() => {
-    const timer = setTimeout(refresh, 0)
-    return () => clearTimeout(timer)
-  }, [refresh])
-
-  const hasActive = deploys.some((deploy) => deploy.status === 'queued' || deploy.status === 'running')
-  const saveToken = (value) => {
-    requestId.current += 1
-    setApps(null)
-    setDeploys([])
-    setError(null)
-    setToken(value)
-    try {
-      sessionStorage.setItem('deployd-admin-token', value)
-    } catch {
-      return
-    }
-  }
-
-  const appCount = apps ? Object.keys(apps).length : 0
-  const successfulCount = deploys.filter((deploy) => deploy.status === 'succeeded').length
-
   return (
-    <div className="app-shell">
-      <div className="ambient ambient-one" />
-      <div className="ambient ambient-two" />
-      <header className="topbar">
-        <div className="topbar-inner">
-          <div className="brand">
-            <div className="brand-mark" aria-hidden="true"><CloudCog size={21} /></div>
-            <div>
-              <strong>deployd</strong>
-              <span>{t('brand.control_plane')}</span>
-            </div>
-          </div>
-          <div className="topbar-actions">
-            <label className="token-field">
-              <ShieldCheck size={15} />
-              <span className="sr-only">{t('topbar.admin_token')}</span>
-              <input
-                type="password"
-                placeholder={t('topbar.admin_token')}
-                value={token}
-                autoComplete="current-password"
-                onChange={(event) => saveToken(event.target.value)}
-              />
-            </label>
-            <span className={`health-pill ${health === 'ok' ? 'health-ok' : 'health-error'}`}>
-              <span /> {t('topbar.api', {
-                status: health === 'unreachable' ? t('health.unreachable') : health ?? t('health.checking'),
-              })}
-            </span>
-            <TooltipButton label={t('activity.refresh')} disabled={refreshing} onClick={refresh}>
-              <RefreshCw size={17} className={refreshing ? 'spin' : undefined} />
-            </TooltipButton>
-            <TooltipButton
-              label={t('theme.switch', { theme: t(`theme.${theme === 'dark' ? 'light' : 'dark'}`) })}
-              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-            >
-              {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
-            </TooltipButton>
-            <TooltipButton
-              label={t('language.switch')}
-              onClick={() => setLanguage(language === 'es' ? 'en' : 'es')}
-            >
-              <span className="language-code">{language === 'es' ? 'ES' : 'EN'}</span>
-            </TooltipButton>
-          </div>
-        </div>
-      </header>
-
-      <main className="main-content">
-        <section className="hero-section">
-          <div>
-            <span className="eyebrow"><Activity size={14} /> {t('hero.kicker')}</span>
-            <h1>{t('hero.title')}</h1>
-            <p>{t('hero.description')}</p>
-          </div>
-          <div className="metrics glass-panel">
-            <div><strong>{appCount}</strong><span>{t('metrics.applications')}</span></div>
-            <div><strong>{deploys.length}</strong><span>{t('metrics.recent')}</span></div>
-            <div><strong>{successfulCount}</strong><span>{t('metrics.succeeded')}</span></div>
-          </div>
-        </section>
-
-        {error && <ErrorMessage>{error}</ErrorMessage>}
-
-        {!token && (
-          <section className="glass-panel locked-panel">
-            <div className="locked-icon"><KeyRound size={23} /></div>
-            <div>
-              <h2>{t('locked.title')}</h2>
-              <p>{t('locked.description')}</p>
-            </div>
-          </section>
-        )}
-
-        {token && !apps && !error && <LoadingPanel t={t} />}
-
-        {apps && (
-          <section className="content-section">
-            <div className="section-heading">
-              <div>
-                <span className="section-kicker"><AppWindow size={14} /> {t('registry.kicker')}</span>
-                <h2>{t('registry.title')}</h2>
-              </div>
-              <span>{t('registry.configured', { count: appCount })}</span>
-            </div>
-            <AppRegistry apps={apps} deploys={deploys} call={call} refresh={refresh} revision={revision} t={t} />
-          </section>
-        )}
-
-        {apps && (
-          <section className="content-section">
-            <div className="section-heading">
-              <div>
-                <span className="section-kicker"><Activity size={14} /> {t('activity.kicker')}</span>
-                <h2>{t('activity.title')}</h2>
-              </div>
-              <div className="section-actions">
-                <span className="release-help">{t(hasActive ? 'activity.pending' : 'activity.manual')}</span>
-                <Button size="small" disabled={refreshing} onClick={refresh}><RefreshCw size={14} className={refreshing ? 'spin' : undefined} /> {t('activity.refresh')}</Button>
-              </div>
-            </div>
-            <div className="glass-panel deploy-panel">
-              {deploys.length === 0 ? (
-                <div className="empty-state">
-                  <Activity size={22} />
-                  <p>{t('activity.empty')}</p>
-                </div>
-              ) : (
-                <ul className="deploy-list">
-                  {deploys.map((deploy) => (
-                    <DeployRow
-                      key={deploy.deploy_id}
-                      deploy={deploy}
-                      call={call}
-                      onChanged={refresh}
-                      revision={revision}
-                      t={t}
-                    />
-                  ))}
-                </ul>
-              )}
-            </div>
-          </section>
-        )}
-      </main>
-
-      <footer>
-        <span>deployd</span>
-        <span>{t('footer.description')}</span>
-      </footer>
-    </div>
+    <LanguageProvider language={language} setLanguage={setLanguage}>
+      <ToastProvider>
+        <Console language={language} setLanguage={setLanguage} />
+      </ToastProvider>
+    </LanguageProvider>
   )
 }
