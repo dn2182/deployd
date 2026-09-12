@@ -31,15 +31,29 @@ def arguments(name, spec, operation):
     return ["/usr/bin/sudo", "-n", str(HELPER), operation, name, spec.site_path.name]
 
 
+async def invoke(name, spec, operation):
+    try:
+        return await runner._run_cmd(arguments(name, spec, operation))
+    except RuntimeError as exc:
+        lines = str(exc).splitlines()
+        try:
+            result = json.loads(lines[-1])
+        except (ValueError, IndexError):
+            raise exc from None
+        if isinstance(result, dict) and isinstance(result.get("error"), str):
+            raise ValueError(result["error"]) from exc
+        raise
+
+
 async def inspect(name, spec):
-    return json.loads(await runner._run_cmd(arguments(name, spec, "check")))
+    return json.loads(await invoke(name, spec, "check"))
 
 
 async def run_connection(store, app, deploy_id):
     store.set_status(deploy_id, "running")
     store.add_step(deploy_id, "connect", "running")
     try:
-        result = await runner._run_cmd(arguments(app, get_app_registry()[app], "connect"))
+        result = await invoke(app, get_app_registry()[app], "connect")
     except Exception as exc:
         store.add_step(deploy_id, "connect", "failed", output=runner._error_text(exc))
         store.set_status(deploy_id, "failed", finished=True)
@@ -52,7 +66,7 @@ async def run_removal(store, app, deploy_id):
     store.set_status(deploy_id, "running")
     store.add_step(deploy_id, "restore-website", "running")
     try:
-        result = await runner._run_cmd(arguments(app, get_app_registry()[app], "detach"))
+        result = await invoke(app, get_app_registry()[app], "detach")
         with config_lock():
             if not delete_app_config(app):
                 raise ValueError("app configuration disappeared during removal")

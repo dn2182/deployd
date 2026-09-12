@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Button, ConfirmDialog } from './ui.jsx'
 
-export default function ReleasePanel({ name, spec, call, onChanged, t }) {
+export default function ReleasePanel({ name, spec, call, onChanged, revision = 0, t }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [pending, setPending] = useState(false)
+  const [loading, setLoading] = useState(false)
   const [notice, setNotice] = useState('')
   const [draft, setDraft] = useState(null)
   const policyKey = JSON.stringify([spec.keep_previous, spec.auto_cleanup])
@@ -17,19 +18,22 @@ export default function ReleasePanel({ name, spec, call, onChanged, t }) {
   const updatePolicy = (values) => setDraft({ ...policy, key: policyKey, ...values })
   const base = `/admin/apps/${encodeURIComponent(name)}/releases`
   const load = useCallback(async () => {
+    setLoading(true)
     try {
       setData(await call(base))
       setError(null)
     } catch (err) {
+      setData(null)
       setError(err.message)
+    } finally {
+      setLoading(false)
     }
   }, [base, call])
 
   useEffect(() => {
     const first = setTimeout(load, 0)
-    const poll = setInterval(load, 5000)
-    return () => { clearTimeout(first); clearInterval(poll) }
-  }, [load])
+    return () => clearTimeout(first)
+  }, [load, revision])
 
   const operate = async (operation, release) => {
     setPending(true)
@@ -64,12 +68,13 @@ export default function ReleasePanel({ name, spec, call, onChanged, t }) {
     }
   }
 
-  const busy = pending || data?.busy
+  const busy = pending || loading || !data || data.busy
   return (
     <section className="release-panel" aria-label={t('releases.label', { name })}>
       {error && <p className="error-message" role="alert">{error}</p>}
       {notice && <p role="status">{notice}</p>}
       {!data && !error && <p>{t('releases.loading')}</p>}
+      <Button size="small" disabled={pending || loading} onClick={load}>{t('activity.refresh')}</Button>
       {data && <>
         <div className="detail-item">
           <span className="detail-label">{t('releases.active')}</span>

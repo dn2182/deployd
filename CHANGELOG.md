@@ -4,6 +4,12 @@
 
 Initial release.
 
+- Searchable, paginated application navigation with one selected app, exclusive
+  website/version/GitHub tabs, and explicit refresh instead of background polling.
+- Safely reconnect restored websites using their receipts, retain restored-file
+  edits across cycles, and keep the original baseline. Diagnose unsafe website
+  parent permissions during install without changing shared permissions.
+
 - Ask whether to restore current website files to their original paths or retain
   web-root symlinks when removing apps and uninstalling. Use verified staged copies,
   atomic replacement and retryable recovery; keep release backups and stop removal
@@ -27,7 +33,7 @@ Initial release.
 - `deployd-migrate`: forward-only SQL migrations with checksummed immutable
   files, versioned table, `GO` batch support (SQL Server via pyodbc).
 - Admin API + React UI: app registry CRUD, secret rotation (shown once),
-  deploy history with step drill-down, redeploy, live polling.
+  deploy history with step drill-down, redeploy, and manual status refresh.
 - Guided bilingual application setup for repositories, signing secrets, per-app
   private GitHub credentials, local site paths, health checks, and retention.
   Internal paths are automatic and read-only; no JSON editor is exposed.

@@ -151,6 +151,14 @@ Ubuntu service paths under `/var/lib/deployd`.
 ## Guided application setup
 
 Open the management UI over HTTPS or an SSH tunnel and enter the admin token.
+Search applications by name, repository, or local site path; the list shows ten
+per page and only the selected application's details. **Website connection**,
+**Manage versions**, and **GitHub Actions setup** are mutually exclusive tabs.
+Internal paths are under **Application folders**. **Refresh** updates API health,
+applications, recent activity, and the open website/version panel; there is no
+background UI polling. Refresh after GitHub deployments or queued operations to
+see their result. GitHub Actions still polls its own deployment until completion.
+
 Choose **Add application** to configure:
 
 - The app name, GitHub repository (`OWNER/REPO` or its URL), and public deployd
@@ -300,6 +308,11 @@ Rerun `bash deploy/install-ubuntu.sh` as your normal user and opt into the
 website connection helper. It installs a root-owned, isolated Python helper
 and one restricted sudo rule. This authorizes deployd to connect direct children
 of `/var/www`, not arbitrary paths or shell commands. Upgrades preserve this opt-in.
+The installer checks that `/var/www` is root-owned and not group/world-writable.
+It reports unsafe permissions without changing them. For a shared `root:services`
+parent with mode `2775`, the administrator can review `sudo chmod go-w /var/www`:
+this keeps its group and setgid bit, but restricts creating/renaming direct children.
+Do not apply permission changes recursively to the websites.
 
 After a successful deployment, open the app's **Website connection**, check
 the paths, and type its name to confirm the live switch. The existing directory
@@ -351,6 +364,14 @@ Unrelated links and custom paths outside `/var/www` are not changed; handle thos
 manually. Current and retained releases, `b4deployd`, recovery journals, and the
 deployd account are preserved. Restored folders/files are deployd-owned; this is
 path restoration, not recovery of historical Unix ownership. Nginx routes are unchanged.
+
+Re-adding the same app and local path allows a confirmed reconnect when its real
+folder matches deployd's restore receipt. The restored folder (including edits)
+is retained under `/var/lib/deployd-connect/<app>/restore-<site>/reconnected-files`;
+on the next removal this recovery directory moves to `saved-<timestamp>`. These
+root-only recovery copies are retained for manual recovery, not automatic cleanup
+or UI version activation. `b4deployd` remains unchanged. Replaced folders or missing
+receipts require administrator inspection instead of an automatic live switch.
 
 The Ubuntu installer creates `/srv/deployd` owned by `deployd`. Existing
 installations upgrading without rerunning the installer need this once:

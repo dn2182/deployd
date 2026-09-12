@@ -38,4 +38,21 @@ describe('website connection', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('install the helper first')
     expect(screen.queryByRole('button', { name: 'Connect website' })).not.toBeInTheDocument()
   })
+
+  it('allows a manual status check while a connection is busy', async () => {
+    const call = vi.fn().mockResolvedValueOnce({ status: 'busy' }).mockResolvedValue({ status: 'connected', backup: true })
+    render(<WebsiteConnection name="site" call={call} onChanged={vi.fn()} t={t} />)
+    await screen.findByText(/queued or running/)
+    fireEvent.click(screen.getByRole('button', { name: 'Check connection' }))
+    expect(await screen.findByText(/Connected: the local site path/)).toBeInTheDocument()
+    expect(call).toHaveBeenCalledTimes(2)
+  })
+
+  it('explains retained restored files before reconnecting', async () => {
+    const call = vi.fn().mockResolvedValue({ status: 'reconnect', backup: true })
+    render(<WebsiteConnection name="site" call={call} onChanged={vi.fn()} t={t} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect website' }))
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('including any edits')
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('b4deployd backup is unchanged')
+  })
 })

@@ -7,6 +7,33 @@ import pytest
 DEPLOY = Path(__file__).parents[1] / "deploy"
 
 
+@pytest.mark.parametrize("writable", [True, False])
+def test_website_preflight_reports_permissions_without_mutating_them(writable):
+    result = run_function(
+        "install-ubuntu.sh",
+        """
+      sudo() {
+        case "$1" in
+          test) return 0 ;;
+          stat) echo root ;;
+          find) """
+        + ("echo /var/www" if writable else ":")
+        + """ ;;
+          *) echo unexpected-mutation; return 1 ;;
+        esac
+      }
+      check_website_parent
+    """,
+    )
+    assert "unexpected-mutation" not in result.stdout
+    if writable:
+        assert result.returncode != 0
+        assert "sudo chmod go-w /var/www" in result.stderr
+        assert "No permissions were changed automatically" in result.stderr
+    else:
+        assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize("answer", ["k\n", "keep\n"])
 def test_uninstall_keep_choice_never_runs_restoration(answer):
     result = run_function(

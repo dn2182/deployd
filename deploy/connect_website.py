@@ -220,6 +220,57 @@ def copy_site(source, destination, owner, *, budget=None, mount=None, depth=0):
     os.fsync(destination)
 
 
+def protected_storage(web, state):
+    for fd, path, mask in ((web, WEB_ROOT, 0o022), (state, STATE_ROOT, 0o077)):
+        value = os.fstat(fd)
+        if value.st_uid != ROOT_UID:
+            raise ValueError(f"{path} must be root-owned; have the server administrator check it")
+        if value.st_mode & mask:
+            action = (
+                "sudo chmod go-w /var/www"
+                if path == WEB_ROOT
+                else "sudo chmod 0700 /var/lib/deployd-connect"
+            )
+            raise ValueError(
+                f"{path} has unsafe permissions {stat.S_IMODE(value.st_mode):04o}. "
+                f"Ask the server administrator to review and run: {action}. "
+                "Change only this parent directory, not website contents."
+            )
+
+
+def reconnect(operation, transaction, web, site, target):
+    restore_name = f"restore-{site}"
+    if not info(transaction, restore_name):
+        raise ValueError("website was changed manually; no matching restore receipt exists")
+    with directory(restore_name, transaction) as restore:
+        if not info(restore, "detach.json"):
+            raise ValueError(
+                "website has no completed restore receipt; inspect before reconnecting"
+            )
+        receipt = read_json(restore, "detach.json")
+        if receipt["site"] != site or identity(info(web, site)) != receipt["copied"]:
+            raise ValueError("website changed after restore; refusing to replace it")
+        if len({mount_id(web), mount_id(restore)}) != 1:
+            raise ValueError("website and helper recovery storage must share one mount")
+        with directory(site, web) as original:
+            if mount_id(original) != mount_id(web):
+                raise ValueError("restored website must not be a mount point")
+            scan(original, os.fstat(original).st_dev)
+        saved = info(restore, "reconnected-files")
+        if saved and not expected_link(restore, "reconnected-files", target):
+            raise ValueError("reconnection staging changed; operator inspection required")
+        if operation == "check":
+            return {"status": "reconnect", "backup": True}
+        if not saved:
+            os.symlink(target, "reconnected-files", dir_fd=restore)
+            os.fsync(restore)
+        # The receipt binds this switch to the folder we restored, never an unrelated site.
+        if identity(info(web, site)) != receipt["copied"]:
+            raise ValueError("website changed during reconnection; no live files were overwritten")
+        rename(web, site, restore, "reconnected-files", 2)
+        return {"status": "connected", "backup": True}
+
+
 def disconnect(app, site, owner):
     if not APP.fullmatch(app) or not SITE.fullmatch(site):
         raise ValueError("expected an app name and a direct /var/www child name")
@@ -227,10 +278,7 @@ def disconnect(app, site, owner):
     with ExitStack() as stack:
         web = open_path(stack, WEB_ROOT)
         state = open_path(stack, STATE_ROOT)
-        for fd, mask in ((web, 0o022), (state, 0o077)):
-            value = os.fstat(fd)
-            if value.st_uid != ROOT_UID or value.st_mode & mask:
-                raise ValueError("website parent and helper state must be root-owned and protected")
+        protected_storage(web, state)
         lock = os.open("lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600, dir_fd=state)
         stack.callback(os.close, lock)
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -241,6 +289,18 @@ def disconnect(app, site, owner):
         if info(transaction, "journal.json") and not info(transaction, "complete.json"):
             raise ValueError("finish the interrupted website connection before removing it")
         restore_name = f"restore-{site}"
+        if info(transaction, restore_name):
+            with directory(restore_name, transaction) as previous:
+                if info(previous, "reconnected-files"):
+                    receipt = read_json(previous, "detach.json")
+                    if (
+                        receipt["site"] != site
+                        or identity(info(previous, "reconnected-files")) != receipt["copied"]
+                        or not expected_link(web, site, target)
+                    ):
+                        raise ValueError("reconnection needs recovery before restoring the website")
+                    # Retain each restored site's edits across repeated connect/remove cycles.
+                    rename(transaction, restore_name, transaction, f"saved-{time.time_ns()}", 1)
         if info(transaction, restore_name) is None:
             os.mkdir(restore_name, mode=0o700, dir_fd=transaction)
             os.fsync(transaction)
@@ -319,10 +379,7 @@ def connect(operation, app, site, owner):
     with ExitStack() as stack:
         web = open_path(stack, WEB_ROOT)
         state = open_path(stack, STATE_ROOT)
-        for fd, mask in ((web, 0o022), (state, 0o077)):
-            value = os.fstat(fd)
-            if value.st_uid != ROOT_UID or value.st_mode & mask:
-                raise ValueError("website parent and helper state must be root-owned and protected")
+        protected_storage(web, state)
         lock = os.open("lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600, dir_fd=state)
         stack.callback(os.close, lock)
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -402,9 +459,7 @@ def connect(operation, app, site, owner):
             raise ValueError("this app already has a connection journal for a different website")
         if info(transaction, "complete.json"):
             if not linked:
-                raise ValueError(
-                    "previously connected website was changed manually; inspect before reconnecting"
-                )
+                return reconnect(operation, transaction, web, site, target)
             return {"status": "connected", "backup": True}
         original_id = journal["original"]
         staged = info(transaction, "original")

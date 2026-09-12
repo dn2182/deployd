@@ -158,6 +158,15 @@ del servicio Ubuntu bajo `/var/lib/deployd`.
 ## Configuración guiada de aplicaciones
 
 Abre la interfaz por HTTPS o un túnel SSH e ingresa el token de administración.
+Busca por nombre, repositorio o ruta local. La lista muestra diez aplicaciones
+por página y solo los detalles de la seleccionada. **Conexión del sitio**,
+**Administrar versiones** y **Configuración de GitHub Actions** son pestañas: solo
+una está activa. Las rutas están en **Carpetas de la aplicación**. **Actualizar**
+consulta la salud de la API, aplicaciones, actividad y el panel abierto de conexión
+o versiones; no hay consultas periódicas de la interfaz. Actualiza después de un
+despliegue o una operación pendiente para ver el resultado. GitHub Actions sigue
+consultando su propio despliegue hasta terminar.
+
 En **Agregar aplicación** puedes configurar:
 
 - Nombre, repositorio de GitHub (`PROPIETARIO/REPO` o su URL) y URL pública de
@@ -315,6 +324,11 @@ el asistente de conexión. Se instala un programa Python aislado, propiedad de r
 y una regla sudo limitada. Autoriza a deployd a conectar sitios directamente bajo
 `/var/www`, no rutas arbitrarias ni comandos de shell. Las actualizaciones conservan
 esta autorización.
+El instalador verifica que `/var/www` sea de root y no permita escritura al grupo
+ni a otros. Informa de permisos inseguros sin cambiarlos automáticamente. Para un
+padre compartido `root:services` con modo `2775`, el administrador puede revisar
+`sudo chmod go-w /var/www`: conserva el grupo y setgid, pero restringe crear o
+renombrar sus hijos directos. No apliques permisos recursivamente a los sitios.
 
 Tras un despliegue exitoso, abre **Conexión del sitio**, comprueba las rutas y escribe
 el nombre de la app para confirmar el cambio en producción. La carpeta original
@@ -346,6 +360,15 @@ Desinstalar elimina el asistente y su regla sudo, pero conserva las versiones y 
 datos de recuperación. Pregunta si debe restaurar carpetas reales o mantener los enlaces.
 
 ### Eliminar una app o desinstalar sin dejar el enlace del sitio
+
+Al volver a registrar la misma app y ruta, puedes confirmar una reconexión si la
+carpeta coincide con el comprobante de restauración de deployd. La carpeta restaurada,
+incluidas sus ediciones, se conserva en
+`/var/lib/deployd-connect/<app>/restore-<sitio>/reconnected-files`; en la siguiente
+eliminación ese directorio de recuperación pasa a `saved-<timestamp>`. Estas copias
+privadas son para recuperación manual: no se limpian automáticamente ni se activan
+desde la gestión de versiones. `b4deployd` no cambia. Carpetas reemplazadas o
+comprobantes ausentes requieren revisión del administrador, no un cambio automático.
 
 Al eliminar una app web eliges **Restaurar los archivos actuales como carpeta real**
 o **Mantener conectado el enlace del sitio**, y confirmas escribiendo su nombre.

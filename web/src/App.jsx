@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import {
   Activity,
   AppWindow,
@@ -15,6 +15,7 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Search,
   Server,
   ShieldCheck,
   Sun,
@@ -91,16 +92,19 @@ function ErrorMessage({ children, compact = false }) {
   )
 }
 
-function AppCard({ name, spec, call, onChanged, t }) {
+function AppCard({ name, spec, call, onChanged, revision, busy, t }) {
   const [editing, setEditing] = useState(false)
-  const [showReleases, setShowReleases] = useState(false)
-  const [showGitHub, setShowGitHub] = useState(false)
-  const [showWebsite, setShowWebsite] = useState(false)
+  const [tab, setTab] = useState(spec.site_path ? 'website' : 'releases')
+  const tabs = [...(spec.site_path ? ['website'] : []), 'releases', 'github']
+  const activeTab = tabs.includes(tab) ? tab : 'releases'
+  const tabId = useId()
+  const tabLabels = { website: 'website.title', releases: 'releases.manage', github: 'github.title' }
   const [removeWebsite, setRemoveWebsite] = useState('restore')
   const [removing, setRemoving] = useState(false)
   const [freshSecret, setFreshSecret] = useState(null)
   const [copied, setCopied] = useState(false)
   const [error, setError] = useState(null)
+  const [notice, setNotice] = useState(null)
 
   const startEdit = () => {
     setEditing(true)
@@ -120,10 +124,11 @@ function AppCard({ name, spec, call, onChanged, t }) {
   const remove = async () => {
     setRemoving(true)
     try {
-      await call(`/admin/apps/${name}`, {
+      const result = await call(`/admin/apps/${name}`, {
         method: 'DELETE',
         ...(spec.site_path && { body: JSON.stringify({ confirm: name, website: removeWebsite }) }),
       })
+      if (result.status === 'queued') setNotice(t('app.removal_queued'))
       onChanged()
     } catch (requestError) {
       setError(requestError.message)
@@ -156,12 +161,12 @@ function AppCard({ name, spec, call, onChanged, t }) {
           </div>
         </div>
         <div className="app-actions">
-          <TooltipButton label={t('app.edit', { name })} onClick={startEdit}>
+          <TooltipButton label={t('app.edit', { name })} onClick={startEdit} disabled={busy || removing}>
             <Pencil size={16} />
           </TooltipButton>
           <ConfirmDialog
             trigger={
-              <TooltipButton label={t('app.rotate', { name })}>
+              <TooltipButton label={t('app.rotate', { name })} disabled={busy || removing}>
                 <KeyRound size={16} />
               </TooltipButton>
             }
@@ -173,7 +178,7 @@ function AppCard({ name, spec, call, onChanged, t }) {
           />
           <ConfirmDialog
             trigger={
-              <TooltipButton label={t('app.remove', { name })} className="icon-button-danger" disabled={removing}>
+              <TooltipButton label={t('app.remove', { name })} className="icon-button-danger" disabled={busy || removing}>
                 <Trash2 size={16} />
               </TooltipButton>
             }
@@ -212,22 +217,31 @@ function AppCard({ name, spec, call, onChanged, t }) {
           )}
         </div>
       </div>
-      <AppPaths spec={spec} t={t} />
-      {spec.site_path && <>
-        <Button onClick={() => setShowWebsite(!showWebsite)} aria-expanded={showWebsite}>
-          {t('website.title')}
-        </Button>
-        {showWebsite && <WebsiteConnection name={name} call={call} onChanged={onChanged} t={t} />}
-      </>}
-
-      <Button onClick={() => setShowReleases(!showReleases)} aria-expanded={showReleases}>
-        {t('releases.manage')}
-      </Button>
-      {showReleases && <ReleasePanel name={name} spec={spec} call={call} onChanged={onChanged} t={t} />}
-      <Button onClick={() => setShowGitHub(!showGitHub)} aria-expanded={showGitHub}>
-        {t('github.title')}
-      </Button>
-      {showGitHub && <GitHubSetup name={name} spec={spec} call={call} onChanged={onChanged} t={t} />}
+      {notice && <p role="status">{notice}</p>}
+      {busy && <p className="release-help">{t('activity.pending')}</p>}
+      <details className="app-folders">
+        <summary>{t('app.folders')}</summary>
+        <AppPaths spec={spec} t={t} />
+      </details>
+      {!editing && <><div className="app-tabs" role="tablist" aria-label={t('app.sections', { name })}>
+        {tabs.map((value, index) => <button key={value} type="button" role="tab"
+          id={`${tabId}-${value}`} aria-controls={`${tabId}-panel`}
+          aria-selected={activeTab === value} tabIndex={activeTab === value ? 0 : -1}
+          onClick={() => setTab(value)} onKeyDown={(event) => {
+            const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length
+              : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length
+                : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : null
+            if (next === null) return
+            event.preventDefault()
+            setTab(tabs[next])
+            event.currentTarget.parentElement.children[next].focus()
+          }}>{t(tabLabels[value])}</button>)}
+      </div>
+      <div role="tabpanel" id={`${tabId}-panel`} aria-labelledby={`${tabId}-${activeTab}`} tabIndex={0}>
+        {activeTab === 'website' && <WebsiteConnection name={name} call={call} onChanged={onChanged} revision={revision} t={t} />}
+        {activeTab === 'releases' && <ReleasePanel name={name} spec={spec} call={call} onChanged={onChanged} revision={revision} t={t} />}
+        {activeTab === 'github' && <GitHubSetup name={name} spec={spec} call={call} onChanged={onChanged} t={t} />}
+      </div></>}
 
       {freshSecret && (
         <div className="secret-reveal">
@@ -287,17 +301,64 @@ function NewAppCard({ call, onChanged, t }) {
   </article>
 }
 
-function DeployRow({ deploy, call, onChanged, t }) {
+function AppRegistry({ apps, deploys, call, refresh, revision, t }) {
+  const [query, setQuery] = useState('')
+  const [selected, setSelected] = useState(null)
+  const [page, setPage] = useState(0)
+  const entries = Object.entries(apps).sort(([a], [b]) => a.localeCompare(b))
+    .filter(([name, spec]) => [name, spec.github_repository, spec.site_path]
+      .some((value) => value?.toLowerCase().includes(query.trim().toLowerCase())))
+  const pageCount = Math.max(1, Math.ceil(entries.length / 10))
+  const currentPage = Math.min(page, pageCount - 1)
+  const visible = entries.slice(currentPage * 10, currentPage * 10 + 10)
+  const active = entries.find(([name]) => name === selected) ?? visible[0]
+  const isBusy = (name) => deploys.some((deploy) => deploy.app === name && ['queued', 'running'].includes(deploy.status))
+
+  return <>
+    <NewAppCard call={call} onChanged={refresh} t={t} />
+    {Object.keys(apps).length > 0 && <div className="project-workspace">
+      <aside className="glass-panel project-browser" aria-label={t('registry.title')}>
+        <label className="project-search">
+          <Search size={16} aria-hidden="true" />
+          <input type="search" aria-label={t('registry.search')} placeholder={t('registry.search')}
+            value={query} onChange={(event) => { setQuery(event.target.value); setPage(0) }} />
+        </label>
+        <p className="project-count">{t('registry.matches', { count: entries.length })}</p>
+        <nav aria-label={t('registry.select')} className="project-list">
+          {visible.map(([name, spec]) => <button type="button" key={name}
+            aria-current={active?.[0] === name ? 'true' : undefined} onClick={() => setSelected(name)}>
+            <span><Server size={15} aria-hidden="true" /><strong>{name}</strong>
+              {isBusy(name) && <LoaderCircle size={14} className="spin" aria-label={t('status.running')} />}</span>
+            <small>{spec.github_repository || spec.site_path || t('registry.no_repository')}</small>
+          </button>)}
+        </nav>
+        {pageCount > 1 && <div className="project-pagination">
+          <Button size="small" disabled={currentPage === 0} onClick={() => { setPage(currentPage - 1); setSelected(null) }} aria-label={t('registry.previous')}>←</Button>
+          <span>{currentPage + 1} / {pageCount}</span>
+          <Button size="small" disabled={currentPage + 1 === pageCount} onClick={() => { setPage(currentPage + 1); setSelected(null) }} aria-label={t('registry.next')}>→</Button>
+        </div>}
+      </aside>
+      {active ? <AppCard key={active[0]} name={active[0]} spec={active[1]} call={call}
+        onChanged={refresh} revision={revision} busy={isBusy(active[0])} t={t} />
+        : <div className="glass-panel empty-state"><Search size={22} /><p>{t('registry.no_matches')}</p></div>}
+    </div>}
+  </>
+}
+
+function DeployRow({ deploy, call, onChanged, revision, t }) {
   const [expanded, setExpanded] = useState(false)
   const [detail, setDetail] = useState(null)
   const [error, setError] = useState(null)
+  const localOperation = deploy.artifact_url === 'local-website://connect' ? 'connect'
+    : deploy.artifact_url === 'local-website://remove' ? 'remove'
+      : deploy.artifact_url?.startsWith('local-release://') ? 'activate' : null
 
   useEffect(() => {
     if (!expanded) return
     call(`/deploys/${deploy.deploy_id}`)
       .then(setDetail)
       .catch((requestError) => setError(requestError.message))
-  }, [expanded, deploy.status, call, deploy.deploy_id])
+  }, [expanded, deploy.status, call, deploy.deploy_id, revision])
 
   const redeploy = async () => {
     try {
@@ -322,13 +383,13 @@ function DeployRow({ deploy, call, onChanged, t }) {
           </span>
           <span className="deploy-main">
             <strong>{deploy.app}</strong>
-            <code>{deploy.commit_sha.slice(0, 12)}</code>
+            <code>{localOperation ? t(`deploy.operation_${localOperation}`) : deploy.commit_sha.slice(0, 12)}</code>
           </span>
         </button>
         <div className="deploy-meta">
           <time>{deploy.created_at}</time>
           <StatusBadge status={deploy.status} t={t} />
-          <ConfirmDialog
+          {!localOperation && <ConfirmDialog
             trigger={
               <TooltipButton label={t('deploy.redeploy', { name: deploy.app })}>
                 <RotateCcw size={15} />
@@ -339,7 +400,7 @@ function DeployRow({ deploy, call, onChanged, t }) {
             confirmLabel={t('deploy.redeploy_confirm')}
             cancelLabel={t('common.cancel')}
             onConfirm={redeploy}
-          />
+          />}
         </div>
       </div>
 
@@ -388,6 +449,9 @@ export default function App() {
   const [apps, setApps] = useState(null)
   const [deploys, setDeploys] = useState([])
   const [error, setError] = useState(null)
+  const [refreshing, setRefreshing] = useState(false)
+  const [revision, setRevision] = useState(0)
+  const requestId = useRef(0)
   const t = useCallback((key, values) => translate(language, key, values), [language])
   const call = useCallback((path, opts = {}) => api(token, path, opts), [token])
 
@@ -405,27 +469,31 @@ export default function App() {
   }, [language])
 
   const refresh = useCallback(async () => {
-    if (!token) return
+    const id = ++requestId.current
+    setRefreshing(true)
+    const healthRequest = fetch('/api/healthz')
+      .then((response) => { if (!response.ok) throw new Error('health'); return response.json() })
+      .then((data) => { if (id === requestId.current) setHealth(data.status) })
+      .catch(() => { if (id === requestId.current) setHealth('unreachable') })
     try {
+      if (!token) { setApps(null); setDeploys([]); return }
       const [nextApps, nextDeploys] = await Promise.all([
         call('/admin/apps'),
         call('/admin/deploys?limit=20'),
       ])
+      if (id !== requestId.current) return
       setApps(nextApps)
       setDeploys(nextDeploys)
       setError(null)
+      setRevision((value) => value + 1)
     } catch (requestError) {
-      setApps(null)
+      if (id !== requestId.current) return
       setError(requestError.message)
+    } finally {
+      await healthRequest
+      if (id === requestId.current) setRefreshing(false)
     }
   }, [call, token])
-
-  useEffect(() => {
-    fetch('/api/healthz')
-      .then((response) => response.json())
-      .then((data) => setHealth(data.status))
-      .catch(() => setHealth('unreachable'))
-  }, [])
 
   useEffect(() => {
     const timer = setTimeout(refresh, 0)
@@ -433,13 +501,11 @@ export default function App() {
   }, [refresh])
 
   const hasActive = deploys.some((deploy) => deploy.status === 'queued' || deploy.status === 'running')
-  useEffect(() => {
-    if (!hasActive || !token) return
-    const timer = setInterval(refresh, 3000)
-    return () => clearInterval(timer)
-  }, [hasActive, token, refresh])
-
   const saveToken = (value) => {
+    requestId.current += 1
+    setApps(null)
+    setDeploys([])
+    setError(null)
     setToken(value)
     try {
       sessionStorage.setItem('deployd-admin-token', value)
@@ -481,6 +547,9 @@ export default function App() {
                 status: health === 'unreachable' ? t('health.unreachable') : health ?? t('health.checking'),
               })}
             </span>
+            <TooltipButton label={t('activity.refresh')} disabled={refreshing} onClick={refresh}>
+              <RefreshCw size={17} className={refreshing ? 'spin' : undefined} />
+            </TooltipButton>
             <TooltipButton
               label={t('theme.switch', { theme: t(`theme.${theme === 'dark' ? 'light' : 'dark'}`) })}
               onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
@@ -534,12 +603,7 @@ export default function App() {
               </div>
               <span>{t('registry.configured', { count: appCount })}</span>
             </div>
-            <div className="app-grid">
-              {Object.entries(apps).map(([name, spec]) => (
-                <AppCard key={name} name={name} spec={spec} call={call} onChanged={refresh} t={t} />
-              ))}
-              <NewAppCard call={call} onChanged={refresh} t={t} />
-            </div>
+            <AppRegistry apps={apps} deploys={deploys} call={call} refresh={refresh} revision={revision} t={t} />
           </section>
         )}
 
@@ -551,8 +615,8 @@ export default function App() {
                 <h2>{t('activity.title')}</h2>
               </div>
               <div className="section-actions">
-                {hasActive && <span className="live-indicator"><span /> {t('activity.live')}</span>}
-                <Button size="small" onClick={refresh}><RefreshCw size={14} /> {t('activity.refresh')}</Button>
+                <span className="release-help">{t(hasActive ? 'activity.pending' : 'activity.manual')}</span>
+                <Button size="small" disabled={refreshing} onClick={refresh}><RefreshCw size={14} className={refreshing ? 'spin' : undefined} /> {t('activity.refresh')}</Button>
               </div>
             </div>
             <div className="glass-panel deploy-panel">
@@ -569,6 +633,7 @@ export default function App() {
                       deploy={deploy}
                       call={call}
                       onChanged={refresh}
+                      revision={revision}
                       t={t}
                     />
                   ))}

@@ -86,6 +86,7 @@ describe('ReleasePanel', () => {
     setup({ keep_previous: 2 }, 'es', true)
     expect(await screen.findByText(/Despliegue en curso/)).toBeInTheDocument()
     expect(screen.getByLabelText('Cantidad de versiones anteriores')).toHaveValue(2)
-    for (const button of screen.getAllByRole('button')) expect(button).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Actualizar' })).toBeEnabled()
+    for (const button of screen.getAllByRole('button').filter((item) => item.textContent !== 'Actualizar')) expect(button).toBeDisabled()
   })
 })

@@ -77,6 +77,16 @@ subprocess.run(["sudo", "-u", "www-data", "test", "-r", str(site / "index.html")
 assert (releases / "b4deployd").stat().st_uid == account.pw_uid
 assert subprocess.run([*command, "connect", "website-smoke", "../../etc"]).returncode != 0
 print("Installed helper, service sandbox, repeat connection and Nginx access passed.")
+subprocess.run([*command, "detach", "website-smoke", site.name], check=True)
+(site / "index.html").write_text("restored site edit")
+subprocess.run([*command, "connect", "website-smoke", site.name], check=True)
+assert site.is_symlink() and site.resolve() == current
+saved = Path(
+    "/var/lib/deployd-connect/website-smoke/restore-deployd-smoke.example/reconnected-files"
+)
+assert (saved / "index.html").read_text() == "restored site edit"
+assert (releases / "b4deployd/index.html").read_text() == "original site"
+print("Reconnect preserved restored-site edits and the original baseline.")
 alias = Path("/var/www/deployd-restore-smoke.example")
 assert not os.path.lexists(alias)
 alias.symlink_to(current)

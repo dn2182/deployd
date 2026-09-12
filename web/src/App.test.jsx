@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App.jsx'
 
@@ -42,7 +42,10 @@ const DETAIL = {
 function mockFetch(routes) {
   return vi.fn(async (url, opts = {}) => {
     const key = `${opts.method ?? 'GET'} ${url}`
-    const hit = Object.entries(routes).find(([k]) => key.startsWith(k))
+    const defaults = /GET \/api\/admin\/apps\/[^/]+\/releases$/.test(key)
+      ? { [key]: { releases: [], active_path: null, busy: false } } : {}
+    const hit = Object.entries({ ...defaults, ...routes }).sort(([a], [b]) => b.length - a.length)
+      .find(([k]) => key === k || key.startsWith(`${k}?`))
     const payload = hit ? hit[1] : { detail: `no route: ${key}` }
     return {
       ok: Boolean(hit),
@@ -61,6 +64,74 @@ beforeEach(() => {
 })
 
 describe('App', () => {
+  it('labels website operations and does not offer artifact redeploy for them', async () => {
+    global.fetch = mockFetch({ 'GET /api/healthz': { status: 'ok' }, 'GET /api/admin/apps': APPS,
+      'GET /api/admin/deploys': [{ ...DEPLOYS[0], commit_sha: '0'.repeat(40), artifact_url: 'local-website://remove' }] })
+    render(<App />)
+    expect(await screen.findByText('Restore website and remove app')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Redeploy my-api' })).not.toBeInTheDocument()
+    expect(screen.queryByText('000000000000')).not.toBeInTheDocument()
+  })
+
+  it('paginates and searches many applications while showing only one detail card', async () => {
+    const apps = Object.fromEntries(Array.from({ length: 25 }, (_, i) => [`project-${String(i).padStart(2, '0')}`, {
+      ...APPS['my-api'], github_repository: `owner/repo-${i}`,
+    }]))
+    global.fetch = mockFetch({ 'GET /api/healthz': { status: 'ok' }, 'GET /api/admin/apps': apps, 'GET /api/admin/deploys': [] })
+    render(<App />)
+    const navigation = await screen.findByRole('navigation', { name: 'Select an application' })
+    expect(within(navigation).getAllByRole('button')).toHaveLength(10)
+    expect(screen.getAllByRole('heading', { level: 3 })).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Next applications' }))
+    expect(screen.getByRole('heading', { name: 'project-10' })).toBeInTheDocument()
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'repo-24' } })
+    expect(screen.getByRole('heading', { name: 'project-24' })).toBeInTheDocument()
+    expect(within(navigation).getAllByRole('button')).toHaveLength(1)
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'no-match' } })
+    expect(screen.getByText('No applications match your search.')).toBeInTheDocument()
+  })
+
+  it('shows just one application tab and supports keyboard navigation', async () => {
+    global.fetch = mockFetch({ 'GET /api/healthz': { status: 'ok' },
+      'GET /api/admin/apps': { site: { ...APPS['my-api'], site_path: '/var/www/site', github_repository: 'owner/site' } },
+      'GET /api/admin/apps/site/website': { status: 'connected', backup: true },
+      'GET /api/admin/deploys': [] })
+    render(<App />)
+    const website = await screen.findByRole('tab', { name: 'Website connection' })
+    expect(website).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getAllByRole('tabpanel')).toHaveLength(1)
+    fireEvent.keyDown(website, { key: 'ArrowRight' })
+    const versions = screen.getByRole('tab', { name: 'Manage versions' })
+    expect(versions).toHaveFocus()
+    expect(screen.getByRole('tabpanel')).toHaveAccessibleName('Manage versions')
+    expect(screen.queryByRole('button', { name: 'Check connection' })).not.toBeInTheDocument()
+    fireEvent.keyDown(versions, { key: 'End' })
+    expect(screen.getByRole('tabpanel')).toHaveAccessibleName('GitHub Actions setup')
+    expect(screen.queryByRole('spinbutton', { name: /previous/ })).not.toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'GitHub Actions setup' }), { key: 'Home' })
+    expect(website).toHaveFocus()
+  })
+
+  it('does not poll running deployments and refreshes health, activity, and the active panel on demand', async () => {
+    const fetcher = mockFetch({ 'GET /api/healthz': { status: 'ok' }, 'GET /api/admin/apps': APPS,
+      'GET /api/admin/deploys': [{ ...DEPLOYS[0], status: 'running' }] })
+    global.fetch = fetcher
+    render(<App />)
+    await screen.findByText('No retained versions yet.')
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '4' } })
+    const before = fetcher.mock.calls.length
+    vi.useFakeTimers()
+    try {
+      await act(() => vi.advanceTimersByTimeAsync(125000))
+      expect(fetcher).toHaveBeenCalledTimes(before)
+    } finally { vi.useRealTimers() }
+    const healthCalls = fetcher.mock.calls.filter(([url]) => url === '/api/healthz').length
+    fireEvent.click(screen.getAllByRole('button', { name: 'Refresh' })[0])
+    await waitFor(() => expect(fetcher.mock.calls.filter(([url]) => url === '/api/healthz')).toHaveLength(healthCalls + 1))
+    await waitFor(() => expect(fetcher.mock.calls.filter(([url]) => url.endsWith('/releases'))).toHaveLength(2))
+    expect(screen.getByRole('spinbutton')).toHaveValue(4)
+  })
+
   it('creates a real-current app with paths derived from its name', async () => {
     const fetcher = mockFetch({
       'GET /api/healthz': { status: 'ok' },

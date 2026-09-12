@@ -406,6 +406,16 @@ stop_for_upgrade() {
   fi
 }
 
+check_website_parent() {
+  sudo test ! -L /var/www || die '/var/www must be a real directory, not a symlink'
+  if sudo test -e /var/www; then
+    sudo test -d /var/www || die '/var/www must be a directory'
+    [[ $(sudo stat -c '%U' /var/www) == root ]] || die '/var/www must be root-owned; ask the server administrator to review ownership'
+    [[ $(sudo find /var/www -maxdepth 0 -perm /022 -print) == '' ]] || die \
+      '/var/www is group- or world-writable. Review and run: sudo chmod go-w /var/www. This restricts creating/renaming its direct children; it does not change site contents. Then rerun the installer. No permissions were changed automatically.'
+  fi
+}
+
 install_website_helper() {
   local repo_root=$1 answer path rule
   if ! sudo test -f /etc/sudoers.d/deployd-connect; then
@@ -416,6 +426,7 @@ install_website_helper() {
     read -r -p 'Enable website connection? [y/N]: ' answer
     [[ ${answer,,} == y || ${answer,,} == yes ]] || return 0
   fi
+  check_website_parent
   for path in /usr/local /usr/local/libexec /usr/local/libexec/deployd /var/lib/deployd-connect; do
     sudo test ! -L "$path" || die "helper path must not be a symlink: $path"
     if sudo test -e "$path"; then
@@ -423,6 +434,9 @@ install_website_helper() {
       [[ $(sudo find "$path" -maxdepth 0 -perm /022 -print) == '' ]] || die "helper path must not be writable by other users: $path"
     fi
   done
+  if ! sudo test -e /var/www; then
+    sudo install -d -o root -g root -m 0755 /var/www
+  fi
   sudo install -d -o root -g root -m 0755 /usr/local/libexec /usr/local/libexec/deployd
   sudo install -d -o root -g root -m 0700 /var/lib/deployd-connect
   sudo test ! -L /usr/local/libexec/deployd/connect-website || die "helper executable must not be a symlink"
@@ -459,6 +473,9 @@ main() {
   check_checkout "$repo_root"
   install_prerequisites
   create_service_user
+  if sudo test -f /etc/sudoers.d/deployd-connect; then
+    check_website_parent
+  fi
   stop_for_upgrade
   repair_legacy_build_ownership "$repo_root"
   install_application "$repo_root"

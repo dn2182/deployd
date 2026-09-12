@@ -78,8 +78,88 @@ def test_requires_readable_current_and_protected_parent(site):
         run()
     current.chmod(0o755)
     original.parent.chmod(0o775)
-    with pytest.raises(ValueError, match="root-owned and protected"):
+    with pytest.raises(ValueError, match="unsafe permissions 0775"):
         run()
+
+
+def test_permissions_error_identifies_parent_and_never_changes_it(site):
+    original, current, _ = site
+    original.parent.chmod(0o2775)
+    with pytest.raises(ValueError, match="sudo chmod go-w /var/www"):
+        run()
+    assert original.parent.stat().st_mode & 0o7777 == 0o2775
+    assert (current / "index.html").read_text() == "new website"
+    original.parent.chmod(0o2755)
+    assert run()["status"] == "ready"
+
+
+def test_reconnect_requires_our_restore_receipt(site):
+    original, _, state = site
+    transaction = state / "site"
+    transaction.mkdir(mode=0o700)
+    (transaction / "journal.json").write_text(json.dumps({"site": original.name}))
+    (transaction / "complete.json").write_text("{}")
+    with pytest.raises(ValueError, match="no matching restore receipt"):
+        run("connect")
+    assert not original.is_symlink()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="real Linux renameat2 exchange")
+def test_reconnect_preserves_edits_and_baseline_across_multiple_removals(site):
+    original, current, state = site
+    run("connect")
+    for cycle in range(2):
+        assert detach()["status"] == "restored"
+        (original / "index.html").write_text(f"restored edit {cycle}")
+        assert run() == {"status": "reconnect", "backup": True}
+        assert not original.is_symlink()
+        assert run("connect")["status"] == "connected"
+        assert run("connect")["status"] == "connected"
+        assert original.resolve() == current
+    assert detach()["status"] == "restored"
+    saved = list((state / "site").glob("saved-*/reconnected-files/index.html"))
+    assert {path.read_text() for path in saved} == {"restored edit 0", "restored edit 1"}
+    assert (original / "index.html").read_text() == "new website"
+    assert (current.parent / "b4deployd/index.html").read_text() == "original website"
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="real Linux renameat2 exchange")
+@pytest.mark.parametrize("after", [False, True])
+def test_reconnect_recovers_interrupted_exchange(site, monkeypatch, after):
+    original, current, state = site
+    run("connect")
+    detach()
+    (original / "index.html").write_text("restored edit")
+    native = helper.rename
+
+    def interrupted(*args):
+        if after:
+            native(*args)
+        raise SystemExit("interrupted")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(helper, "rename", interrupted)
+        with pytest.raises(SystemExit):
+            run("connect")
+    assert run("connect")["status"] == "connected"
+    assert original.resolve() == current
+    assert (
+        state / "site/restore-example.com/reconnected-files/index.html"
+    ).read_text() == "restored edit"
+    assert detach()["status"] == "restored"
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="real Linux renameat2 exchange")
+def test_reconnect_refuses_a_replacement_directory(site):
+    original, _, _ = site
+    run("connect")
+    detach()
+    original.rename(original.with_suffix(".saved"))
+    original.mkdir()
+    (original / "index.html").write_text("unrelated site")
+    with pytest.raises(ValueError, match="changed after restore"):
+        run("connect")
+    assert (original / "index.html").read_text() == "unrelated site"
 
 
 def test_already_linked_does_not_invent_a_backup(site):

@@ -1,7 +1,12 @@
 # deployd admin UI
 
 React/Vite administration console for app registration, secret rotation,
-deployment history, redeploys, and live step status.
+deployment history, redeploys, and step status on demand.
+
+Applications use a searchable, ten-per-page list with one detail panel. Website
+connection, retained versions, and GitHub Actions setup use accessible tabs.
+Refresh updates API health, the app registry, activity, and the active status
+panel. The interface does not poll in the background, including during deployments.
 
 ```bash
 pnpm install --frozen-lockfile
