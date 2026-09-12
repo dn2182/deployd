@@ -58,10 +58,141 @@ def test_recovery_fails_running_and_returns_queued(tmp_path):
     queued = s.create_deploy("app-b", "c" * 40, "https://x/b.zip", "d" * 64, "test")
     s.set_status(running, "running")
 
-    assert s.recover_after_restart() == [("app-b", queued)]
+    assert s.recover_after_restart() == [("app-b", queued, "artifact")]
     interrupted = s.get_deploy(running)
     assert interrupted["status"] == "failed"
     assert interrupted["steps"][-1]["step"] == "recovery"
+
+
+def test_unversioned_database_is_upgraded_in_place(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "old.sqlite3"
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE deploys (deploy_id TEXT PRIMARY KEY, app TEXT NOT NULL,
+                commit_sha TEXT NOT NULL, artifact_url TEXT NOT NULL,
+                artifact_sha256 TEXT NOT NULL, triggered_by TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')), finished_at TEXT);
+            CREATE TABLE deploy_steps (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                deploy_id TEXT NOT NULL REFERENCES deploys(deploy_id), step TEXT NOT NULL,
+                status TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT (datetime('now')),
+                output TEXT);
+            CREATE TABLE nonces (nonce TEXT PRIMARY KEY,
+                seen_at TEXT NOT NULL DEFAULT (datetime('now')));
+            INSERT INTO deploys VALUES ('d1', 'app', 'a', 'local-release://previous', 'b',
+                'activate:previous', 'succeeded', '2026-01-01 00:00:00', '2026-01-01 00:00:01');
+            INSERT INTO deploys VALUES ('d2', 'app', 'a', 'https://x/a.zip', 'b',
+                'ci', 'succeeded', '2026-01-01 00:00:00', '2026-01-01 00:00:01');
+            """
+        )
+    s = Store(path)
+    s.init()
+    s.init()
+    assert s.get_deploy("d1")["kind"] == "activate"
+    assert s.get_deploy("d2")["kind"] == "artifact"
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert {row[1] for row in conn.execute("PRAGMA table_info(nonces)")} >= {
+            "request_hash",
+            "deploy_id",
+        }
+
+
+def test_newer_schema_is_refused(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "future.sqlite3"
+    with sqlite3.connect(path) as conn:
+        conn.execute("PRAGMA user_version = 99")
+    with pytest.raises(RuntimeError, match="newer"):
+        Store(path).init()
+
+
+def test_supersede_marks_only_older_queued_artifacts(tmp_path):
+    s = _store(tmp_path)
+    older = s.create_deploy("app", "a" * 40, "https://x/a.zip", "b" * 64, "ci")
+    running = s.create_deploy("app", "a" * 40, "https://x/a.zip", "b" * 64, "ci")
+    s.set_status(running, "running")
+    other_app = s.create_deploy("other", "a" * 40, "https://x/a.zip", "b" * 64, "ci")
+    activation = s.create_deploy("app", "a" * 40, "local-release://x", "b" * 64, "x", "activate")
+    newest = s.create_deploy("app", "c" * 40, "https://x/c.zip", "d" * 64, "ci")
+
+    assert s.supersede_queued("app", newest) == [older]
+    assert s.get_deploy(older)["status"] == "superseded"
+    assert s.get_deploy(older)["steps"][-1]["output"] == f"superseded by deploy {newest}"
+    assert s.get_deploy(running)["status"] == "running"
+    assert s.get_deploy(other_app)["status"] == "queued"
+    assert s.get_deploy(activation)["status"] == "queued"
+    assert s.get_deploy(newest)["status"] == "queued"
+
+
+def test_cancel_only_applies_to_queued(tmp_path):
+    s = _store(tmp_path)
+    did = s.create_deploy("app", "a" * 40, "https://x/a.zip", "b" * 64, "ci")
+    assert s.cancel_deploy(did, "ops") is True
+    assert s.cancel_deploy(did, "ops") is False
+    row = s.get_deploy(did)
+    assert row["status"] == "cancelled"
+    assert row["finished_at"] is not None
+    assert row["steps"][-1]["output"] == "cancelled by ops"
+
+
+def test_list_deploys_filters_and_pages(tmp_path):
+    s = _store(tmp_path)
+    ids = [s.create_deploy("app", "a" * 40, "https://x/a.zip", "b" * 64, "ci") for _ in range(3)]
+    s.set_status(ids[0], "failed", finished=True)
+    assert [row["deploy_id"] for row in s.list_deploys(limit=1, offset=1)] == [ids[1]]
+    assert [row["deploy_id"] for row in s.list_deploys(status="failed")] == [ids[0]]
+    assert s.list_deploys(app="nope") == []
+
+
+def test_history_purge_removes_only_old_finished_rows(tmp_path):
+    import sqlite3
+
+    s = _store(tmp_path)
+    old = s.create_deploy("app", "a" * 40, "https://x/a.zip", "b" * 64, "ci")
+    s.set_status(old, "succeeded", finished=True)
+    s.add_step(old, "download", "succeeded")
+    fresh = s.create_deploy("app", "a" * 40, "https://x/a.zip", "b" * 64, "ci")
+    s.set_status(fresh, "failed", finished=True)
+    stale_queued = s.create_deploy("app", "a" * 40, "https://x/a.zip", "b" * 64, "ci")
+    with sqlite3.connect(tmp_path / "test.sqlite3") as conn:
+        conn.execute(
+            "UPDATE deploys SET created_at = '2020-01-01', finished_at = '2020-01-01' "
+            "WHERE deploy_id IN (?, ?)",
+            (old, stale_queued),
+        )
+    assert s.purge_history(30) == 1
+    assert s.get_deploy(old) is None
+    assert s.get_deploy(fresh) is not None
+    assert s.get_deploy(stale_queued)["status"] == "queued"
+
+
+def test_status_helpers(tmp_path):
+    s = _store(tmp_path)
+    first = s.create_deploy("app", "a" * 40, "https://x/a.zip", "b" * 64, "ci")
+    s.set_status(first, "succeeded", finished=True)
+    s.add_step(first, "health", "succeeded", output="healthy after 1 attempt(s)")
+    second = s.create_deploy("app", "c" * 40, "https://x/c.zip", "d" * 64, "ci")
+    assert s.count_queued("app") == 1
+    assert s.last_deploy("app")["deploy_id"] == second
+    assert s.last_step("app", "health")["output"] == "healthy after 1 attempt(s)"
+    assert s.previous_succeeded_sha("app", second) == "a" * 40
+    assert s.previous_succeeded_sha("app", first) is None
+    assert s.get_status("missing") is None
+
+
+def test_audit_log_roundtrip(tmp_path):
+    s = _store(tmp_path)
+    s.audit("dan", "secret.rotate", "app", None)
+    s.audit("dan", "app.freeze", "app", "x")
+    rows = s.list_audit(limit=1)
+    assert rows[0]["action"] == "app.freeze"
+    assert s.list_audit(limit=5, offset=1)[0]["action"] == "secret.rotate"
+    s.check_writable()
 
 
 def test_instance_lock_rejects_second_owner(tmp_path):

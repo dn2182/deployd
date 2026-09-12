@@ -2,9 +2,10 @@
 Bind to localhost/tailnet or front with Cloudflare Access; never expose bare.
 """
 
+import asyncio
 import hashlib
-import hmac
 import os
+import re
 import secrets as pysecrets
 from pathlib import Path as FilePath
 from typing import Annotated, Literal
@@ -25,23 +26,38 @@ from ..config import (
     github_secret_key,
     github_token_info,
     set_app_secret,
+    set_frozen,
     upsert_app,
 )
 from ..github_actions import GitHubActionsSettings, setup_bundle
+from ..models import DeployStatus
+from ..security import constant_time_equal
 from ..worker import runner, website
+
+_ACTOR_RE = re.compile(r"^[A-Za-z0-9@._-]{1,64}$")
 
 
 def require_admin(x_admin_token: str | None = Header(default=None)):
     expected = get_settings().admin_token
     if not expected:
         raise HTTPException(status_code=503, detail="admin token not configured")
-    if not x_admin_token or not hmac.compare_digest(expected, x_admin_token):
+    if not constant_time_equal(expected, x_admin_token):
         raise HTTPException(status_code=401, detail="bad admin token")
 
 
 router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin)])
 AppName = Annotated[str, Path(pattern=APP_NAME_PATTERN)]
 MANAGED_ROOT = FilePath("/srv/deployd")
+
+
+def actor_of(request: Request) -> str:
+    # The reverse proxy forwards the Basic Auth user; direct callers are just the token.
+    user = request.headers.get("x-remote-user", "")
+    return user if _ACTOR_RE.fullmatch(user) else "admin-token"
+
+
+def _audit(request: Request, action: str, target: str | None, detail: str | None = None) -> None:
+    request.app.state.store.audit(actor_of(request), action, target, detail)
 
 
 class ReleaseSelection(BaseModel):
@@ -55,6 +71,10 @@ class WebsiteConfirmation(BaseModel):
 class AppRemoval(BaseModel):
     confirm: str
     website: Literal["restore", "keep"]
+
+
+class FreezeRequest(BaseModel):
+    frozen: bool
 
 
 class AppCredentials(BaseModel):
@@ -155,8 +175,10 @@ async def activate_app_release(request: Request, name: AppName, selection: Relea
             original["artifact_url"] if original else f"local-release://{selection.release}",
             original["artifact_sha256"] if original else "0" * 64,
             f"activate:{selection.release}",
+            kind="activate",
         )
         request.app.state.queue.enqueue_activation(name, deploy_id, selection.release)
+        _audit(request, "release.activate", name, selection.release)
     return {"deploy_id": deploy_id, "status": "queued"}
 
 
@@ -165,9 +187,10 @@ async def cleanup_app_release(request: Request, name: AppName, selection: Releas
     with config_lock():
         spec = _release_app(request, name, idle=True)
         try:
-            runner.remove_release(spec, selection.release)
+            await asyncio.to_thread(runner.remove_release, spec, selection.release)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        _audit(request, "release.remove", name, selection.release)
     return {"removed": selection.release}
 
 
@@ -195,9 +218,10 @@ async def connect_website(request: Request, name: AppName, confirmation: Website
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         deploy_id = request.app.state.store.create_deploy(
-            name, "0" * 40, "local-website://connect", "0" * 64, f"connect:{name}"
+            name, "0" * 40, "local-website://connect", "0" * 64, f"connect:{name}", kind="connect"
         )
         request.app.state.queue.enqueue_connection(name, deploy_id)
+        _audit(request, "website.connect", name)
     return {"deploy_id": deploy_id, "status": "queued"}
 
 
@@ -220,6 +244,42 @@ async def list_apps():
         }
         for name, spec in get_app_registry().items()
     }
+
+
+@router.get("/apps/{name}/status")
+async def app_status(request: Request, name: AppName):
+    spec = _release_app(request, name)
+    store = request.app.state.store
+    current = runner.current_release_path(spec)
+    current_name = None
+    if current is not None:
+        if spec.release_layout == "directory":
+            try:
+                current_name = runner.directory_layout.read_manifest(current)["name"]
+            except ValueError:
+                current_name = "unreadable"
+        else:
+            current_name = current.name
+    return {
+        "app": name,
+        "frozen": spec.frozen,
+        "busy": store.has_active_deploys(name),
+        "queued": store.count_queued(name),
+        "current_release": current_name,
+        "last_deploy": store.last_deploy(name),
+        "last_health": store.last_step(name, "health"),
+    }
+
+
+@router.post("/apps/{name}/freeze")
+async def freeze_app(request: Request, name: AppName, body: FreezeRequest):
+    with config_lock():
+        try:
+            spec = set_frozen(name, body.frozen)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="unknown app") from exc
+        _audit(request, "app.freeze" if body.frozen else "app.unfreeze", name)
+    return {"app": name, "frozen": spec.frozen}
 
 
 def _validate_app_update(request: Request, name: str, spec: AppSpec):
@@ -285,6 +345,7 @@ async def github_actions_setup(request: Request, name: AppName, settings: GitHub
             raise HTTPException(
                 status_code=409, detail="could not save GitHub Actions settings"
             ) from exc
+        _audit(request, "app.github_actions", name)
     return {**bundle, "settings": settings.model_dump()}
 
 
@@ -345,6 +406,21 @@ async def setup_app(request: Request, name: AppName, setup: AppSetup):
                 status_code=409,
                 detail="could not save application; check service permissions and runtime configuration",
             ) from exc
+        _audit(
+            request,
+            "app.create" if existing is None else "app.update",
+            name,
+            "; ".join(
+                part
+                for part, on in (
+                    ("signing secret set", _secret_key(name) in changes),
+                    ("github token set", changes.get(github_secret_key(name)) is not None),
+                    ("github token removed", credentials.remove_github_token),
+                )
+                if on
+            )
+            or None,
+        )
     return {
         "status": "saved",
         "app": name,
@@ -359,6 +435,7 @@ async def upsert_app_route(request: Request, name: AppName, spec: AppSpec):
     with config_lock():
         _validate_app_update(request, name, spec)
         upsert_app(name, spec)
+        _audit(request, "app.update", name)
     return {"status": "saved", "app": name}
 
 
@@ -391,18 +468,20 @@ async def delete_app(
             except ValueError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             deploy_id = request.app.state.store.create_deploy(
-                name, "0" * 40, "local-website://remove", "0" * 64, f"remove:{name}"
+                name, "0" * 40, "local-website://remove", "0" * 64, f"remove:{name}", kind="remove"
             )
             request.app.state.queue.enqueue_removal(name, deploy_id)
+            _audit(request, "app.delete", name, "website restore queued")
             response.status_code = 202
             return {"status": "queued", "app": name, "deploy_id": deploy_id}
         if not delete_app_config(name):
             raise HTTPException(status_code=404, detail="unknown app")
+        _audit(request, "app.delete", name)
     return {"status": "deleted", "app": name}
 
 
 @router.post("/apps/{name}/rotate-secret")
-async def rotate_secret(name: AppName):
+async def rotate_secret(request: Request, name: AppName):
     with config_lock():
         if name not in get_app_registry():
             raise HTTPException(status_code=404, detail="unknown app")
@@ -413,6 +492,7 @@ async def rotate_secret(name: AppName):
             )
         new_secret = pysecrets.token_hex(32)
         set_app_secret(name, new_secret)
+        _audit(request, "secret.rotate", name)
     return {
         # shown exactly once — copy it into the CI secret now
         "secret": new_secret,
@@ -424,9 +504,26 @@ async def rotate_secret(name: AppName):
 
 @router.get("/deploys")
 async def list_deploys(
-    request: Request, limit: Annotated[int, Query(ge=1, le=200)] = 50, app: str | None = None
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    app: Annotated[str | None, Query(pattern=APP_NAME_PATTERN)] = None,
+    status: DeployStatus | None = None,
 ):
-    return request.app.state.store.list_deploys(limit=limit, app=app)
+    return request.app.state.store.list_deploys(
+        limit=limit, offset=offset, app=app, status=status.value if status else None
+    )
+
+
+@router.post("/deploys/{deploy_id}/cancel")
+async def cancel_deploy(request: Request, deploy_id: str):
+    store = request.app.state.store
+    if store.get_deploy(deploy_id) is None:
+        raise HTTPException(status_code=404, detail="unknown deploy")
+    if not store.cancel_deploy(deploy_id, actor_of(request)):
+        raise HTTPException(status_code=409, detail="only queued deploys can be cancelled")
+    _audit(request, "deploy.cancel", deploy_id)
+    return {"deploy_id": deploy_id, "status": "cancelled"}
 
 
 @router.post("/deploys/{deploy_id}/redeploy")
@@ -435,6 +532,8 @@ async def redeploy(request: Request, deploy_id: str):
     old = store.get_deploy(deploy_id)
     if old is None:
         raise HTTPException(status_code=404, detail="unknown deploy")
+    if old["kind"] != "artifact":
+        raise HTTPException(status_code=409, detail="only artifact deploys can be redeployed")
     with config_lock():
         spec = get_app_registry().get(old["app"])
         if spec is None:
@@ -451,4 +550,14 @@ async def redeploy(request: Request, deploy_id: str):
             f"redeploy:{deploy_id[:8]}",
         )
         request.app.state.queue.enqueue(old["app"], new_id)
+        _audit(request, "deploy.redeploy", old["app"], f"{deploy_id} -> {new_id}")
     return {"deploy_id": new_id, "status": "queued"}
+
+
+@router.get("/audit")
+async def list_audit(
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+):
+    return request.app.state.store.list_audit(limit=limit, offset=offset)

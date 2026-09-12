@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     max_request_bytes: int = Field(default=65_536, ge=1_024, le=1_048_576)
     # HMAC replay protection
     timestamp_window_seconds: int = Field(default=300, ge=30, le=3600)
+    history_keep_days: int = Field(default=90, ge=1, le=3650)
+    # Longest wait for an in-flight cutover to finish on shutdown; systemd's stop
+    # timeout must exceed it.
+    drain_timeout_seconds: int = Field(default=600, ge=10, le=3600)
 
     @field_validator("admin_token", mode="before")
     @classmethod
@@ -105,19 +109,25 @@ class ArtifactRules(BaseModel):
         ) == _effective_port(prefix)
 
 
+def _validate_optional_command(value: list[str] | None, label: str) -> list[str] | None:
+    if value is not None and (not value or any(not part for part in value)):
+        raise ValueError(f"{label} must be null or a non-empty argument list")
+    return value
+
+
 class MigrateSpec(BaseModel):
     command: list[str] | None = None
+    timeout_seconds: int = Field(default=600, ge=1, le=3600)
 
     @field_validator("command")
     @classmethod
     def validate_command(cls, value: list[str] | None) -> list[str] | None:
-        if value is not None and (not value or any(not part for part in value)):
-            raise ValueError("migration command must be null or a non-empty argument list")
-        return value
+        return _validate_optional_command(value, "migration command")
 
 
 class RestartSpec(BaseModel):
     command: list[str] = Field(min_length=1)
+    timeout_seconds: int = Field(default=600, ge=1, le=3600)
 
     @field_validator("command")
     @classmethod
@@ -127,10 +137,25 @@ class RestartSpec(BaseModel):
         return value
 
 
+class HooksSpec(BaseModel):
+    before_cutover: list[str] | None = None
+    after_health: list[str] | None = None
+    timeout_seconds: int = Field(default=600, ge=1, le=3600)
+
+    @field_validator("before_cutover", "after_health")
+    @classmethod
+    def validate_command(cls, value: list[str] | None) -> list[str] | None:
+        return _validate_optional_command(value, "hook command")
+
+
 class HealthSpec(BaseModel):
     url: str | None = None
     retries: int = Field(default=10, ge=1, le=100)
     interval_seconds: float = Field(default=3, ge=0, le=300)
+    # {commit_sha} in either expectation is replaced with the deployed SHA, so a
+    # stale process answering 200 cannot pass as the new release.
+    expect_body: str | None = Field(default=None, max_length=500)
+    expect_header: str | None = Field(default=None, max_length=500)
 
     @field_validator("url")
     @classmethod
@@ -145,6 +170,52 @@ class HealthSpec(BaseModel):
             raise ValueError("health URL cannot contain credentials")
         return value
 
+    @field_validator("expect_body", "expect_header")
+    @classmethod
+    def validate_expectation(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        return value.strip()
+
+    @field_validator("expect_header")
+    @classmethod
+    def validate_header_shape(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        name, sep, expected = value.partition(":")
+        if not sep or not re.fullmatch(r"[A-Za-z0-9-]+", name.strip()) or not expected.strip():
+            raise ValueError("expected header must look like Header-Name: value")
+        return f"{name.strip()}: {expected.strip()}"
+
+
+NOTIFY_EVENTS = ("succeeded", "failed", "rolled_back")
+
+
+class NotifySpec(BaseModel):
+    url: str | None = None
+    events: list[Literal["succeeded", "failed", "rolled_back"]] = Field(
+        default_factory=lambda: ["failed", "rolled_back"]
+    )
+    format: Literal["generic", "slack", "discord"] = "generic"
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        value = value.strip()
+        parsed = urlsplit(value)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise ValueError("notification URL must be an absolute HTTPS URL")
+        if parsed.username or parsed.password:
+            raise ValueError("notification URL cannot contain credentials")
+        return value
+
+    @field_validator("events")
+    @classmethod
+    def dedupe_events(cls, value: list[str]) -> list[str]:
+        return [event for event in NOTIFY_EVENTS if event in value]
+
 
 class AppSpec(BaseModel):
     github_actions: GitHubActionsSettings | None = None
@@ -156,10 +227,14 @@ class AppSpec(BaseModel):
     release_layout: Literal["symlink", "directory"] = "symlink"
     keep_previous: int = Field(default=1, ge=0, le=99)
     auto_cleanup: bool = True
+    # A frozen app rejects CI deploys with 423; local activation stays available.
+    frozen: bool = False
     artifact: ArtifactRules
     migrate: MigrateSpec = Field(default_factory=MigrateSpec)
+    hooks: HooksSpec = Field(default_factory=HooksSpec)
     restart: RestartSpec
     health: HealthSpec = Field(default_factory=HealthSpec)
+    notify: NotifySpec = Field(default_factory=NotifySpec)
 
     @field_validator("github_repository")
     @classmethod
@@ -393,6 +468,16 @@ def upsert_app(name: str, spec: AppSpec) -> None:
         registry = dict(get_app_registry())
         registry[name] = spec
         save_app_registry(registry)
+
+
+def set_frozen(name: str, frozen: bool) -> AppSpec:
+    with _CONFIG_LOCK:
+        registry = get_app_registry()
+        if name not in registry:
+            raise KeyError(name)
+        updated = registry[name].model_copy(update={"frozen": frozen})
+        upsert_app(name, updated)
+        return updated
 
 
 def delete_app_config(name: str) -> bool:

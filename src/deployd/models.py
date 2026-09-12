@@ -19,6 +19,8 @@ class DeployStatus(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     ROLLED_BACK = "rolled_back"
+    SUPERSEDED = "superseded"
+    CANCELLED = "cancelled"
 
 
 class DeployAccepted(BaseModel):
@@ -37,6 +39,7 @@ class DeployDetail(BaseModel):
     deploy_id: str
     app: str
     commit_sha: str
+    kind: str
     status: DeployStatus
     created_at: str
     finished_at: str | None
