@@ -196,3 +196,17 @@ def test_cli_checks_actual_dotenv_and_does_not_echo_token(runtime_paths):
     assert result.returncode == 0, result.stderr
     assert token not in result.stdout + result.stderr
     assert not (state / "deployd.sqlite3").exists()
+
+
+def test_env_backups_are_pruned_to_the_newest_three(runtime_paths):
+    repo, state = runtime_paths
+    for index in range(4):
+        stale = repo / f".env.backup-old{index}"
+        stale.write_text("stale")
+        os.utime(stale, (1_000 + index, 1_000 + index))
+    (repo / ".env").write_text("DEPLOYD_DB_PATH=deployd.sqlite3\n")
+    runtime.prepare(repo, state)
+    backups = sorted(repo.glob(".env.backup-*"), key=lambda path: path.stat().st_mtime_ns)
+    assert len(backups) == 3
+    assert [path.name for path in backups[:2]] == [".env.backup-old2", ".env.backup-old3"]
+    assert backups[-1].read_text() == "DEPLOYD_DB_PATH=deployd.sqlite3\n"

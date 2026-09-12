@@ -2,39 +2,36 @@
 
 set -Eeuo pipefail
 
-readonly PNPM_VERSION="11.20.0"
-readonly STATE_DIR="/var/lib/deployd"
-readonly SERVICE_FILE="/etc/systemd/system/deployd.service"
-readonly NGINX_SITE="/etc/nginx/sites-available/deployd"
-readonly NGINX_LINK="/etc/nginx/sites-enabled/deployd"
-readonly HTPASSWD_FILE="/etc/nginx/deployd.htpasswd"
+# shellcheck source=deploy/lib.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/lib.sh"
 
-die() {
-  printf 'error: %s\n' "$*" >&2
-  exit 1
-}
+readonly PNPM_VERSION="11.20.0"
+readonly NODE_VERSION="22.23.2"
+readonly NODE_MIN_MAJOR=22
+readonly NODE_MIN_MINOR=19
+readonly UV_VERSION="0.12.13"
+readonly APT_PACKAGES=(ca-certificates curl git make nginx apache2-utils openssl python3)
 
 require_install_user() {
-  [[ $(uname -s) == Linux ]] || die "this installer requires Debian/Ubuntu with systemd"
-  [[ ${EUID} -ne 0 ]] || die "run this installer as the repository owner, without sudo"
-  command -v sudo >/dev/null 2>&1 || die "sudo is required for system configuration"
+  require_normal_linux_user installer
 }
 
+# Every prompt honours an environment override so the installer can run unattended.
 prompt_default() {
-  local prompt=$1
-  local default=$2
-  local value
+  local variable=$1 prompt=$2 default=$3 value
+  if [[ -n ${!variable:-} ]]; then
+    printf '%s' "${!variable}"
+    return 0
+  fi
   read -r -p "${prompt} [${default}]: " value
   printf '%s' "${value:-$default}"
 }
 
 confirm_testing_mode() {
-  local answer
   printf '%s\n' \
     "Cloudflare Flexible mode leaves Cloudflare-to-origin traffic unencrypted." \
     "The management port must remain blocked by the firewall or restricted to a trusted network."
-  read -r -p "Continue with this testing-only setup? [y/N]: " answer
-  [[ ${answer,,} == "y" || ${answer,,} == "yes" ]] || exit 0
+  confirm "Continue with this testing-only setup?" || die "installation declined"
 }
 
 validate_domain() {
@@ -55,44 +52,122 @@ validate_port() {
     die "management port conflicts with HTTP, SMB, or deployd"
 }
 
-install_prerequisites() {
-  install -d -m 0755 "$HOME/.local/bin"
-  sudo apt-get update
-  sudo apt-get install -y ca-certificates curl git make nginx apache2-utils openssl python3
+fetch() {
+  curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --retry 3 \
+    --output "$2" "$1"
+}
 
-  if ! command -v node >/dev/null 2>&1; then
-    sudo apt-get install -y nodejs npm
+apt_install_missing() {
+  local package
+  local -a missing=()
+  for package in "${APT_PACKAGES[@]}"; do
+    [[ $(dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null) == installed ]] ||
+      missing+=("$package")
+  done
+  if ((${#missing[@]})); then
+    sudo apt-get update
+    sudo apt-get install -y "${missing[@]}"
   fi
+}
 
-  if ! command -v uv >/dev/null 2>&1; then
-    local installer
-    installer=$(mktemp /tmp/uv-installer.XXXXXX)
-    curl -LsSf https://astral.sh/uv/install.sh -o "$installer"
-    env UV_INSTALL_DIR="$HOME/.local/bin" sh "$installer"
-    unlink "$installer"
+node_meets_minimum() {
+  local binary=$1 version major minor
+  [[ -n $binary && -x $binary ]] || return 1
+  version=$("$binary" --version 2>/dev/null) || return 1
+  IFS=. read -r major minor _ <<<"${version#v}"
+  [[ $major =~ ^[0-9]+$ && $minor =~ ^[0-9]+$ ]] || return 1
+  ((major > NODE_MIN_MAJOR || (major == NODE_MIN_MAJOR && minor >= NODE_MIN_MINOR)))
+}
+
+node_arch() {
+  case "$(uname -m)" in
+    x86_64) printf 'x64' ;;
+    aarch64) printf 'arm64' ;;
+    *) die "unsupported architecture for Node.js: $(uname -m)" ;;
+  esac
+}
+
+install_node() {
+  local arch tarball workdir expected base
+  arch=$(node_arch)
+  tarball="node-v${NODE_VERSION}-linux-${arch}.tar.gz"
+  base="https://nodejs.org/dist/v${NODE_VERSION}"
+  workdir=$(mktemp -d /tmp/deployd-node.XXXXXX)
+  fetch "$base/$tarball" "$workdir/$tarball"
+  fetch "$base/SHASUMS256.txt" "$workdir/SHASUMS256.txt"
+  expected=$(awk -v name="$tarball" '$2 == name { print $1 }' "$workdir/SHASUMS256.txt")
+  [[ $expected =~ ^[0-9a-f]{64}$ ]] || die "SHASUMS256.txt has no entry for $tarball"
+  (cd "$workdir" && printf '%s  %s\n' "$expected" "$tarball" | sha256sum -c --quiet --strict -) ||
+    die "Node.js checksum verification failed"
+  [[ ! -L $NODE_DIR ]] || die "$NODE_DIR must not be a symbolic link"
+  rm -rf -- "$NODE_DIR"
+  install -d -m 0755 "$NODE_DIR"
+  tar -xzf "$workdir/$tarball" -C "$NODE_DIR" --strip-components=1
+  rm -rf -- "$workdir"
+}
+
+ensure_node() {
+  if node_meets_minimum "$NODE_DIR/bin/node" &&
+    [[ $("$NODE_DIR/bin/node" --version) == "v${NODE_VERSION}" ]]; then
+    return 0
   fi
-
-  command -v node >/dev/null 2>&1 || die "Node.js installation failed"
-  local node_ok
-  node_ok=$(node -e 'const [a,b]=process.versions.node.split(".").map(Number); process.stdout.write(String(a>22||(a===22&&b>=19)))')
-  [[ $node_ok == "true" ]] || die "Node.js 22.19 or newer is required"
-
-  if ! command -v pnpm >/dev/null 2>&1; then
-    if command -v corepack >/dev/null 2>&1; then
-      corepack enable --install-directory "$HOME/.local/bin"
-      corepack prepare "pnpm@${PNPM_VERSION}" --activate
-    else
-      command -v npm >/dev/null 2>&1 || sudo apt-get install -y npm
-      npm install --global --prefix "$HOME/.local" "pnpm@${PNPM_VERSION}"
-    fi
+  if node_meets_minimum "$(command -v node || true)"; then
+    return 0
   fi
+  install_node
+  node_meets_minimum "$NODE_DIR/bin/node" || die "Node.js installation failed"
+}
+
+uv_target() {
+  case "$(uname -m)" in
+    x86_64) printf 'x86_64-unknown-linux-gnu' ;;
+    aarch64) printf 'aarch64-unknown-linux-gnu' ;;
+    *) die "unsupported architecture for uv: $(uname -m)" ;;
+  esac
+}
+
+install_uv() {
+  local target tarball base workdir
+  target=$(uv_target)
+  tarball="uv-${target}.tar.gz"
+  base="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}"
+  workdir=$(mktemp -d /tmp/deployd-uv.XXXXXX)
+  fetch "$base/$tarball" "$workdir/$tarball"
+  fetch "$base/$tarball.sha256" "$workdir/$tarball.sha256"
+  (cd "$workdir" && sha256sum -c --quiet --strict "$tarball.sha256") ||
+    die "uv checksum verification failed"
+  tar -xzf "$workdir/$tarball" -C "$workdir"
+  install -d -m 0755 "$TOOL_BIN_DIR"
+  install -m 0755 "$workdir/uv-${target}/uv" "$workdir/uv-${target}/uvx" "$TOOL_BIN_DIR/"
+  rm -rf -- "$workdir"
+}
+
+ensure_uv() {
+  command -v uv >/dev/null 2>&1 && return 0
+  install_uv
   command -v uv >/dev/null 2>&1 || die "uv installation failed"
+}
+
+ensure_pnpm() {
+  if ! command -v pnpm >/dev/null 2>&1; then
+    command -v corepack >/dev/null 2>&1 || die "corepack is missing from the Node.js installation"
+    corepack enable --install-directory "$TOOL_BIN_DIR"
+    corepack prepare "pnpm@${PNPM_VERSION}" --activate
+  fi
   command -v pnpm >/dev/null 2>&1 || die "pnpm installation failed"
+}
+
+install_prerequisites() {
+  install -d -m 0755 "$TOOL_BIN_DIR"
+  apt_install_missing
+  ensure_node
+  ensure_uv
+  ensure_pnpm
 }
 
 check_checkout() {
   local repo_root=$1
-  [[ $repo_root == "/opt/deployd" ]] || die "clone deployd at /opt/deployd before running"
+  [[ $repo_root == "$REPO_ROOT" ]] || die "clone deployd at $REPO_ROOT before running"
   [[ ! -L $repo_root ]] || die "the checkout must not be a symbolic link"
   [[ -f "$repo_root/pyproject.toml" && -f "$repo_root/web/package.json" ]] ||
     die "installer must run from the deployd repository"
@@ -102,34 +177,57 @@ check_checkout() {
     die "tracked repository changes detected; commit or restore them first"
 }
 
+# Listeners on 80 and the management port must be nginx; 8300 must be free unless deployd holds it.
+check_ports() {
+  local admin_port=$1 port listener
+  for port in 80 "$admin_port"; do
+    listener=$(sudo ss -Hltnp "sport = :${port}")
+    [[ -z $listener || $listener == *'"nginx"'* ]] ||
+      die "port ${port} is used by another service: ${listener}"
+  done
+  if ! systemctl is-active --quiet deployd.service; then
+    listener=$(sudo ss -Hltnp 'sport = :8300')
+    [[ -z $listener ]] || die "port 8300 is used by another service: ${listener}"
+  fi
+}
+
 repair_legacy_build_ownership() {
   local repo_root=$1
   local path
   for path in \
     "$repo_root/.python" \
+    "$repo_root/.node" \
     "$repo_root/.venv" \
     "$repo_root/.pytest_cache" \
     "$repo_root/.ruff_cache" \
     "$repo_root/web/node_modules" \
     "$repo_root/web/dist"; do
     [[ ! -L $path ]] || die "build directory must not be a symbolic link: $path"
-    if [[ -d $path ]] && [[ -n $(find "$path" -xdev ! -uid "$(id -u)" -print -quit) ]]; then
+    if [[ -d $path ]] && [[ -n $(sudo find "$path" -xdev ! -uid "$(id -u)" -print -quit) ]]; then
       sudo chown -R "$(id -u):$(id -g)" "$path"
     fi
   done
 }
 
-install_application() {
+# Validation and the web build run while the current service keeps serving.
+prepare_application() {
   local repo_root=$1
   local effective_pnpm
   effective_pnpm=$(pnpm --dir "$repo_root/web" --version)
   [[ $effective_pnpm == "$PNPM_VERSION" ]] ||
     die "web/package.json requires pnpm ${PNPM_VERSION}, got ${effective_pnpm}"
-  make -C "$repo_root" install
-  make -C "$repo_root" lint
-  make -C "$repo_root" test
-  make -C "$repo_root" audit
+  make -C "$repo_root" install-web
+  if [[ ${DEPLOYD_INSTALL_SKIP_CHECKS:-} == 1 && ${GITHUB_ACTIONS:-} == true ]]; then
+    printf 'Skipping lint, tests and audit; CI runs them in dedicated jobs.\n'
+  else
+    make -C "$repo_root" check
+  fi
   make -C "$repo_root" build
+}
+
+install_application() {
+  local repo_root=$1
+  make -C "$repo_root" install
   local interpreter
   interpreter=$(readlink -f "$repo_root/.venv/bin/python")
   [[ $interpreter == /usr/* || $interpreter == /opt/* ]] ||
@@ -148,13 +246,96 @@ install_application() {
 create_service_user() {
   sudo test ! -L "$STATE_DIR" || die "$STATE_DIR must not be a symbolic link"
   if ! id deployd >/dev/null 2>&1; then
-    sudo useradd --system --user-group --home-dir /opt/deployd --shell /usr/sbin/nologin deployd
+    sudo useradd --system --user-group --home-dir "$REPO_ROOT" --shell /usr/sbin/nologin deployd
   fi
   [[ $(id -u deployd) -ne 0 && $(id -gn deployd) == deployd ]] ||
     die "existing deployd identity must be non-root with primary group deployd"
   sudo install -d -o deployd -g deployd -m 0700 "$STATE_DIR"
-  sudo test ! -L /srv/deployd || die "/srv/deployd must not be a symbolic link"
-  sudo install -d -o deployd -g deployd -m 0755 /srv/deployd
+  sudo test ! -L "$RELEASE_ROOT" || die "$RELEASE_ROOT must not be a symbolic link"
+  sudo install -d -o deployd -g deployd -m 0755 "$RELEASE_ROOT"
+}
+
+runtime_db_path() {
+  local repo_root=$1 value=""
+  if sudo test -f "$repo_root/.env"; then
+    value=$(sudo python3 -I - "$repo_root/.env" <<'PY'
+import sys
+
+value = ""
+with open(sys.argv[1], encoding="utf-8") as handle:
+    for line in handle:
+        key, separator, raw = line.strip().partition("=")
+        if separator and key.strip() == "DEPLOYD_DB_PATH":
+            value = raw.strip().strip("'\"")
+print(value)
+PY
+    ) || die "could not read DEPLOYD_DB_PATH from $repo_root/.env"
+  fi
+  printf '%s' "${value:-$STATE_DIR/deployd.sqlite3}"
+}
+
+pending_deploys() {
+  sudo -u deployd env -i PATH=/usr/bin:/bin python3 -I - "$1" <<'PY'
+import sqlite3
+import sys
+from pathlib import Path
+
+conn = sqlite3.connect(Path(sys.argv[1]).resolve().as_uri() + "?mode=ro", uri=True, timeout=10)
+try:
+    row = conn.execute(
+        "SELECT count(*) FROM deploys WHERE status IN ('queued', 'running')"
+    ).fetchone()
+    print(row[0])
+except sqlite3.OperationalError:
+    print(0)
+finally:
+    conn.close()
+PY
+}
+
+wait_for_idle_queue() {
+  local db=$1 timeout=${DEPLOYD_INSTALL_WAIT_SECONDS:-600} waited=0 count
+  systemctl is-active --quiet deployd.service || return 0
+  sudo test -f "$db" || return 0
+  count=$(pending_deploys "$db") || die "could not read the deploy queue"
+  [[ $count =~ ^[0-9]+$ ]] || die "unexpected deploy queue state: $count"
+  ((count > 0)) || return 0
+  printf '%s deploy(s) queued or running; deployd is not stopped while deploys are active.\n' "$count"
+  confirm "Wait up to ${timeout}s for them to finish?" ||
+    die "upgrade cancelled; the running service was not changed"
+  while ((waited < timeout)); do
+    sleep 5
+    waited=$((waited + 5))
+    count=$(pending_deploys "$db") || die "could not read the deploy queue"
+    [[ $count =~ ^[0-9]+$ ]] || die "unexpected deploy queue state: $count"
+    ((count > 0)) || return 0
+  done
+  die "deploys still active after ${timeout}s; rerun the installer later"
+}
+
+backup_state_db() {
+  local db=$1 target
+  sudo test -f "$db" || return 0
+  sudo test ! -L "$BACKUP_DIR" || die "$BACKUP_DIR must not be a symbolic link"
+  sudo install -d -o deployd -g deployd -m 0700 "$BACKUP_DIR"
+  target="$BACKUP_DIR/deployd-$(date -u +%Y%m%dT%H%M%SZ).sqlite3"
+  sudo -u deployd env -i PATH=/usr/bin:/bin python3 -I - "$db" "$target" <<'PY' || die "state backup failed"
+import sqlite3
+import sys
+from pathlib import Path
+
+source = sqlite3.connect(Path(sys.argv[1]).resolve().as_uri() + "?mode=ro", uri=True, timeout=30)
+target = sqlite3.connect(sys.argv[2])
+try:
+    with target:
+        source.backup(target)
+finally:
+    target.close()
+    source.close()
+PY
+  sudo chmod 0600 "$target"
+  prune_privileged_files "$BACKUP_DIR" 5 'deployd-*.sqlite3'
+  printf 'State backed up to %s\n' "$target"
 }
 
 configure_runtime() {
@@ -197,7 +378,13 @@ configure_runtime() {
     "$repo_root/.venv/bin/python" "$repo_root/deploy/runtime_config.py" \
     check --repo "$repo_root" || die "runtime preflight failed; service was not restarted"
 
-  printf '%s' "$generated_token"
+  [[ -n $generated_token ]] && printf 'generated'
+  return 0
+}
+
+existing_basic_auth_user() {
+  sudo test -f "$HTPASSWD_FILE" || return 1
+  sudo cut -d: -f1 "$HTPASSWD_FILE" | head -n 1
 }
 
 configure_basic_auth() {
@@ -206,17 +393,32 @@ configure_basic_auth() {
   if sudo test -f "$HTPASSWD_FILE"; then
     printf 'Keeping existing management Basic Auth file: %s\n' "$HTPASSWD_FILE"
   else
-    printf 'Choose a separate password for the management web interface.\n'
     local password confirmation
-    read -r -s -p "Management password: " password
-    printf '\n'
-    read -r -s -p "Confirm management password: " confirmation
-    printf '\n'
+    if [[ -n ${DEPLOYD_INSTALL_ADMIN_PASSWORD:-} ]]; then
+      password=$DEPLOYD_INSTALL_ADMIN_PASSWORD
+      confirmation=$password
+    else
+      printf 'Choose a separate password for the management web interface.\n'
+      read -r -s -p "Management password: " password
+      printf '\n'
+      read -r -s -p "Confirm management password: " confirmation
+      printf '\n'
+    fi
     [[ -n $password && $password == "$confirmation" ]] || die "passwords are empty or do not match"
     printf '%s\n' "$password" | sudo htpasswd -iBc "$HTPASSWD_FILE" "$username"
   fi
   sudo chown root:www-data "$HTPASSWD_FILE"
   sudo chmod 0640 "$HTPASSWD_FILE"
+}
+
+render_security_headers() {
+  cat <<'EOF'
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+        add_header Content-Security-Policy "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'" always;
+EOF
 }
 
 render_nginx_config() {
@@ -225,8 +427,13 @@ render_nginx_config() {
   local domain=$3
   local admin_bind=$4
   local admin_port=$5
+  local headers
+  headers=$(render_security_headers)
 
+  # add_header does not inherit into locations that set their own, so the set is repeated per location.
   cat >"$output" <<EOF
+limit_req_zone \$binary_remote_addr zone=deployd_deploys:1m rate=10r/m;
+
 server {
     listen 80;
     server_name ${domain};
@@ -241,6 +448,8 @@ server {
 
     location = /deploys {
         limit_except POST { deny all; }
+        limit_req zone=deployd_deploys burst=5 nodelay;
+        limit_req_status 429;
         proxy_pass http://127.0.0.1:8300;
         proxy_set_header Host \$host;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -273,22 +482,19 @@ server {
     auth_basic "deployd management";
     auth_basic_user_file ${HTPASSWD_FILE};
 
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-Frame-Options "DENY" always;
-    add_header Referrer-Policy "no-referrer" always;
-    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
-    add_header Content-Security-Policy "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'" always;
-
     location /api/ {
         proxy_pass http://127.0.0.1:8300/;
         proxy_set_header Host \$host;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Remote-User \$remote_user;
+${headers}
         add_header Cache-Control "no-store" always;
     }
 
     location / {
         try_files \$uri \$uri/ /index.html;
+${headers}
     }
 }
 EOF
@@ -324,7 +530,7 @@ write_nginx_config() {
     die "$NGINX_LINK points to a different site"
   fi
   if sudo test -f "$NGINX_SITE"; then
-    backup=$(sudo mktemp "${NGINX_SITE}.backup.XXXXXXXX")
+    backup="${NGINX_SITE}.backup.$(date -u +%Y%m%dT%H%M%SZ)"
     sudo cp -a "$NGINX_SITE" "$backup"
   fi
 
@@ -360,6 +566,7 @@ write_nginx_config() {
     die "Nginx activation failed; the previous configuration was restored"
   fi
   sudo systemctl enable nginx
+  prune_privileged_files "$(dirname -- "$NGINX_SITE")" 3 'deployd.backup.*'
 }
 
 install_service() {
@@ -417,17 +624,16 @@ check_website_parent() {
 }
 
 install_website_helper() {
-  local repo_root=$1 answer path rule
-  if ! sudo test -f /etc/sudoers.d/deployd-connect; then
+  local repo_root=$1 path rule
+  if ! sudo test -f "$HELPER_SUDOERS"; then
     printf '%s\n' \
       'Optional: allow the management UI to connect existing static websites.' \
       'This grants deployd a restricted root helper for direct children of /var/www.' \
       'Each live switch requires UI confirmation and preserves the original as b4deployd.'
-    read -r -p 'Enable website connection? [y/N]: ' answer
-    [[ ${answer,,} == y || ${answer,,} == yes ]] || return 0
+    confirm 'Enable website connection?' || return 0
   fi
   check_website_parent
-  for path in /usr/local /usr/local/libexec /usr/local/libexec/deployd /var/lib/deployd-connect; do
+  for path in /usr/local /usr/local/libexec /usr/local/libexec/deployd "$CONNECT_STATE_DIR"; do
     sudo test ! -L "$path" || die "helper path must not be a symlink: $path"
     if sudo test -e "$path"; then
       [[ $(sudo stat -c '%U' "$path") == root ]] || die "helper path must be root-owned: $path"
@@ -438,31 +644,35 @@ install_website_helper() {
     sudo install -d -o root -g root -m 0755 /var/www
   fi
   sudo install -d -o root -g root -m 0755 /usr/local/libexec /usr/local/libexec/deployd
-  sudo install -d -o root -g root -m 0700 /var/lib/deployd-connect
-  sudo test ! -L /usr/local/libexec/deployd/connect-website || die "helper executable must not be a symlink"
-  sudo install -o root -g root -m 0755 "$repo_root/deploy/connect_website.py" /usr/local/libexec/deployd/connect-website
-  rule=$(sudo mktemp /etc/sudoers.d/deployd-connect.XXXXXX)
-  printf 'deployd ALL=(root) NOPASSWD: NOSETENV: /usr/local/libexec/deployd/connect-website\n' | sudo tee "$rule" >/dev/null
+  sudo install -d -o root -g root -m 0700 "$CONNECT_STATE_DIR"
+  sudo test ! -L "$HELPER_BIN" || die "helper executable must not be a symlink"
+  sudo install -o root -g root -m 0755 "$repo_root/deploy/connect_website.py" "$HELPER_BIN"
+  rule=$(sudo mktemp "${HELPER_SUDOERS}.XXXXXX")
+  printf 'deployd ALL=(root) NOPASSWD: NOSETENV: %s\n' "$HELPER_BIN" | sudo tee "$rule" >/dev/null
   sudo chmod 0440 "$rule"
   if ! sudo visudo -cf "$rule"; then
     sudo rm -f -- "$rule"
     die "website helper sudo policy did not validate"
   fi
-  sudo mv -T -- "$rule" /etc/sudoers.d/deployd-connect
+  sudo mv -T -- "$rule" "$HELPER_SUDOERS"
 }
 
 main() {
   require_install_user
-  export PATH="$HOME/.local/bin:$PATH"
+  export PATH="$NODE_DIR/bin:$TOOL_BIN_DIR:$PATH"
   confirm_testing_mode
 
-  local script_dir repo_root domain admin_bind admin_port admin_username generated_token
+  local script_dir repo_root domain admin_bind admin_port admin_username token_state db_path
   script_dir=$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
   repo_root=$(cd -P -- "$script_dir/.." && pwd)
-  domain=$(prompt_default "Public deployd domain" "deployd.example.com")
-  admin_bind=$(prompt_default "Management bind address" "0.0.0.0")
-  admin_port=$(prompt_default "Management port" "844")
-  admin_username=$(prompt_default "Management Basic Auth username" "deployd-admin")
+  domain=$(prompt_default DEPLOYD_INSTALL_DOMAIN "Public deployd domain" "deployd.example.com")
+  admin_bind=$(prompt_default DEPLOYD_INSTALL_ADMIN_BIND "Management bind address" "127.0.0.1")
+  admin_port=$(prompt_default DEPLOYD_INSTALL_ADMIN_PORT "Management port" "844")
+  if admin_username=$(existing_basic_auth_user); then
+    printf 'Management Basic Auth user (existing): %s\n' "$admin_username"
+  else
+    admin_username=$(prompt_default DEPLOYD_INSTALL_ADMIN_USER "Management Basic Auth username" "deployd-admin")
+  fi
 
   validate_domain "$domain"
   validate_bind "$admin_bind"
@@ -473,13 +683,18 @@ main() {
   check_checkout "$repo_root"
   install_prerequisites
   create_service_user
-  if sudo test -f /etc/sudoers.d/deployd-connect; then
+  if sudo test -f "$HELPER_SUDOERS"; then
     check_website_parent
   fi
-  stop_for_upgrade
+  check_ports "$admin_port"
   repair_legacy_build_ownership "$repo_root"
+  prepare_application "$repo_root"
+  db_path=$(runtime_db_path "$repo_root")
+  wait_for_idle_queue "$db_path"
+  backup_state_db "$db_path"
+  stop_for_upgrade
   install_application "$repo_root"
-  generated_token=$(configure_runtime "$repo_root") || die "runtime setup failed"
+  token_state=$(configure_runtime "$repo_root") || die "runtime setup failed"
   configure_basic_auth "$admin_username"
   install_website_helper "$repo_root"
   install_service "$repo_root"
@@ -488,12 +703,12 @@ main() {
 
   printf '\nInstallation complete.\n'
   printf 'Public API: https://%s (Cloudflare proxy to origin port 80)\n' "$domain"
-  printf 'Management UI: http://<server-ip>:%s\n' "$admin_port"
+  printf 'Management UI: http://%s:%s\n' "$admin_bind" "$admin_port"
   printf 'Firewall management: not modified; keep port %s restricted.\n' "$admin_port"
-  if [[ -n $generated_token ]]; then
-    printf '\nDEPLOYD_ADMIN_TOKEN (shown once):\n%s\n' "$generated_token"
+  if [[ $token_state == generated ]]; then
+    printf '\nAdmin token generated in %s/.env; read it with:\n  sudo grep DEPLOYD_ADMIN_TOKEN %s/.env\n' "$repo_root" "$repo_root"
   else
-    printf 'Existing admin token preserved; it was not displayed.\n'
+    printf 'Existing admin token preserved in %s/.env.\n' "$repo_root"
   fi
   printf '\nSet Cloudflare SSL mode to Flexible only for this test setup.\n'
   printf 'Upgrade to Full (strict) before production use.\n'

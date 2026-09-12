@@ -81,23 +81,26 @@ def _yaml_string(dumper, value):
 _WorkflowDumper.add_representer(str, _yaml_string)
 
 
-def setup_bundle(name: str, repository: str, settings: GitHubActionsSettings, *, static_site: bool):
+ENVIRONMENT_HINT = (
+    "    # environment: production   # optional: require reviewers before publishing and deploying"
+)
+
+
+def render_workflow(name: str, settings: GitHubActionsSettings, *, static_site: bool) -> str:
     template = files("deployd").joinpath("templates/deploy.yml").read_text(encoding="utf-8")
     workflow = yaml.safe_load(template)
     workflow["name"] = f"Deploy {name}"
-    workflow["on"] = {"workflow_dispatch": {}}
     if settings.automatic:
         workflow["on"]["push"] = {"branches": [settings.branch]}
     workflow["concurrency"]["group"] = f"deploy-{name}"
-    job = workflow["jobs"]["deploy"]
-    job["if"] = f"github.ref == 'refs/heads/{settings.branch}'"
-    job["env"] = {
+    workflow["env"] = {
         "APP_NAME": name,
         "PROJECT_DIR": settings.project_dir,
         "OUTPUT_DIR": "." if settings.kind == "static" else settings.output_dir,
     }
-    steps = job["steps"]
-    steps[0]["with"] = {"persist-credentials": False}
+    build = workflow["jobs"]["build"]
+    build["if"] = f"github.ref == 'refs/heads/{settings.branch}'"
+    steps = build["steps"]
     build_steps = []
     if settings.kind in {"pnpm", "npm"}:
         if settings.kind == "pnpm":
@@ -137,8 +140,21 @@ def setup_bundle(name: str, repository: str, settings: GitHubActionsSettings, *,
                 "run": 'test -s "$PROJECT_DIR/$OUTPUT_DIR/index.html"',
             }
         )
-    steps[2:2] = build_steps
-    workflow_text = yaml.dump(workflow, Dumper=_WorkflowDumper, sort_keys=False, width=1000)
+    insert_at = next(
+        i for i, step in enumerate(steps) if step.get("name") == "Check artifact contents"
+    )
+    steps[insert_at:insert_at] = build_steps
+    text = yaml.dump(workflow, Dumper=_WorkflowDumper, sort_keys=False, width=1000)
+    # PyYAML drops comments, so the optional environment hint is re-inserted under the publish job.
+    lines = text.splitlines()
+    publish_at = lines.index("  publish:")
+    needs_at = next(i for i in range(publish_at, len(lines)) if lines[i] == "    needs: build")
+    lines.insert(needs_at + 1, ENVIRONMENT_HINT)
+    return "\n".join(lines) + "\n"
+
+
+def setup_bundle(name: str, repository: str, settings: GitHubActionsSettings, *, static_site: bool):
+    workflow_text = render_workflow(name, settings, static_site=static_site)
     instructions = f"""# GitHub Actions setup: {name}
 
 Repository: https://github.com/{repository}
@@ -166,11 +182,16 @@ is the output. Keep backend code and private files outside that folder.
 Packaging rejects symlinks, hidden files, node_modules and common private-key
 files. Review your output for other sensitive content before deploying.
 
-The workflow publishes a commit-specific release asset using github.token with
-Contents: write. For private repositories, configure a read-only GitHub token
-in deployd. No GitHub write token or pull-request integration is needed in deployd.
+The build job runs read-only and uploads the packaged artifact. The publish job
+creates a commit-specific release asset using github.token with Contents: write,
+notifies deployd, and prunes deploy-{name}-* releases beyond the newest 10.
+For private repositories, configure a read-only GitHub token in deployd. No
+GitHub write token or pull-request integration is needed in deployd.
 An existing artifact is never overwritten; a different build for the same commit
 fails. Push a new commit if build inputs or artifacts need to change.
+Run the workflow manually with dry_run checked to build and package without
+publishing. Uncomment the environment line in the publish job to require
+reviewers before anything is published or deployed.
 
 This does not change Nginx or connect your local site path. Verify the first
 release and web-server permissions before the initial site cutover.

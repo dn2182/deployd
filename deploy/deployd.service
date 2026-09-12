@@ -1,8 +1,10 @@
 # /etc/systemd/system/deployd.service
 #
-# Setup on the server:
-#   useradd --system --home /opt/deployd deployd
-#   /opt/deployd holds the repo clone, .venv (make install), .env, config/apps.yaml
+# Installed by deploy/install-ubuntu.sh, which also creates the identity:
+#   useradd --system --user-group --home-dir /opt/deployd --shell /usr/sbin/nologin deployd
+#   /opt/deployd     repo clone, .venv, .node, .env (root:deployd 0640)
+#   /var/lib/deployd apps.yaml, secrets.env, deployd.sqlite3, backups/
+#   /srv/deployd     managed release directories
 #   systemctl enable --now deployd
 #
 # Restart commands in apps.yaml usually need systemctl on OTHER services;
@@ -26,9 +28,19 @@ EnvironmentFile=/opt/deployd/.env
 ExecStart=/opt/deployd/.venv/bin/deployd
 Restart=on-failure
 RestartSec=3
+# The service pings the watchdog every 15 s; systemd restarts it after a missed minute.
+WatchdogSec=60
+# Per-app migrate/restart commands may run up to 600 s; the stop grace period exceeds that.
+TimeoutStopSec=660
 # Restart via sudo requires narrow sudoers rules; otherwise enable NoNewPrivileges.
 NoNewPrivileges=no
+# sudo children inherit this bounding set, so restart helpers cannot gain capabilities outside it.
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER CAP_FSETID CAP_SETUID CAP_SETGID CAP_AUDIT_WRITE CAP_KILL
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# ProtectSystem=full keeps /var/www writable for the root website helper.
 ProtectSystem=full
+ReadOnlyPaths=/opt/deployd
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
@@ -47,7 +59,8 @@ LockPersonality=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallArchitectures=native
 UMask=0077
-TimeoutStopSec=30
+LogRateLimitIntervalSec=30
+LogRateLimitBurst=1000
 
 [Install]
 WantedBy=multi-user.target

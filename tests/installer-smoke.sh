@@ -11,8 +11,10 @@ checkout=$PWD
 sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0755 /opt/deployd
 git clone --no-hardlinks "$checkout" /opt/deployd
 
-printf 'y\ndeployd.example.com\n127.0.0.1\n844\nsmoke-admin\nsmoke-password\nsmoke-password\ny\n' |
-  /opt/deployd/deploy/install-ubuntu.sh >"$RUNNER_TEMP/deployd-install.log" 2>&1
+export DEPLOYD_INSTALL_DOMAIN=deployd.example.com DEPLOYD_INSTALL_ADMIN_BIND=127.0.0.1 \
+  DEPLOYD_INSTALL_ADMIN_PORT=844 DEPLOYD_INSTALL_ADMIN_USER=smoke-admin \
+  DEPLOYD_INSTALL_ADMIN_PASSWORD=smoke-password DEPLOYD_INSTALL_YES=1
+/opt/deployd/deploy/install-ubuntu.sh </dev/null >"$RUNNER_TEMP/deployd-install.log" 2>&1
 sudo systemctl is-active --quiet deployd
 curl --fail --silent http://127.0.0.1:8300/healthz
 poll=$(curl --silent --show-error --max-time 5 -H 'Host: deployd.example.com' \
@@ -29,11 +31,18 @@ sudo env GITHUB_ACTIONS=true python3 "$checkout/tests/website-smoke.py"
 sudo -u deployd touch /srv/deployd/retained-app-data
 owner=$(id -u deployd)
 before=$(sudo sha256sum /opt/deployd/.env /var/lib/deployd/apps.yaml /var/lib/deployd/secrets.env)
-printf 'y\ndeployd.example.com\n127.0.0.1\n844\nsmoke-admin\n' |
-  /opt/deployd/deploy/install-ubuntu.sh >"$RUNNER_TEMP/deployd-upgrade.log" 2>&1
+/opt/deployd/deploy/install-ubuntu.sh </dev/null >"$RUNNER_TEMP/deployd-upgrade.log" 2>&1
 after=$(sudo sha256sum /opt/deployd/.env /var/lib/deployd/apps.yaml /var/lib/deployd/secrets.env)
 [[ $before == "$after" ]]
 sudo systemctl is-active --quiet deployd
+grep -q 'Management Basic Auth user (existing): smoke-admin' "$RUNNER_TEMP/deployd-upgrade.log"
+grep -qE '[0-9a-f]{64}' "$RUNNER_TEMP/deployd-install.log" && exit 1
+[[ $(sudo find /var/lib/deployd/backups -maxdepth 1 -name 'deployd-*.sqlite3' | wc -l) == 1 ]]
+[[ $(sudo stat -c '%U:%a' /var/lib/deployd/backups) == deployd:700 ]]
+curl --silent --output /dev/null --write-out '%{http_code}' -u smoke-admin:smoke-password \
+  http://127.0.0.1:844/api/healthz | grep -q 200
+curl --silent --head -u smoke-admin:smoke-password http://127.0.0.1:844/api/healthz |
+  grep -qi '^x-frame-options: DENY'
 
 printf 'y\nREMOVE deployd\nr\n' | /opt/deployd/deploy/uninstall-ubuntu.sh
 [[ ! -e /opt/deployd && ! -e /var/lib/deployd ]]

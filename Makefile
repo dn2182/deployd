@@ -2,11 +2,21 @@ VENV := .venv
 PY   := $(VENV)/bin/python
 UV   ?= uv
 export UV_PYTHON_INSTALL_DIR := $(CURDIR)/.python
+ifneq ($(wildcard $(CURDIR)/.node/bin/node),)
+export PATH := $(CURDIR)/.node/bin:$(PATH)
+endif
 
-.PHONY: install build clean dev dev-web update test lint audit
+# Runs project tooling in a throwaway environment so a live .venv is never modified.
+UVRUN := $(UV) run --extra dev --frozen --isolated
+PY_SOURCES := src tests deploy/runtime_config.py deploy/connect_website.py
+
+.PHONY: install install-web build clean dev dev-web update test lint audit check
 
 install:
 	$(UV) sync --extra dev --frozen
+	cd web && pnpm install --frozen-lockfile
+
+install-web:
 	cd web && pnpm install --frozen-lockfile
 
 build:
@@ -23,13 +33,20 @@ test:
 	cd web && pnpm test
 
 lint:
-	$(VENV)/bin/ruff check src tests deploy/runtime_config.py deploy/connect_website.py
-	$(VENV)/bin/ruff format --check src tests deploy/runtime_config.py deploy/connect_website.py
+	$(VENV)/bin/ruff check $(PY_SOURCES)
+	$(VENV)/bin/ruff format --check $(PY_SOURCES)
 	cd web && pnpm lint
 
 audit:
 	$(UV) run --with pip-audit==2.10.1 pip-audit
 	cd web && pnpm audit --prod
+
+check:
+	$(UVRUN) ruff check $(PY_SOURCES)
+	$(UVRUN) ruff format --check $(PY_SOURCES)
+	$(UVRUN) pytest -q
+	$(UVRUN) --with pip-audit==2.10.1 pip-audit
+	cd web && pnpm lint && pnpm test && pnpm audit --prod
 
 update:
 	$(UV) lock --upgrade
