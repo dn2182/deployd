@@ -29,13 +29,25 @@ fijo firmado por HMAC es toda la superficie de ataque.
 - **Migraciones que condicionan el release** — migraciones SQL forward-only
   con checksum (`deployd-migrate`, SQL Server vía pyodbc) corren antes del
   cutover y detienen el despliegue en seco si fallan
+- **Hooks y aserciones de salud** — comandos opcionales `before_cutover` y
+  `after_health`, y health checks que pueden exigir el SHA desplegado en el
+  cuerpo o en un header de la respuesta, para que un proceso viejo no pase
 - **UI de administración** — registro de aplicaciones, rotación de secretos
-  en un clic (se muestran una sola vez), historial de despliegues con log
-  por paso, redeploy, estado en vivo
+  en un clic (se muestran una sola vez), historial con log por paso, redeploy,
+  cancelar, congelar, rollback, estado por app, bitácora de auditoría y
+  actualización en vivo mientras corre un deploy
+- **Notificaciones** — webhook HTTPS por app (JSON genérico, Slack o Discord)
+  en éxito, fallo o rollback
 - **Nativo en bare-host** — systemd en Linux, NSSM/IIS en Windows; un solo
-  servicio Python con un archivo de estado SQLite
-- **Cola consciente de reinicios** — los deploys en cola se recuperan; los
-  interrumpidos fallan explícitamente en vez de quedar en `running`
+  servicio Python con un archivo de estado SQLite, el comando `deployd check`
+  y soporte para el watchdog de systemd
+- **Cola consciente de reinicios** — los deploys en cola se recuperan; un push
+  más nuevo reemplaza a los que seguían en cola; los pasos desde migrate en
+  adelante terminan aunque el servicio se detenga, y el trabajo interrumpido
+  antes de ese punto se reanuda al reiniciar
+- **Comandos contenidos** — los procesos de migrate, restart y hooks reciben un
+  entorno depurado; los secretos del servicio nunca llegan al código del
+  artefacto
 
 ## Cómo funciona
 
@@ -48,13 +60,20 @@ API de despliegue (FastAPI)  -- valida, encola, 202 + deploy_id
       |
       v
 Worker de despliegue (cola serializada por app)
-      +--> descarga el artefacto + verifica SHA256
-      +--> desempaqueta en release único     (límites + path traversal seguro)
-      +--> ejecuta migraciones               (forward-only, se detiene si falla)
-      +--> cutover                           (intercambio de directorios o enlaces)
-      +--> restart + health check            (falla => rollback automático)
-      +--> registra estado + log por paso    (CI consulta GET /deploys/{id})
+      +--> descarga el artefacto + verifica SHA256  (hash en streaming, con reintentos)
+      +--> desempaqueta en release único            (límites + path traversal seguro)
+      +--> ejecuta migraciones                      (forward-only, se detiene si falla)
+      +--> hook before_cutover                      (opcional)
+      +--> cutover                                  (intercambio de directorios o enlaces)
+      +--> restart + health check                   (falla => rollback automático)
+      +--> hook after_health                        (opcional, falla => rollback automático)
+      +--> registra estado, notifica, log por paso  (CI consulta GET /deploys/{id})
 ```
+
+Todo lo que va desde `migrate` en adelante es la fase de commit: una vez que
+empieza, detener el servicio espera a que termine (hasta
+`DEPLOYD_DRAIN_TIMEOUT_SECONDS`). Una parada durante descarga, verificación o
+desempaquetado devuelve el deploy a la cola y se reanuda al reiniciar.
 
 ### Decisiones de diseño
 
@@ -275,9 +294,13 @@ X-Deploy-Signature: sha256=<hmac hex de "{timestamp}.{nonce}.{cuerpo crudo}">
 ```
 
 `202 {deploy_id}` → consulta `GET /deploys/{deploy_id}` para
-`queued | running | succeeded | failed | rolled_back` más el log por paso.
-Si se pierde la respuesta `202`, reintenta exactamente el mismo request
-firmado y nonce; deployd devuelve el `deploy_id` original sin duplicarlo.
+`queued | running | succeeded | failed | rolled_back | superseded | cancelled`
+más la línea de tiempo por paso. La salida de los comandos solo se incluye
+cuando el request lleva el token de administración; CI ve nombres y estados de
+los pasos. Si se pierde la respuesta `202`, reintenta exactamente el mismo
+request firmado y nonce; deployd devuelve el `deploy_id` original sin
+duplicarlo. Un push que llega mientras un deploy anterior de la misma app sigue
+en cola marca ese anterior como `superseded`; una app congelada responde `423`.
 
 ## Administración de versiones
 
@@ -453,6 +476,47 @@ se convierte a `keep_previous = keep_releases - 1`, conservando su política.
 Por ejemplo, `keep_releases: 5` equivale a `keep_previous: 4`.
 Un valor anterior `keep_previous: null` ahora usa el valor predeterminado de una versión anterior.
 
+## Operación
+
+- **Congelar** una app desde su panel de estado (o
+  `POST /admin/apps/{name}/freeze`) rechaza los deploys de CI con `423` durante
+  un incidente o una ventana de mantenimiento. La activación local y el
+  rollback siguen funcionando congelada.
+- **Cancelar** un deploy en cola desde el historial
+  (`POST /admin/deploys/{id}/cancel`). Los deploys en ejecución no se cancelan;
+  un push más nuevo reemplaza automáticamente a los que están en cola.
+- **Rollback** desde una fila fallida del historial: activa el release anterior
+  retenido por el mismo camino de cutover, restart y health check.
+- **Hooks**: `hooks.before_cutover` corre en el directorio del release nuevo
+  después de las migraciones; `hooks.after_health` corre en el release vivo
+  cuando el health check pasó y hace rollback si falla. Ambos son listas argv
+  con su propio `timeout_seconds`, igual que `migrate` y `restart`. Los comandos
+  reciben `DEPLOYD_APP`, `DEPLOYD_DEPLOY_ID`, `DEPLOYD_COMMIT_SHA`,
+  `DEPLOYD_RELEASE_DIR` y `DEPLOYD_CURRENT`, y nada más del entorno del
+  servicio.
+- **Aserciones de salud**: `health.expect_body` (subcadena) y
+  `health.expect_header` (`Nombre: valor`) aceptan el marcador `{commit_sha}`.
+  Expón el SHA en ejecución desde tu app y configura una de las dos; un restart
+  que dejó al proceso viejo sirviendo falla y hace rollback.
+- **Notificaciones**: `notify.url` (HTTPS), `notify.events` (cualquiera de
+  `succeeded`, `failed`, `rolled_back`) y `notify.format` (`generic` JSON,
+  `slack` o `discord` en texto). La entrega se reintenta ante errores del
+  servidor y nunca afecta el resultado del deploy.
+- **Bitácora de auditoría**: cada mutación administrativa registra al usuario
+  de Basic Auth que actuó (desde `X-Remote-User`, fijado por el sitio Nginx de
+  administración) en **Auditoría** y en `GET /admin/audit`.
+- **Retención**: los deploys terminados con más de `DEPLOYD_HISTORY_KEEP_DAYS`
+  días (90 por defecto) salen del historial en el mantenimiento horario, junto
+  con los nonces viejos. Las descargas huérfanas bajo `releases/.incoming` se
+  eliminan al arrancar.
+- **`deployd check`** valida settings, la base de estado, los secretos y el
+  modo de su archivo, las rutas administradas, los ejecutables de
+  restart/migrate/hooks y avisos por app sin arrancar el servicio. Ejecútalo
+  después de editar la configuración a mano.
+- **`/healthz`** devuelve `{"status": "ok"}` solo cuando la base de estado es
+  escribible y todas las tareas worker están vivas; si no, `degraded` con el
+  chequeo que falla.
+
 ## Notas de despliegue
 
 - **Linux:** [`deploy/deployd.service`](deploy/deployd.service) — unidad de
@@ -473,20 +537,24 @@ versión anterior compatible si hace falta un rollback de aplicación.
 
 ```
 src/deployd/
-  main.py                  factory de la app FastAPI + lifespan (inicia el worker)
+  main.py                  factory de la app FastAPI + lifespan (worker, mantenimiento, watchdog)
   config.py                settings, registro de apps, secretos
   security.py              verificación HMAC (firma, ventana, nonce)
   models.py                esquemas de request/response
+  check.py                 validador de configuración `deployd check`
+  notify.py                notificaciones salientes por webhook
   api/routes.py            POST /deploys, GET /deploys/{id}, GET /healthz
-  api/admin.py             /admin: CRUD del registro, rotación de secretos, redeploy, historial
-  worker/queue.py          cola asyncio serializada por app
-  worker/runner.py         el pipeline de despliegue de siete pasos
+  api/admin.py             /admin: registro, secretos, historial, cancelar, congelar, estado, auditoría
+  worker/queue.py          cola asyncio serializada por app, con supervisión y drenado
+  worker/runner.py         el pipeline de despliegue (pasos preparatorios, fase de commit protegida)
+  worker/directory_layout.py  intercambio de carpeta current real e identidades de release
+  worker/website.py        protocolo del helper de conexión de sitios
   migrate.py               CLI deployd-migrate
-  store/db.py              store de estado SQLite
+  store/db.py              store de estado SQLite versionado
 web/                       UI de administración en React (Vite + Tailwind)
 examples/                  workflow de CI + script de notificación para incorporar
-deploy/                    unidad systemd, guía de Windows
-tests/                     pytest (API/worker) — web/ usa vitest
+deploy/                    instaladores, unidad systemd, helper root, guía de Windows
+tests/                     pytest (API/worker/instalador) — web/ usa vitest
 ```
 
 ## Contribuir

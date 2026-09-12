@@ -1,5 +1,6 @@
 # App registry — copy to apps.yaml (gitignored) and adjust per server.
-# HMAC secrets are NOT here: they come from env (DEPLOYD_SECRET_<APP>).
+# HMAC secrets are NOT here: they come from env (DEPLOYD_SECRET_<APP>) or the
+# secrets file managed through the admin UI.
 apps:
   example-api:
     release_layout: directory
@@ -8,6 +9,8 @@ apps:
     # Active version plus one rollback version; 0 disables retention of previous versions.
     keep_previous: 1
     auto_cleanup: true
+    # true rejects CI deploys with 423 until unfrozen; local activation still works
+    frozen: false
     artifact:
       # only URLs matching this prefix are accepted (defense in depth on top of HMAC)
       allowed_url_prefix: "https://api.github.com/repos/your-org/your-repo/releases/assets/"
@@ -20,9 +23,28 @@ apps:
     migrate:
       # optional; run from the NEW release dir before cutover; non-zero exit halts deploy
       command: null
+      timeout_seconds: 600
+    hooks:
+      # optional argv lists; before_cutover runs in the new release dir after migrate,
+      # after_health runs in the live release once health passed (failure rolls back).
+      # Commands see DEPLOYD_APP, DEPLOYD_DEPLOY_ID, DEPLOYD_COMMIT_SHA,
+      # DEPLOYD_RELEASE_DIR and DEPLOYD_CURRENT, and nothing else from the service env.
+      before_cutover: null
+      after_health: null
+      timeout_seconds: 600
     restart:
       command: ["systemctl", "restart", "example-api"]
+      timeout_seconds: 600
     health:
       url: "http://127.0.0.1:8000/healthz"
       retries: 10
       interval_seconds: 3
+      # optional assertions so a stale process answering 200 cannot pass;
+      # {commit_sha} is replaced with the deployed SHA
+      expect_body: null                            # e.g. "{commit_sha}"
+      expect_header: null                          # e.g. "X-Release: {commit_sha}"
+    notify:
+      # optional HTTPS webhook; generic posts JSON, slack/discord post their text shape
+      url: null
+      events: [failed, rolled_back]
+      format: generic

@@ -4,6 +4,39 @@
 
 Initial release.
 
+### Hardening pass (September 2026)
+
+- Migrate, restart and hook subprocesses run with a scrubbed environment; the
+  admin token, GitHub tokens and pinned signing secrets loaded from `.env` no
+  longer reach code shipped in an artifact.
+- `GET /deploys/{id}` returns step output only to requests carrying the admin
+  token; CI polling sees step names and statuses.
+- Unknown apps and unconfigured secrets answer `401` like a bad signature.
+  Nonces are scoped per app. Timestamp, nonce and signature headers are
+  validated by shape before use; non-ASCII admin tokens are rejected cleanly.
+- Worker tasks are supervised and respawned after a crash. Steps from
+  `migrate` onward run shielded; shutdown drains them for up to
+  `DEPLOYD_DRAIN_TIMEOUT_SECONDS`, and work interrupted earlier returns to the
+  queue and resumes on restart.
+- Restart scripts that leave a daemon holding stdout no longer hang the deploy
+  or get their app killed on timeout.
+- Artifacts are hashed while streaming; extraction, pruning and cleanup run
+  off the event loop; downloads retry transient errors and check free disk
+  space; ZIP executables keep their mode bits.
+- The SQLite schema is versioned with `PRAGMA user_version`. Version 2 adds
+  the deploy `kind` column, an index on `deploy_steps` and the `audit_log`
+  table; older databases upgrade in place.
+- New: a newer queued push supersedes older queued ones (`superseded`),
+  queued deploys can be cancelled (`cancelled`), apps can be frozen (`423`),
+  optional `before_cutover` and `after_health` hooks, health assertions on
+  body or header with a `{commit_sha}` placeholder, per-app webhook
+  notifications (generic, Slack, Discord), per-command timeouts, an audit log
+  of admin actions with the proxy user, `GET /admin/apps/{name}/status`,
+  history filtering and pagination, `deployd check`, hourly maintenance
+  (nonce and history retention), `.incoming` sweep at startup, `/healthz`
+  reporting database and worker state, and systemd watchdog support.
+- `requires-python` is now `>=3.11.4` (tar data filter).
+
 - Searchable, paginated application navigation with one selected app, exclusive
   website/version/GitHub tabs, and explicit refresh instead of background polling.
 - Safely reconnect restored websites using their receipts, retain restored-file

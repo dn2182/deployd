@@ -26,12 +26,22 @@ is the entire attack surface.
 - **Migrations that gate the release** — forward-only, checksummed SQL
   migrations (`deployd-migrate`, SQL Server via pyodbc) run before cutover
   and halt the deploy hard on failure
+- **Hooks and health assertions** — optional `before_cutover` and
+  `after_health` commands, and health checks that can require the deployed
+  SHA in the response body or a header, so a stale process cannot pass
 - **Admin UI** — app registry, one-click secret rotation (shown once),
-  deploy history with per-step logs, redeploy, live status
+  deploy history with per-step logs, redeploy, cancel, freeze, rollback,
+  per-app status, audit log, live updates while a deploy runs
+- **Notifications** — per-app HTTPS webhook (generic JSON, Slack or Discord)
+  on success, failure or rollback
 - **Bare-host native** — systemd on Linux, NSSM/IIS on Windows; a single
-  Python service with a SQLite state file
-- **Crash-aware queue** — queued deploys resume after restart; interrupted
-  deploys fail explicitly instead of remaining stuck in `running`
+  Python service with a SQLite state file, a `deployd check` command, and
+  systemd watchdog support
+- **Crash-aware queue** — queued deploys resume after restart; a newer push
+  supersedes older queued ones; steps from migrate onward finish even during a
+  service stop, and work interrupted before that point resumes on restart
+- **Contained commands** — migrate, restart and hook processes get a scrubbed
+  environment; service secrets never reach artifact code
 
 ## How it works
 
@@ -44,13 +54,20 @@ Deploy API (FastAPI)  -- validate, enqueue, 202 + deploy_id
       |
       v
 Deploy Worker (per-app serialized queue)
-      +--> download artifact + verify SHA256
-      +--> unpack into unique release dir  (traversal + resource-limit safe)
-      +--> run migrations                  (forward-only, halt on failure)
-      +--> cutover                         (directory exchange or legacy link swap)
-      +--> restart + health check          (fail => auto-rollback)
-      +--> record status + step log        (CI polls GET /deploys/{id})
+      +--> download artifact + verify SHA256  (hashed while streaming, retried)
+      +--> unpack into unique release dir     (traversal + resource-limit safe)
+      +--> run migrations                     (forward-only, halt on failure)
+      +--> before_cutover hook                (optional)
+      +--> cutover                            (directory exchange or legacy link swap)
+      +--> restart + health check             (fail => auto-rollback)
+      +--> after_health hook                  (optional, fail => auto-rollback)
+      +--> record status, notify, step log    (CI polls GET /deploys/{id})
 ```
+
+Everything from `migrate` on is the commit phase: once it starts, a service
+stop waits for it to finish (up to `DEPLOYD_DRAIN_TIMEOUT_SECONDS`). A stop
+during download, verify or unpack returns the deploy to the queue and it
+resumes after restart.
 
 ### Design decisions
 
@@ -260,9 +277,13 @@ X-Deploy-Signature: sha256=<hex hmac of "{timestamp}.{nonce}.{raw body}">
 ```
 
 `202 {deploy_id}` → poll `GET /deploys/{deploy_id}` for
-`queued | running | succeeded | failed | rolled_back` plus the step log.
-If the `202` response is lost, retry the exact signed request with the same
-nonce; deployd returns the original `deploy_id` without enqueueing a duplicate.
+`queued | running | succeeded | failed | rolled_back | superseded | cancelled`
+plus the step timeline. Step output is included only when the request carries
+the admin token; CI sees step names and statuses. If the `202` response is
+lost, retry the exact signed request with the same nonce; deployd returns the
+original `deploy_id` without enqueueing a duplicate. A push that arrives while
+an older deploy of the same app is still queued marks the older one
+`superseded`; a frozen app answers `423`.
 
 ## Version management
 
@@ -438,6 +459,45 @@ converted to `keep_previous = keep_releases - 1`, preserving the existing policy
 For example, the old `keep_releases: 5` becomes `keep_previous: 4`.
 An earlier `keep_previous: null` now uses the default of one previous version.
 
+## Operations
+
+- **Freeze** an app from its status panel (or `POST /admin/apps/{name}/freeze`)
+  to reject CI deploys with `423` during an incident or a maintenance window.
+  Local activation and rollback keep working while frozen.
+- **Cancel** a queued deploy from the history (`POST /admin/deploys/{id}/cancel`).
+  Running deploys cannot be cancelled; a newer push supersedes queued ones
+  automatically.
+- **Roll back** from a failed history row: it activates the previous retained
+  release through the same cutover, restart and health path.
+- **Hooks**: `hooks.before_cutover` runs in the new release directory after
+  migrations, `hooks.after_health` runs in the live release once the health
+  check passed and rolls back on failure. Both are argv lists with their own
+  `timeout_seconds`, like `migrate` and `restart`. Commands receive
+  `DEPLOYD_APP`, `DEPLOYD_DEPLOY_ID`, `DEPLOYD_COMMIT_SHA`,
+  `DEPLOYD_RELEASE_DIR` and `DEPLOYD_CURRENT`, and nothing else from the
+  service environment.
+- **Health assertions**: `health.expect_body` (substring) and
+  `health.expect_header` (`Name: value`) accept a `{commit_sha}` placeholder.
+  Expose the running SHA from your app and set one of them; a restart that
+  left the old process serving then fails and rolls back.
+- **Notifications**: `notify.url` (HTTPS), `notify.events` (any of
+  `succeeded`, `failed`, `rolled_back`) and `notify.format` (`generic` JSON,
+  `slack` or `discord` text). Delivery is retried on server errors and never
+  affects the deploy result.
+- **Audit log**: every admin mutation records the acting Basic Auth user (from
+  `X-Remote-User`, set by the management Nginx site) under **Audit** and
+  `GET /admin/audit`.
+- **Retention**: finished deploys older than `DEPLOYD_HISTORY_KEEP_DAYS`
+  (default 90) leave the history during hourly maintenance, along with stale
+  nonces. Leftover downloads under `releases/.incoming` are removed at startup.
+- **`deployd check`** validates settings, the state database, secrets and their
+  file mode, managed paths, restart/migrate/hook executables and per-app
+  warnings without starting the service. Run it after editing configuration
+  by hand.
+- **`/healthz`** returns `{"status": "ok"}` only when the state database is
+  writable and every worker task is alive; otherwise `degraded` with the
+  failing check named.
+
 ## Deployment notes
 
 - **Linux:** [`deploy/deployd.service`](deploy/deployd.service) — systemd
@@ -457,20 +517,24 @@ remains compatible if application rollback is required.
 
 ```
 src/deployd/
-  main.py                  FastAPI app factory + lifespan (starts worker)
+  main.py                  FastAPI app factory + lifespan (worker, maintenance, watchdog)
   config.py                settings, app registry, secrets
   security.py              HMAC verification (signature, window, nonce)
   models.py                request/response schemas
+  check.py                 `deployd check` configuration validator
+  notify.py                outbound webhook notifications
   api/routes.py            POST /deploys, GET /deploys/{id}, GET /healthz
-  api/admin.py             /admin: registry CRUD, secret rotation, redeploy, history
-  worker/queue.py          per-app serialized asyncio queue
-  worker/runner.py         the seven-step deploy pipeline
+  api/admin.py             /admin: registry, secrets, history, cancel, freeze, status, audit
+  worker/queue.py          per-app serialized asyncio queue with supervision and drain
+  worker/runner.py         the deploy pipeline (staged steps, shielded commit phase)
+  worker/directory_layout.py  real current directory exchange and release identities
+  worker/website.py        website connection helper protocol
   migrate.py               deployd-migrate CLI
-  store/db.py              SQLite state store
+  store/db.py              versioned SQLite state store
 web/                       React admin UI (Vite + Tailwind)
 examples/                  CI workflow + vendorable notify script
-deploy/                    systemd unit, Windows guide
-tests/                     pytest (API/worker) — web/ has vitest
+deploy/                    installers, systemd unit, root helper, Windows guide
+tests/                     pytest (API/worker/installer) — web/ has vitest
 ```
 
 ## Contributing

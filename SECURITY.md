@@ -50,6 +50,24 @@ response within a few days.
   files remain owned by deployd, so uninstall retains that account and release data.
 - Enforce request/body and rate limits at the reverse proxy as an additional
   public-edge control; deployd also limits the signed request body itself.
+- Migration, restart and hook commands run with a scrubbed environment (PATH,
+  HOME, locale and temp variables, plus `DEPLOYD_APP`, `DEPLOYD_DEPLOY_ID`,
+  `DEPLOYD_COMMIT_SHA`, `DEPLOYD_RELEASE_DIR`, `DEPLOYD_CURRENT`). The admin
+  token, GitHub tokens and pinned signing secrets loaded from `.env` never reach
+  code shipped in an artifact. Do not wrap commands in scripts that re-source
+  the service environment.
+- `GET /deploys/{id}` is unauthenticated for CI polling and returns step names
+  and statuses only; command output is included only when the request carries
+  a valid `X-Admin-Token`. Deploy ids printed in CI logs therefore reveal
+  nothing beyond the step timeline.
+- Unknown apps and apps without a configured secret answer `401` exactly like a
+  bad signature, so the public endpoint does not enumerate the registry; the
+  real reason is in the service log.
+- Every admin mutation is written to the audit log with the actor: the Basic
+  Auth user forwarded by the reverse proxy in `X-Remote-User`, or `admin-token`
+  for direct callers. Only the proxy should be able to set that header.
+- Run `deployd check` after changing configuration; it verifies secrets, paths,
+  executables and file modes without starting the service.
 
 ## Security properties you can rely on
 
@@ -62,6 +80,25 @@ response within a few days.
   limits.
 - Artifact deploys are pinned to a commit SHA, never a branch name. Imported
   `b4deployd` files are a local recovery snapshot, not a Git-verified artifact.
+- Nonces are scoped per app, so one app's replay window never interacts with
+  another's.
+- Health checks can assert a body substring or header value containing the
+  deployed SHA, so a restart that silently left the old process running fails
+  the deploy and triggers a rollback instead of passing.
+- Steps from `migrate` onward finish even while the service is stopping; the
+  process waits up to `DEPLOYD_DRAIN_TIMEOUT_SECONDS` for them. Work
+  interrupted before that point returns to the queue and resumes on restart.
+
+## Known limitations
+
+- The private-network check on artifact URLs resolves the hostname once and
+  then lets the HTTP client resolve it again, so a host under attacker DNS
+  control could answer differently on the second lookup. With the default
+  allowlist pinned to `api.github.com` and its release CDN this is not
+  exploitable; treat `allowed_url_prefix` on a self-hosted artifact server as
+  trusting that server's DNS.
+- The Windows junction swap has a brief window with no `current` link, and no
+  atomic directory exchange exists there.
 
 ## Threat-model boundary
 
