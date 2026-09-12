@@ -7,6 +7,7 @@ from .api.admin import router as admin_router
 from .api.routes import router
 from .config import get_app_registry, get_settings
 from .store.db import InstanceLock, Store
+from .worker.directory_layout import reconcile
 from .worker.queue import DeployQueue
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -24,7 +25,17 @@ async def lifespan(app: FastAPI):
         store.purge_old_nonces()
         app.state.store = store
         app.state.queue = DeployQueue(store)
-        recovered = app.state.queue.recover(set(get_app_registry()))
+        registry = get_app_registry()
+        for name, spec in registry.items():
+            if spec.release_layout == "directory":
+                try:
+                    reconcile(spec)
+                except (OSError, ValueError):
+                    log.exception(
+                        "release recovery failed for %s; inspect its directories before retrying",
+                        name,
+                    )
+        recovered = app.state.queue.recover(set(registry))
         if recovered:
             log.warning("recovered %s queued deployment(s) after restart", recovered)
         try:

@@ -17,6 +17,7 @@ import httpx
 
 from ..config import AppSpec, get_app_registry, get_settings
 from ..store.db import Store
+from . import directory_layout
 
 log = logging.getLogger("deployd.runner")
 
@@ -54,6 +55,9 @@ def _github_asset_headers(url: str) -> dict[str, str]:
 
 async def run_deploy(store: Store, app: str, deploy_id: str) -> None:
     spec = get_app_registry()[app]
+    if spec.release_layout == "directory":
+        directory_layout.prepare(spec)
+        directory_layout.reconcile(spec)
     deploy = store.get_deploy(deploy_id)
     ctx: dict = {}
     store.set_status(deploy_id, "running")
@@ -181,8 +185,10 @@ async def _step_unpack(spec: AppSpec, deploy: dict, ctx: dict) -> str:
     ctx["staging_dir"] = staging
     _extract(ctx["artifact_path"], staging, spec)
     staging.rename(release_dir)
-    os.utime(release_dir, None)
     ctx["release_dir"] = release_dir
+    os.utime(release_dir, None)
+    if spec.release_layout == "directory":
+        directory_layout.initialize(release_dir)
     return str(release_dir)
 
 
@@ -234,6 +240,8 @@ async def _step_migrate(spec: AppSpec, deploy: dict, ctx: dict) -> str:
 
 
 async def _step_cutover(spec: AppSpec, deploy: dict, ctx: dict) -> str:
+    if spec.release_layout == "directory":
+        return directory_layout.cutover(spec, ctx["release_dir"], ctx)
     link = spec.current_link
     ctx["previous_release"] = _current_target(link)
     ctx["older_previous"] = _current_target(_previous_link(spec))
@@ -241,6 +249,12 @@ async def _step_cutover(spec: AppSpec, deploy: dict, ctx: dict) -> str:
         _atomic_symlink(ctx["previous_release"], _previous_link(spec))
     _atomic_symlink(ctx["release_dir"], link)
     return f"current -> {ctx['release_dir'].name}"
+
+
+def current_release_path(spec: AppSpec) -> Path | None:
+    if spec.release_layout == "directory":
+        return spec.current_link if spec.current_link.is_dir() else None
+    return _current_target(spec.current_link)
 
 
 def _current_target(link: Path) -> Path | None:
@@ -374,6 +388,33 @@ async def _maybe_rollback(
     # failures before cutover never touched the running version
     if failed_step not in ("cutover", "restart", "health"):
         return False
+    if spec.release_layout == "directory":
+        transaction = ctx.get("directory_transaction")
+        if not transaction or not transaction["switched"]:
+            return False
+        store.add_step(deploy_id, "rollback", "running")
+        try:
+            restored = directory_layout.restore(spec, ctx)
+            if not restored:
+                store.add_step(
+                    deploy_id,
+                    "rollback",
+                    "skipped",
+                    output="failed first release moved aside; no prior version",
+                )
+                return False
+            await _run_cmd(spec.restart.command)
+            await _STEP_FNS["health"](spec, {}, {**ctx, "rollback_verification": True})
+        except Exception as exc:
+            store.add_step(deploy_id, "rollback", "failed", output=_error_text(exc))
+            return False
+        store.add_step(
+            deploy_id,
+            "rollback",
+            "succeeded",
+            output="previous directory restored; health verified",
+        )
+        return True
     previous = ctx.get("previous_release")
     if previous is None:
         release = ctx.get("release_dir")
@@ -440,6 +481,7 @@ def _cleanup_attempt(spec: AppSpec, ctx: dict, *, succeeded: bool) -> None:
         current = _current_target(spec.current_link)
         if (
             not succeeded
+            and "directory_transaction" not in ctx
             and release
             and release.exists()
             and (current is None or release.resolve() != current)
@@ -451,6 +493,9 @@ def _cleanup_attempt(spec: AppSpec, ctx: dict, *, succeeded: bool) -> None:
 
 def _prune_releases(spec: AppSpec) -> None:
     try:
+        if spec.release_layout == "directory":
+            directory_layout.prune(spec)
+            return
         releases = _managed_releases(spec)
         current = _current_target(spec.current_link)
         if current is None or not current.is_dir():
@@ -469,7 +514,7 @@ def _prune_releases(spec: AppSpec) -> None:
                 shutil.rmtree(release)
         if spec.keep_previous == 0:
             _remove_link(_previous_link(spec))
-    except OSError:
+    except (OSError, ValueError):
         log.warning("release pruning failed", exc_info=True)
 
 
@@ -492,6 +537,8 @@ def _managed_releases(spec: AppSpec) -> list[Path]:
 
 
 def local_release(spec: AppSpec, name: str) -> Path:
+    if spec.release_layout == "directory":
+        return directory_layout.local_release(spec, name)
     if name == "previous":
         path = _current_target(_previous_link(spec))
         if path is None or not path.is_dir():
@@ -506,6 +553,8 @@ def local_release(spec: AppSpec, name: str) -> Path:
 
 
 def list_releases(spec: AppSpec) -> dict:
+    if spec.release_layout == "directory":
+        return directory_layout.records(spec)
     current = _current_target(spec.current_link)
     previous = _current_target(_previous_link(spec))
     paths = _managed_releases(spec)
@@ -542,6 +591,9 @@ def list_releases(spec: AppSpec) -> dict:
 
 
 def remove_release(spec: AppSpec, name: str) -> None:
+    if spec.release_layout == "directory":
+        directory_layout.remove_release(spec, name)
+        return
     if name == "previous":
         raise ValueError("the previous release is protected")
     target = local_release(spec, name)
@@ -561,7 +613,7 @@ async def run_activation(store: Store, app: str, deploy_id: str, name: str) -> N
     store.set_status(deploy_id, "running")
     try:
         ctx = {"release_dir": local_release(spec, name)}
-        if _current_target(spec.current_link) == ctx["release_dir"].resolve():
+        if current_release_path(spec) == ctx["release_dir"].resolve():
             raise ValueError("release is already active")
     except ValueError as exc:
         store.add_step(deploy_id, "activation", "failed", output=str(exc))

@@ -139,6 +139,8 @@ create_service_user() {
     sudo useradd --system --home-dir /opt/deployd --shell /usr/sbin/nologin deployd
   fi
   sudo install -d -o deployd -g deployd -m 0700 "$STATE_DIR"
+  sudo test ! -L /srv/deployd || die "/srv/deployd must not be a symbolic link"
+  sudo install -d -o deployd -g deployd -m 0755 /srv/deployd
 }
 
 configure_runtime() {

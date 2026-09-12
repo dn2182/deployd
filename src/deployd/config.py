@@ -6,6 +6,7 @@ import threading
 from contextlib import contextmanager, suppress
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 from urllib.parse import unquote, urlsplit
 
 import yaml
@@ -143,6 +144,7 @@ class HealthSpec(BaseModel):
 class AppSpec(BaseModel):
     releases_dir: Path
     current_link: Path
+    release_layout: Literal["symlink", "directory"] = "symlink"
     keep_previous: int = Field(default=1, ge=0, le=99)
     auto_cleanup: bool = True
     artifact: ArtifactRules
@@ -181,7 +183,10 @@ class AppSpec(BaseModel):
         # Normalize lexical paths without following an existing ``current`` symlink.
         releases = Path(os.path.abspath(self.releases_dir))
         current = Path(os.path.abspath(self.current_link))
-        if current == releases or current.is_relative_to(releases):
+        if self.release_layout == "directory":
+            if current != releases / "current":
+                raise ValueError("directory layout requires current_link = releases_dir/current")
+        elif current == releases or current.is_relative_to(releases):
             raise ValueError("current_link must be outside releases_dir")
         return self
 

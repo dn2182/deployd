@@ -16,5 +16,7 @@ Initial release.
   deploy history with step drill-down, redeploy, live polling.
 - Local version activation and confirmed cleanup, with optional per-app retention
   of a chosen number of previous versions and active-version protection.
+- UI-selectable real-current directory layout with native atomic exchange,
+  rollback, fixed external web-root symlinks, and interrupted-swap recovery.
 - Windows support: junction cutover, NSSM/IIS guide.
 - Examples: GitHub Actions reference workflow, vendorable notify script.

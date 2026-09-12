@@ -2,8 +2,9 @@
 # HMAC secrets are NOT here: they come from env (DEPLOYD_SECRET_<APP>).
 apps:
   example-api:
-    releases_dir: /srv/example-api/releases      # releases/<sha>-<deploy_id>/
-    current_link: /srv/example-api/current       # atomic cutover target
+    release_layout: directory
+    releases_dir: /srv/deployd/example-api/releases
+    current_link: /srv/deployd/example-api/releases/current
     # Active version plus one rollback version; 0 disables retention of previous versions.
     keep_previous: 1
     auto_cleanup: true

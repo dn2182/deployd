@@ -61,6 +61,32 @@ beforeEach(() => {
 })
 
 describe('App', () => {
+  it('creates a real-current app with paths derived from its name', async () => {
+    const fetcher = mockFetch({
+      'GET /api/healthz': { status: 'ok' },
+      'GET /api/admin/apps': {},
+      'GET /api/admin/deploys': [],
+      'PUT /api/admin/apps/bluedatos': { status: 'saved' },
+    })
+    global.fetch = fetcher
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: /Add application/ }))
+    expect(screen.getByLabelText('Release layout')).toHaveValue('directory')
+    fireEvent.change(screen.getByPlaceholderText(/app name/), { target: { value: 'bluedatos' } })
+    let spec = JSON.parse(screen.getByLabelText('New application configuration').value)
+    expect(spec.releases_dir).toBe('/srv/deployd/bluedatos/releases')
+    expect(spec.current_link).toBe('/srv/deployd/bluedatos/releases/current')
+    fireEvent.change(screen.getByLabelText('Release layout'), { target: { value: 'symlink' } })
+    spec = JSON.parse(screen.getByLabelText('New application configuration').value)
+    expect(spec.current_link).toBe('/srv/deployd/bluedatos/current')
+    fireEvent.change(screen.getByLabelText('Release layout'), { target: { value: 'directory' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create application' }))
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith('/api/admin/apps/bluedatos', expect.objectContaining({ method: 'PUT' })))
+    const sent = fetcher.mock.calls.find(([url, options]) => url === '/api/admin/apps/bluedatos' && options.method === 'PUT')
+    expect(JSON.parse(sent[1].body)).toMatchObject({ release_layout: 'directory', keep_previous: 1,
+      current_link: '/srv/deployd/bluedatos/releases/current' })
+  })
+
   it('renders apps with secret fingerprint and deploys with status', async () => {
     global.fetch = mockFetch({
       'GET /api/healthz': { status: 'ok' },

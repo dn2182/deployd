@@ -19,7 +19,8 @@ is the entire attack surface.
   atomic persisted replay protection and constant-time compares
 - **Artifact-based** — CI builds and publishes; the server downloads and
   verifies the SHA256; deployed applications are never compiled on the server
-- **Safe cutover, instant rollback** — immutable `releases/<sha>-<deploy_id>/`
+- **Safe cutover, local rollback** — real `releases/current/` with atomic
+  directory exchange, or the legacy immutable `releases/<sha>-<deploy_id>/`
   attempts plus a `current` symlink (atomic on Linux) or guarded junction swap
   (Windows); failed health checks roll back automatically
 - **Migrations that gate the release** — forward-only, checksummed SQL
@@ -46,7 +47,7 @@ Deploy Worker (per-app serialized queue)
       +--> download artifact + verify SHA256
       +--> unpack into unique release dir  (traversal + resource-limit safe)
       +--> run migrations                  (forward-only, halt on failure)
-      +--> cutover                         (symlink or guarded junction swap)
+      +--> cutover                         (directory exchange or legacy link swap)
       +--> restart + health check          (fail => auto-rollback)
       +--> record status + step log        (CI polls GET /deploys/{id})
 ```
@@ -193,6 +194,70 @@ with the current database. A failed activation attempts to restore the prior
 version. Interrupted activations are marked failed, not replayed on restart;
 inspect the active version before retrying.
 
+### Real current folder
+
+New applications in the UI default to **Real current folder (Linux/macOS)**.
+Enter the app name and the UI fills `/srv/deployd/<app>/releases` and its
+`current` path. Configure the artifact allowlist, restart command, and health
+URL for that app before saving. The service creates the folders and probes
+atomic exchange support on that filesystem; it does not configure Nginx.
+
+```text
+/srv/deployd/bluedatos/releases/
+  current/                         # real live files, not a symlink
+  <previous-sha>-<deployment-id>/   # retained real directory
+```
+
+The configuration is `release_layout: directory`, with
+`current_link: /srv/deployd/bluedatos/releases/current`. The legacy field name
+`current_link` now identifies the active path in either layout. A first GitHub
+deployment creates `current`; subsequent deployments exchange directories
+atomically, then archive the displaced version under its original identity.
+The active release has no duplicate version-named directory. **Activate** uses
+the same exchange and health checks; **Delete files** removes only an eligible
+retained version. The default remains current plus one rollback version.
+
+Nginx may serve `releases/current` directly, or use a fixed symlink such as
+`/var/www/bluedatos.com` pointing to it. That external link never changes and
+must be set up separately, after the first release is ready. Do not replace an
+existing live document root with a dangling link.
+
+The Ubuntu installer creates `/srv/deployd` owned by `deployd`. Existing
+installations upgrading without rerunning the installer need this once:
+
+```bash
+sudo install -d -o deployd -g deployd -m 0755 /srv/deployd
+```
+
+Custom roots must also be writable by the service. Web-server access to release
+contents is separate: for static sites, use a tar artifact containing `.` with
+directories mode `0755` and files `0644`, and verify Nginx-user readability.
+ZIP extraction under the service's restrictive umask does not grant that access.
+Never package secrets in a publicly served release.
+
+This mode requires same-filesystem atomic directory exchange (Linux
+[renameat2(RENAME_EXCHANGE)](https://man7.org/linux/man-pages/man2/rename.2.html),
+or macOS `renamex_np(RENAME_SWAP)`). There is no
+copy-in-place or two-rename fallback. Windows uses the existing symlink/junction
+layout. Atomic cutover does not make database changes or browser asset caching
+atomic.
+
+Each directory has a reserved `.deployd-release.json` identity file; artifacts
+must not supply it. Keep it with the files if moving a version manually. Startup
+reconciles archive names after an interrupted process without deleting releases.
+Invalid/duplicate identities block that app's version operations rather than
+overwrite user data; the management API stays available for diagnosis.
+If working manually, stop deployd first and use an atomic exchange, not a copy
+over the live files; restart deployd to reconcile names and verify site health.
+Manual changes do not create deployment-history events. Prefer the UI for an
+audited rollback. Failed attempts after cutover retain their files for inspection
+until manual cleanup or a later successful deployment's retention pass.
+
+Apps without `release_layout` keep the old `symlink` behavior. Layout and path
+changes are blocked while an app has existing releases: use a new app or perform
+an explicitly planned offline migration. Existing live symlinks are never
+silently converted to directories.
+
 By default, retain two releases total: the active version and one previous
 version for rollback. Settings are saved per application and can be changed:
 
@@ -208,9 +273,10 @@ version remains available for automatic rollback even when retention is off.
 The active version is always protected from cleanup. With retention enabled,
 the immediately previous version is protected too. Other
 retained versions can be removed manually; deployment history stays in SQLite.
-The sibling `current.previous` link tracks the exact prior active version,
-including after switching to an older release. Do not use that path for other
-files. Imported sites outside the managed releases directory are never deleted.
+In directory mode, the metadata in `current` identifies the prior version.
+Legacy symlink mode uses a sibling `current.previous` link instead; do not use
+that path for other files. Imported sites outside the managed releases directory
+are never deleted.
 
 Existing `keep_releases` configurations remain supported: their total count is
 converted to `keep_previous = keep_releases - 1`, preserving the existing policy.

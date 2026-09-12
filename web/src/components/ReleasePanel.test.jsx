@@ -11,8 +11,8 @@ const release = (char, extra = {}) => ({
 const versions = [release('a', { active: true, protected: true, can_activate: false }),
   release('b', { previous: true, protected: true }), release('c')]
 
-function setup(spec = {}, language = 'en', busy = false) {
-  const call = vi.fn(async () => ({ releases: versions, active_path: '/srv/current', busy }))
+function setup(spec = {}, language = 'en', busy = false, releases = versions, activePath = '/srv/current') {
+  const call = vi.fn(async () => ({ releases, active_path: activePath, busy }))
   const changed = vi.fn()
   render(<ReleasePanel name="site" spec={spec} call={call} onChanged={changed}
     t={(key, values) => translate(language, key, values)} />)
@@ -20,6 +20,19 @@ function setup(spec = {}, language = 'en', busy = false) {
 }
 
 describe('ReleasePanel', () => {
+  it('allows choosing real-current layout for an empty app', async () => {
+    const call = setup({ releases_dir: '/srv/site/releases', current_link: '/srv/site/current',
+      release_layout: 'symlink', keep_previous: 1 }, 'en', false, [], null)
+    await screen.findByText('No retained versions yet.')
+    expect(screen.getByLabelText('Release layout')).not.toBeDisabled()
+    fireEvent.change(screen.getByLabelText('Release layout'), { target: { value: 'directory' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(call).toHaveBeenCalledWith('/admin/apps/site', {
+      method: 'PUT', body: JSON.stringify({ releases_dir: '/srv/site/releases',
+        current_link: '/srv/site/releases/current', release_layout: 'directory', keep_previous: 1, auto_cleanup: true }),
+    }))
+  })
+
   it('defaults to one previous version and lets the user change the count', async () => {
     const call = setup({ keep_previous: null, secret: { configured: true } })
     await screen.findByText('aaaaaaaaaaaa')
@@ -52,6 +65,7 @@ describe('ReleasePanel', () => {
     await screen.findByText('aaaaaaaaaaaa')
     expect(screen.getAllByRole('button', { name: 'Delete files' })).toHaveLength(1)
     expect(screen.getAllByRole('button', { name: 'Activate' })[0]).toBeDisabled()
+    expect(screen.getByLabelText('Release layout')).toBeDisabled()
     fireEvent.click(screen.getByRole('button', { name: 'Delete files' }))
     fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete files' }))
     await waitFor(() => expect(call).toHaveBeenCalledWith('/admin/apps/site/releases/cleanup', {

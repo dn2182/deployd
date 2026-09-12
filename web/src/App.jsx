@@ -34,8 +34,9 @@ const STEP_ICON = {
 }
 
 const APP_TEMPLATE = {
-  releases_dir: '/srv/myapp/releases',
-  current_link: '/srv/myapp/current',
+  release_layout: 'directory',
+  releases_dir: '/srv/deployd/myapp/releases',
+  current_link: '/srv/deployd/myapp/releases/current',
   keep_previous: 1,
   auto_cleanup: true,
   artifact: { allowed_url_prefix: 'https://github.com/your-org/' },
@@ -268,6 +269,27 @@ function NewAppCard({ call, onChanged, t }) {
   const [name, setName] = useState('')
   const [draft, setDraft] = useState(JSON.stringify(APP_TEMPLATE, null, 2))
   const [error, setError] = useState(null)
+  let configuration = null
+  try { configuration = JSON.parse(draft) } catch { /* Keep invalid JSON editable. */ }
+
+  const changeName = (value) => {
+    setName(value)
+    const oldBase = `/srv/deployd/${name || 'myapp'}`
+    if (configuration?.releases_dir === `${oldBase}/releases`) {
+      const next = { ...configuration, releases_dir: `/srv/deployd/${value || 'myapp'}/releases` }
+      if (configuration.current_link === `${oldBase}/releases/current`) next.current_link = `${next.releases_dir}/current`
+      else if (configuration.current_link === `${oldBase}/current`) next.current_link = `/srv/deployd/${value || 'myapp'}/current`
+      setDraft(JSON.stringify(next, null, 2))
+    }
+  }
+
+  const changeLayout = (value) => {
+    if (!configuration) return
+    const root = configuration.releases_dir.replace(/\/+$/, '')
+    setDraft(JSON.stringify({ ...configuration, release_layout: value,
+      current_link: value === 'directory' ? `${root}/current` : `${root.slice(0, root.lastIndexOf('/'))}/current`,
+    }, null, 2))
+  }
 
   const close = () => {
     setOpen(false)
@@ -319,9 +341,18 @@ function NewAppCard({ call, onChanged, t }) {
           placeholder={t('new.placeholder')}
           value={name}
           autoComplete="off"
-          onChange={(event) => setName(event.target.value)}
+          onChange={(event) => changeName(event.target.value)}
         />
       </label>
+      <label className="field-label">
+        {t('releases.layout')}
+        <select className="text-input" value={configuration?.release_layout || 'symlink'}
+          disabled={!configuration} onChange={(event) => changeLayout(event.target.value)}>
+          <option value="directory">{t('releases.directory_layout')}</option>
+          <option value="symlink">{t('releases.symlink_layout')}</option>
+        </select>
+      </label>
+      <p className="release-help">{t('releases.layout_help')}</p>
       <label className="field-label">
         {t('app.configuration')}
         <textarea

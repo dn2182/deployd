@@ -54,10 +54,14 @@ def _release_app(request: Request, name: str, *, idle: bool = False) -> AppSpec:
 @router.get("/apps/{name}/releases")
 async def list_app_releases(request: Request, name: AppName):
     spec = _release_app(request, name)
-    result = runner.list_releases(spec)
+    try:
+        result = runner.list_releases(spec)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     store = request.app.state.store
     for release in result["releases"]:
-        original = store.get_deploy(release["name"][41:]) if release["name"] != "previous" else None
+        identity = release.get("release_id", release["name"])
+        original = store.get_deploy(identity[41:]) if identity != "previous" else None
         release["can_activate"] = not release["active"] and (
             release["name"] == "previous"
             or (
@@ -80,7 +84,7 @@ async def activate_app_release(request: Request, name: AppName, selection: Relea
             target = runner.local_release(spec, selection.release)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if target.resolve() == runner._current_target(spec.current_link):
+        if target.resolve() == runner.current_release_path(spec):
             raise HTTPException(status_code=409, detail="release is already active")
         original = (
             store.get_deploy(selection.release[41:]) if selection.release != "previous" else None
@@ -138,6 +142,26 @@ async def upsert_app_route(request: Request, name: AppName, spec: AppSpec):
     with config_lock():
         if request.app.state.store.has_active_deploys(name):
             raise HTTPException(status_code=409, detail="app has queued or running deployments")
+        existing = get_app_registry().get(name)
+        if (
+            existing
+            and (existing.release_layout, existing.releases_dir, existing.current_link)
+            != (spec.release_layout, spec.releases_dir, spec.current_link)
+            and (
+                os.path.lexists(existing.current_link)
+                or (existing.releases_dir.exists() and any(existing.releases_dir.iterdir()))
+            )
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="layout and paths cannot change while releases exist; use a new application or migrate offline",
+            )
+        if spec.release_layout == "directory":
+            try:
+                runner.directory_layout.prepare(spec)
+                runner.directory_layout.reconcile(spec)
+            except (OSError, ValueError, RuntimeError) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
         upsert_app(name, spec)
     return {"status": "saved", "app": name}
 

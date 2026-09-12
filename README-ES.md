@@ -21,7 +21,8 @@ fijo firmado por HMAC es toda la superficie de ataque.
 - **Basado en artefactos** — CI compila y publica; el servidor descarga y
   verifica el SHA256; las aplicaciones desplegadas nunca se compilan en el
   servidor
-- **Cutover seguro, rollback instantáneo** — intentos inmutables en
+- **Cutover seguro, rollback local** — carpeta real `releases/current/` con
+  intercambio atómico de directorios, o el modo anterior de intentos inmutables en
   `releases/<sha>-<deploy_id>/` más un symlink `current` (atómico en Linux) o
   un cambio controlado de junction (Windows); si el health check falla, el
   rollback es automático
@@ -50,7 +51,7 @@ Worker de despliegue (cola serializada por app)
       +--> descarga el artefacto + verifica SHA256
       +--> desempaqueta en release único     (límites + path traversal seguro)
       +--> ejecuta migraciones               (forward-only, se detiene si falla)
-      +--> cutover                           (symlink o junction controlado)
+      +--> cutover                           (intercambio de directorios o enlaces)
       +--> restart + health check            (falla => rollback automático)
       +--> registra estado + log por paso    (CI consulta GET /deploys/{id})
 ```
@@ -200,6 +201,68 @@ la base de datos actual. Si falla, intenta restaurar la versión previa. Las
 activaciones interrumpidas se marcan como fallidas y no se repiten al reiniciar;
 revisa la versión activa antes de reintentar.
 
+### Carpeta current real
+
+Las nuevas aplicaciones de la UI usan **Carpeta current real (Linux/macOS)**.
+Al introducir el nombre se completan `/srv/deployd/<app>/releases` y su ruta
+`current`. Configura los artefactos permitidos, el comando de reinicio y la URL
+de salud antes de guardar. El servicio crea las carpetas y verifica que ese
+sistema de archivos soporte el intercambio atómico; no configura Nginx.
+
+```text
+/srv/deployd/bluedatos/releases/
+  current/                         # archivos activos reales, no un enlace
+  <sha-anterior>-<id-despliegue>/   # carpeta anterior conservada
+```
+
+Usa `release_layout: directory` y
+`current_link: /srv/deployd/bluedatos/releases/current`. El nombre histórico
+`current_link` identifica la ruta activa en ambos modos. El primer despliegue
+desde GitHub crea `current`; los siguientes intercambian las carpetas de forma
+atómica y archivan la anterior con su identidad original. No queda una segunda
+carpeta de la versión activa. **Activar** usa el mismo intercambio y las pruebas
+de salud; **Eliminar archivos** solo borra versiones anteriores permitidas.
+Se siguen guardando por defecto la activa y una anterior.
+
+Nginx puede servir `releases/current` directamente o mediante un enlace fijo
+como `/var/www/bluedatos.com`. Ese enlace nunca cambia y se configura por
+separado cuando la primera versión esté lista. No reemplaces el sitio existente
+por un enlace cuyo destino aún no existe.
+
+El instalador de Ubuntu crea `/srv/deployd` con propietario `deployd`. Para
+instalaciones existentes actualizadas sin ejecutar el instalador, corre una vez:
+
+```bash
+sudo install -d -o deployd -g deployd -m 0755 /srv/deployd
+```
+
+Las rutas personalizadas también deben permitir escritura al servicio. Los
+permisos de lectura para Nginx son independientes: para sitios estáticos usa un
+tar que incluya `.` con directorios `0755` y archivos `0644`, y verifica la
+lectura como usuario de Nginx. Un ZIP extraído con la umask restrictiva del
+servicio no concede esos permisos. No incluyas secretos en archivos públicos.
+
+Se requiere intercambio atómico en el mismo sistema de archivos: Linux
+`renameat2(RENAME_EXCHANGE)` o macOS `renamex_np(RENAME_SWAP)`. No hay alternativa
+de copia sobre archivos activos ni de dos renombrados. Windows conserva el modo
+de enlaces/junctions. Esto no hace atómicos los cambios de base de datos ni la
+caché de archivos del navegador.
+
+Cada carpeta contiene `.deployd-release.json`, un archivo de identidad reservado
+que no puede venir en el artefacto. Consérvalo si mueves una versión manualmente.
+Al iniciar, deployd corrige los nombres de directorios tras un proceso interrumpido
+sin eliminar versiones. Identidades inválidas o duplicadas bloquean los cambios
+de versión de esa app; la API de administración sigue disponible para diagnóstico.
+Para cambios manuales, detén deployd y usa un intercambio atómico, no copies sobre
+el sitio activo. Reinicia deployd para reconciliar nombres y verifica la salud.
+Los cambios manuales no generan eventos en el historial; usa la UI para un rollback
+registrado. Los intentos fallidos después del cambio conservan sus archivos hasta
+una limpieza manual o la retención de un despliegue exitoso posterior.
+
+Las apps sin `release_layout` conservan el modo `symlink`. No se permite cambiar
+las rutas ni el modo mientras existan versiones: usa una app nueva o planifica
+una migración fuera de línea. Los enlaces existentes no se convierten solos.
+
 Por defecto se conservan dos versiones en total: la activa y una anterior para
 rollback. La configuración se guarda por aplicación y se puede cambiar:
 
@@ -214,10 +277,10 @@ Guardar la configuración no elimina archivos inmediatamente. Durante un desplie
 la versión previa sigue disponible para rollback automático aunque la retención
 esté desactivada. La versión activa siempre está protegida. Si se guardan versiones,
 la inmediatamente anterior también está protegida. Las demás
-se pueden eliminar manualmente; su historial permanece en SQLite. El enlace hermano
-`current.previous` identifica la versión activa anterior exacta, incluso al activar
-una versión más antigua. No uses esa ruta para otros archivos. Los sitios importados
-fuera del directorio administrado de versiones nunca se eliminan.
+se pueden eliminar manualmente; su historial permanece en SQLite. En modo de
+carpeta real, los metadatos de `current` identifican la versión anterior. El modo
+de enlaces usa `current.previous`; no uses esa ruta para otros archivos. Los
+sitios importados fuera del directorio administrado nunca se eliminan.
 
 Las configuraciones existentes con `keep_releases` siguen funcionando: el total
 se convierte a `keep_previous = keep_releases - 1`, conservando su política.

@@ -59,6 +59,21 @@ def test_runtime_bounds_are_validated(tmp_path):
         app_spec(tmp_path, restart={"command": []})
 
 
+def test_directory_layout_requires_current_child(tmp_path):
+    assert app_spec(tmp_path).release_layout == "symlink"
+    value = app_spec(
+        tmp_path, release_layout="directory", current_link=tmp_path / "releases/current"
+    )
+    assert value.release_layout == "directory"
+    for current in (
+        tmp_path / "current",
+        tmp_path / "releases",
+        tmp_path / "releases/nested/current",
+    ):
+        with pytest.raises(ValidationError, match="releases_dir/current"):
+            app_spec(tmp_path, release_layout="directory", current_link=current)
+
+
 def test_retention_choice_and_legacy_conversion(tmp_path):
     assert app_spec(tmp_path).keep_previous == 1
     assert app_spec(tmp_path, keep_previous=None).keep_previous == 1

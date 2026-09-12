@@ -1,9 +1,12 @@
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
 from deployd import config
 from deployd.config import get_app_secret
 from deployd.main import create_app
+from deployd.worker import directory_layout, runner
 
 ADMIN_TOKEN = "a" * 32
 ADMIN = {"X-Admin-Token": ADMIN_TOKEN}
@@ -42,6 +45,74 @@ def test_admin_requires_token(env):
     with TestClient(create_app()) as client:
         assert client.get("/admin/apps").status_code == 401
         assert client.get("/admin/apps", headers={"X-Admin-Token": "wrong"}).status_code == 401
+
+
+def test_real_directory_app_can_be_configured_and_activated_through_api(env, monkeypatch):
+    async def healthy(*args):
+        return "healthy"
+
+    monkeypatch.setitem(runner._STEP_FNS, "health", healthy)
+    with TestClient(create_app()) as client:
+        spec = client.get("/admin/apps", headers=ADMIN).json()["app-x"]
+        spec.update(release_layout="directory", current_link=str(env / "releases/current"))
+        response = client.put("/admin/apps/app-x", headers=ADMIN, json=spec)
+        assert response.status_code == 200
+        assert (env / "releases").is_dir()
+        old = saved_release(client, env)
+        new = saved_release(client, env, "b")
+        for path in (old, new):
+            (path / "index.html").write_text(path.name[0])
+            directory_layout.initialize(path)
+        new.rename(env / "releases/current")
+        metadata = directory_layout.read_manifest(env / "releases/current")
+        metadata["previous"] = old.name
+        directory_layout.write_manifest(env / "releases/current", metadata)
+        base = "/admin/apps/app-x/releases"
+        rows = client.get(base, headers=ADMIN).json()["releases"]
+        assert rows[0]["name"] == "current" and rows[0]["release_id"] == new.name
+        assert not rows[0]["can_activate"] and rows[1]["can_activate"]
+        assert (
+            client.post(base + "/cleanup", headers=ADMIN, json={"release": old.name}).status_code
+            == 409
+        )
+        response = client.post(base + "/activate", headers=ADMIN, json={"release": old.name})
+        assert response.status_code == 202
+        did = response.json()["deploy_id"]
+        for _ in range(200):
+            row = client.app.state.store.get_deploy(did)
+            if row["status"] not in ("queued", "running"):
+                break
+            time.sleep(0.01)
+        assert row["status"] == "succeeded"
+        assert (env / "releases/current/index.html").read_text() == "a"
+        assert not (env / "releases/current").is_symlink()
+        spec.update(release_layout="symlink", current_link=str(env / "current"))
+        assert client.put("/admin/apps/app-x", headers=ADMIN, json=spec).status_code == 409
+
+
+def test_layout_change_cannot_move_existing_live_symlink(env):
+    with TestClient(create_app()) as client:
+        old = saved_release(client, env)
+        (env / "current").symlink_to(old, target_is_directory=True)
+        spec = client.get("/admin/apps", headers=ADMIN).json()["app-x"]
+        spec.update(release_layout="directory", current_link=str(env / "releases/current"))
+        assert client.put("/admin/apps/app-x", headers=ADMIN, json=spec).status_code == 409
+        assert (env / "current").resolve() == old
+
+
+def test_bad_release_metadata_does_not_disable_management(env):
+    with TestClient(create_app()) as client:
+        spec = client.get("/admin/apps", headers=ADMIN).json()["app-x"]
+        spec.update(release_layout="directory", current_link=str(env / "releases/current"))
+        assert client.put("/admin/apps/app-x", headers=ADMIN, json=spec).status_code == 200
+    (env / "releases/current").mkdir()
+    (env / "releases/current/index.html").write_text("unmanaged site")
+    with TestClient(create_app()) as client:
+        assert client.get("/healthz").status_code == 200
+        assert client.get("/admin/apps", headers=ADMIN).status_code == 200
+        response = client.get("/admin/apps/app-x/releases", headers=ADMIN)
+        assert response.status_code == 409 and "unmanaged" in response.json()["detail"]
+    assert (env / "releases/current/index.html").read_text() == "unmanaged site"
 
 
 def saved_release(client, root, sha="a", status="succeeded"):
