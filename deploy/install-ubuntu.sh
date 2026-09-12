@@ -15,6 +15,7 @@ die() {
 }
 
 require_install_user() {
+  [[ $(uname -s) == Linux ]] || die "this installer requires Debian/Ubuntu with systemd"
   [[ ${EUID} -ne 0 ]] || die "run this installer as the repository owner, without sudo"
   command -v sudo >/dev/null 2>&1 || die "sudo is required for system configuration"
 }
@@ -47,16 +48,17 @@ validate_bind() {
 }
 
 validate_port() {
-  [[ $1 =~ ^[0-9]+$ ]] || die "management port must be numeric"
-  ((1 <= $1 && $1 <= 65535)) || die "management port is outside 1-65535"
-  [[ $1 != 80 && $1 != 445 && $1 != 8300 ]] ||
+  [[ $1 =~ ^[0-9]{1,5}$ ]] || die "management port must contain 1-5 digits"
+  local port=$((10#$1))
+  ((1 <= port && port <= 65535)) || die "management port is outside 1-65535"
+  [[ $port != 80 && $port != 445 && $port != 8300 ]] ||
     die "management port conflicts with HTTP, SMB, or deployd"
 }
 
 install_prerequisites() {
   install -d -m 0755 "$HOME/.local/bin"
   sudo apt-get update
-  sudo apt-get install -y ca-certificates curl git make nginx apache2-utils openssl
+  sudo apt-get install -y ca-certificates curl git make nginx apache2-utils openssl python3
 
   if ! command -v node >/dev/null 2>&1; then
     sudo apt-get install -y nodejs npm
@@ -91,6 +93,7 @@ install_prerequisites() {
 check_checkout() {
   local repo_root=$1
   [[ $repo_root == "/opt/deployd" ]] || die "clone deployd at /opt/deployd before running"
+  [[ ! -L $repo_root ]] || die "the checkout must not be a symbolic link"
   [[ -f "$repo_root/pyproject.toml" && -f "$repo_root/web/package.json" ]] ||
     die "installer must run from the deployd repository"
   [[ $(stat -c '%u' "$repo_root") -eq ${EUID} ]] ||
@@ -103,12 +106,14 @@ repair_legacy_build_ownership() {
   local repo_root=$1
   local path
   for path in \
+    "$repo_root/.python" \
     "$repo_root/.venv" \
     "$repo_root/.pytest_cache" \
     "$repo_root/.ruff_cache" \
     "$repo_root/web/node_modules" \
     "$repo_root/web/dist"; do
-    if [[ -e $path && ! -O $path ]]; then
+    [[ ! -L $path ]] || die "build directory must not be a symbolic link: $path"
+    if [[ -d $path ]] && [[ -n $(find "$path" -xdev ! -uid "$(id -u)" -print -quit) ]]; then
       sudo chown -R "$(id -u):$(id -g)" "$path"
     fi
   done
@@ -125,8 +130,15 @@ install_application() {
   make -C "$repo_root" test
   make -C "$repo_root" audit
   make -C "$repo_root" build
+  local interpreter
+  interpreter=$(readlink -f "$repo_root/.venv/bin/python")
+  [[ $interpreter == /usr/* || $interpreter == /opt/* ]] ||
+    die "Python resolves to $interpreter; recreate .venv with Python under /usr or /opt (ProtectHome blocks home directories)"
   chmod 0755 "$repo_root" "$repo_root/web" "$repo_root/web/dist"
   chmod -R a+rX "$repo_root/.venv"
+  if [[ -d "$repo_root/.python" ]]; then
+    chmod -R a+rX "$repo_root/.python"
+  fi
   find "$repo_root/src" -type d -exec chmod 0755 {} +
   find "$repo_root/src" -type f -exec chmod 0644 {} +
   find "$repo_root/web/dist" -type d -exec chmod 0755 {} +
@@ -136,8 +148,10 @@ install_application() {
 create_service_user() {
   sudo test ! -L "$STATE_DIR" || die "$STATE_DIR must not be a symbolic link"
   if ! id deployd >/dev/null 2>&1; then
-    sudo useradd --system --home-dir /opt/deployd --shell /usr/sbin/nologin deployd
+    sudo useradd --system --user-group --home-dir /opt/deployd --shell /usr/sbin/nologin deployd
   fi
+  [[ $(id -u deployd) -ne 0 && $(id -gn deployd) == deployd ]] ||
+    die "existing deployd identity must be non-root with primary group deployd"
   sudo install -d -o deployd -g deployd -m 0700 "$STATE_DIR"
   sudo test ! -L /srv/deployd || die "/srv/deployd must not be a symbolic link"
   sudo install -d -o deployd -g deployd -m 0755 /srv/deployd
@@ -167,6 +181,18 @@ configure_runtime() {
       die "could not install secrets.env"
   fi
 
+  local path
+  for path in "$STATE_DIR/apps.yaml" "$STATE_DIR/secrets.env" \
+    "$STATE_DIR/deployd.sqlite3" "$STATE_DIR/deployd.sqlite3.lock" \
+    "$STATE_DIR/deployd.sqlite3-wal" "$STATE_DIR/deployd.sqlite3-shm"; do
+    sudo test ! -L "$path" || die "runtime file must not be a symbolic link: $path"
+    if sudo test -e "$path"; then
+      sudo test -f "$path" || die "runtime path is not a regular file: $path"
+      sudo chown deployd:deployd "$path" || die "could not repair ownership: $path"
+      sudo chmod 0600 "$path" || die "could not protect runtime file: $path"
+    fi
+  done
+
   sudo -u deployd env -i PATH=/usr/bin:/bin \
     "$repo_root/.venv/bin/python" "$repo_root/deploy/runtime_config.py" \
     check --repo "$repo_root" || die "runtime preflight failed; service was not restarted"
@@ -176,14 +202,21 @@ configure_runtime() {
 
 configure_basic_auth() {
   local username=$1
+  sudo test ! -L "$HTPASSWD_FILE" || die "Basic Auth file must not be a symbolic link"
   if sudo test -f "$HTPASSWD_FILE"; then
     printf 'Keeping existing management Basic Auth file: %s\n' "$HTPASSWD_FILE"
   else
     printf 'Choose a separate password for the management web interface.\n'
-    sudo htpasswd -cB "$HTPASSWD_FILE" "$username"
-    sudo chown root:www-data "$HTPASSWD_FILE"
-    sudo chmod 0640 "$HTPASSWD_FILE"
+    local password confirmation
+    read -r -s -p "Management password: " password
+    printf '\n'
+    read -r -s -p "Confirm management password: " confirmation
+    printf '\n'
+    [[ -n $password && $password == "$confirmation" ]] || die "passwords are empty or do not match"
+    printf '%s\n' "$password" | sudo htpasswd -iBc "$HTPASSWD_FILE" "$username"
   fi
+  sudo chown root:www-data "$HTPASSWD_FILE"
+  sudo chmod 0640 "$HTPASSWD_FILE"
 }
 
 render_nginx_config() {
@@ -269,6 +302,10 @@ write_nginx_config() {
   local candidate backup="" link_created="false"
   candidate=$(mktemp /tmp/deployd-nginx.XXXXXX)
   render_nginx_config "$candidate" "$repo_root" "$domain" "$admin_bind" "$admin_port"
+  if sudo test -L "$NGINX_SITE"; then
+    unlink "$candidate"
+    die "$NGINX_SITE must not be a symbolic link"
+  fi
 
   if sudo test -e "$NGINX_LINK" && ! sudo test -L "$NGINX_LINK"; then
     unlink "$candidate"
@@ -279,7 +316,7 @@ write_nginx_config() {
     die "$NGINX_LINK points to a different site"
   fi
   if sudo test -f "$NGINX_SITE"; then
-    backup="${NGINX_SITE}.backup.$(date -u +%Y%m%dT%H%M%SZ)"
+    backup=$(sudo mktemp "${NGINX_SITE}.backup.XXXXXXXX")
     sudo cp -a "$NGINX_SITE" "$backup"
   fi
 
@@ -318,6 +355,7 @@ write_nginx_config() {
 
 install_service() {
   local repo_root=$1
+  sudo test ! -L "$SERVICE_FILE" || die "$SERVICE_FILE must not be a symbolic link"
   sudo install -o root -g root -m 0644 "$repo_root/deploy/deployd.service" "$SERVICE_FILE"
   sudo systemctl daemon-reload
   sudo systemctl enable deployd
@@ -345,8 +383,18 @@ verify_installation() {
     -H "Host: ${domain}" http://127.0.0.1/healthz >/dev/null
 
   local admin_status
-  admin_status=$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:${admin_port}/")
+  admin_status=$(curl --silent --connect-timeout 2 --max-time 5 --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:${admin_port}/")
   [[ $admin_status == "401" ]] || die "management endpoint did not require Basic Auth"
+}
+
+stop_for_upgrade() {
+  if systemctl is-active --quiet deployd.service; then
+    printf 'Stopping deployd while its dependencies and runtime configuration are updated.\n'
+    sudo systemctl stop deployd.service
+  fi
+  if systemctl is-active --quiet deployd.service; then
+    die "deployd is still running; no application files were changed"
+  fi
 }
 
 main() {
@@ -355,8 +403,8 @@ main() {
   confirm_testing_mode
 
   local script_dir repo_root domain admin_bind admin_port admin_username generated_token
-  script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-  repo_root=$(cd -- "$script_dir/.." && pwd)
+  script_dir=$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+  repo_root=$(cd -P -- "$script_dir/.." && pwd)
   domain=$(prompt_default "Public deployd domain" "deployd.example.com")
   admin_bind=$(prompt_default "Management bind address" "0.0.0.0")
   admin_port=$(prompt_default "Management port" "844")
@@ -365,11 +413,13 @@ main() {
   validate_domain "$domain"
   validate_bind "$admin_bind"
   validate_port "$admin_port"
+  admin_port=$((10#$admin_port))
   [[ $admin_username =~ ^[a-zA-Z0-9._-]{1,64}$ ]] || die "invalid Basic Auth username"
 
   check_checkout "$repo_root"
   install_prerequisites
   create_service_user
+  stop_for_upgrade
   repair_legacy_build_ownership "$repo_root"
   install_application "$repo_root"
   generated_token=$(configure_runtime "$repo_root") || die "runtime setup failed"

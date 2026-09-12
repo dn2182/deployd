@@ -7,14 +7,13 @@ export default function ReleasePanel({ name, spec, call, onChanged, t }) {
   const [pending, setPending] = useState(false)
   const [notice, setNotice] = useState('')
   const [draft, setDraft] = useState(null)
-  const policyKey = JSON.stringify([spec.keep_previous, spec.auto_cleanup, spec.release_layout])
+  const policyKey = JSON.stringify([spec.keep_previous, spec.auto_cleanup])
   const policy = draft?.key === policyKey ? draft : {
     keep: spec.keep_previous || 1,
     retain: spec.keep_previous !== 0,
     automatic: spec.auto_cleanup ?? true,
-    layout: spec.release_layout || 'symlink',
   }
-  const { keep, retain, automatic, layout } = policy
+  const { keep, retain, automatic } = policy
   const updatePolicy = (values) => setDraft({ ...policy, key: policyKey, ...values })
   const base = `/admin/apps/${encodeURIComponent(name)}/releases`
   const load = useCallback(async () => {
@@ -50,12 +49,7 @@ export default function ReleasePanel({ name, spec, call, onChanged, t }) {
   const saveRetention = async () => {
     setPending(true)
     try {
-      const { secret: _secret, ...configuration } = spec
-      if (layout !== (spec.release_layout || 'symlink')) {
-        const root = spec.releases_dir.replace(/\/+$/, '')
-        configuration.release_layout = layout
-        configuration.current_link = layout === 'directory' ? `${root}/current` : `${root.slice(0, root.lastIndexOf('/'))}/current`
-      }
+      const { secret: _secret, github: _github, ...configuration } = spec
       await call(`/admin/apps/${encodeURIComponent(name)}`, {
         method: 'PUT',
         body: JSON.stringify({ ...configuration, keep_previous: retain ? Number(keep) : 0, auto_cleanup: automatic }),
@@ -120,16 +114,6 @@ export default function ReleasePanel({ name, spec, call, onChanged, t }) {
         {!data.releases.length && <p>{t('releases.empty')}</p>}
       </>}
       <form className="release-retention" onSubmit={(event) => { event.preventDefault(); if (retain) saveRetention() }}>
-        <label className="field-label">
-          {t('releases.layout')}
-          <select className="text-input" value={layout}
-            disabled={busy || !data || Boolean(data.active_path) || data.releases.length > 0}
-            onChange={(event) => updatePolicy({ layout: event.target.value })}>
-            <option value="directory">{t('releases.directory_layout')}</option>
-            <option value="symlink">{t('releases.symlink_layout')}</option>
-          </select>
-        </label>
-        <p className="release-help">{t('releases.layout_help')}</p>
         <label className="release-checkbox">
           <input type="checkbox" checked={retain} disabled={busy}
             onChange={(event) => updatePolicy({ retain: event.target.checked })} />

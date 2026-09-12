@@ -14,9 +14,7 @@ function fields(spec = {}) {
   return {
     repository: spec.github_repository || spec.artifact?.allowed_url_prefix?.match(/^https:\/\/api\.github\.com\/repos\/([^/]+\/[^/]+)\/releases\/assets\/$/)?.[1] || '',
     deployUrl: spec.deploy_url || '',
-    root: spec.releases_dir || '',
-    current: spec.current_link || '',
-    layout: spec.release_layout || (spec.releases_dir ? 'symlink' : 'directory'),
+    sitePath: spec.site_path || '',
     kind: !restart.length || (restart.length === 3 && restart[0] === '/usr/bin/test' && restart[1] === '-s' && restart[2] === `${spec.current_link}/index.html`) ? 'static' : 'service',
     executable: restart[0] || '',
     arguments: restart.slice(1).join('\n'),
@@ -28,13 +26,11 @@ function fields(spec = {}) {
 
 export default function AppEditor({ name: existingName, initialSpec, call, onSaved, onCancel, t }) {
   const [name, setName] = useState(existingName || '')
-  const [base, setBase] = useState(() => {
+  const [base] = useState(() => {
     const { secret: _secret, github: _github, ...spec } = initialSpec || {}
     return spec
   })
   const [form, setForm] = useState(() => fields(initialSpec))
-  const [advanced, setAdvanced] = useState(false)
-  const [json, setJson] = useState('')
   const [signingMode, setSigningMode] = useState(existingName ? 'keep' : 'generate')
   const [signingSecret, setSigningSecret] = useState('')
   const [githubToken, setGithubToken] = useState('')
@@ -51,8 +47,8 @@ export default function AppEditor({ name: existingName, initialSpec, call, onSav
     return () => { active = false }
   }, [call, existingName])
   const change = (key, value) => setForm((old) => ({ ...old, [key]: value }))
-  const root = form.root || `/srv/deployd/${name || 'myapp'}/releases`
-  const current = form.current || (form.layout === 'directory' ? `${root}/current` : `${root.slice(0, root.lastIndexOf('/'))}/current`)
+  const root = base.releases_dir || `/srv/deployd/${name || 'myapp'}/releases`
+  const current = base.current_link || `${root}/current`
   const needsConfirmation = Boolean(initialSpec?.secret?.configured) && signingMode !== 'keep'
   const baseFields = fields(base)
 
@@ -63,7 +59,8 @@ export default function AppEditor({ name: existingName, initialSpec, call, onSav
       ...base,
       github_repository: repository || null,
       deploy_url: form.deployUrl.trim() || null,
-      release_layout: form.layout,
+      site_path: form.sitePath.trim() || null,
+      release_layout: base.release_layout || (existingName ? 'symlink' : 'directory'),
       releases_dir: root,
       current_link: current,
       keep_previous: Number(form.keep),
@@ -84,22 +81,6 @@ export default function AppEditor({ name: existingName, initialSpec, call, onSav
     }
   }
 
-  const toggleAdvanced = () => {
-    try {
-      if (advanced) {
-        const parsed = JSON.parse(json)
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(t('setup.invalid_json'))
-        const nextFields = fields(parsed)
-        setBase(parsed)
-        setForm(nextFields)
-      } else {
-        setJson(JSON.stringify(makeSpec(), null, 2))
-      }
-      setAdvanced(!advanced)
-      setError(null)
-    } catch (err) { setError(err.message) }
-  }
-
   const save = async (event) => {
     event.preventDefault()
     if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(name)) {
@@ -110,7 +91,7 @@ export default function AppEditor({ name: existingName, initialSpec, call, onSav
     setPending(true)
     setError(null)
     try {
-      const spec = advanced ? JSON.parse(json) : makeSpec()
+      const spec = makeSpec()
       const credentials = {
         generate_signing_secret: signingMode === 'generate',
         ...(signingMode === 'custom' ? { signing_secret: signingSecret } : {}),
@@ -122,7 +103,7 @@ export default function AppEditor({ name: existingName, initialSpec, call, onSav
       })
       setSigningSecret('')
       setGithubToken('')
-      onSaved(result, spec)
+      onSaved(result, result.config || spec)
     } catch (err) { setError(err.message) } finally { setPending(false) }
   }
 
@@ -132,11 +113,6 @@ export default function AppEditor({ name: existingName, initialSpec, call, onSav
         <input className="text-input" value={name} disabled={Boolean(existingName)} autoComplete="off"
           placeholder={t('new.placeholder')} onChange={(event) => setName(event.target.value)} />
       </label>
-      <Button onClick={toggleAdvanced}>{t(advanced ? 'setup.guided' : 'setup.advanced')}</Button>
-      {advanced ? <label className="field-label">{t('app.configuration')}
-        <textarea className="code-editor" aria-label={t('new.configuration_label')} value={json}
-          spellCheck="false" onChange={(event) => setJson(event.target.value)} />
-      </label> : <>
         <label className="field-label">{t('setup.repository')}
           <input className="text-input" value={form.repository} required={!existingName}
             placeholder="https://github.com/owner/repo" onChange={(event) => change('repository', event.target.value)} />
@@ -151,19 +127,14 @@ export default function AppEditor({ name: existingName, initialSpec, call, onSav
             <option value="static">{t('setup.static')}</option><option value="service">{t('setup.service')}</option>
           </select>
         </label>
-        <label className="field-label">{t('releases.layout')}
-          <select className="text-input" value={form.layout} onChange={(event) => setForm({ ...form, layout: event.target.value, current: '' })}>
-            <option value="directory">{t('releases.directory_layout')}</option>
-            <option value="symlink">{t('releases.symlink_layout')}</option>
-          </select>
-        </label>
-        <label className="field-label">{t('app.release_directory')}
-          <input className="text-input" value={root} onChange={(event) => setForm({ ...form, root: event.target.value, current: '' })} />
-        </label>
-        <label className="field-label">{t('setup.current')}
-          <input className="text-input" value={current} onChange={(event) => change('current', event.target.value)} />
-        </label>
-        <p className="release-help">{t('releases.layout_help')}</p>
+        {(form.kind === 'static' || base.site_path) && <>
+          <label className="field-label">{t('setup.site_path')}
+            <input className="text-input" value={form.sitePath} required={form.kind === 'static'}
+              disabled={Boolean(base.site_path)} placeholder="/var/www/example.com"
+              onChange={(event) => change('sitePath', event.target.value)} />
+          </label>
+          <p className="release-help">{t('setup.site_path_help')}</p>
+        </>}
         {form.kind === 'service' ? <>
           <label className="field-label">{t('setup.executable')}
             <input className="text-input" required value={form.executable} placeholder="/usr/bin/systemctl"
@@ -187,7 +158,6 @@ export default function AppEditor({ name: existingName, initialSpec, call, onSav
         <p className="release-help">{t('setup.retention_help')}</p>
         <label className="release-checkbox"><input type="checkbox" checked={form.automatic}
           onChange={(event) => change('automatic', event.target.checked)} />{t('releases.automatic')}</label>
-      </>}
       <section className="setup-credentials">
         <h4>{t('setup.credentials')}</h4>
         <p className="release-help">{t('setup.secure_transport')}</p>

@@ -114,9 +114,21 @@ cd /opt/deployd
 
 [`deploy/uninstall-ubuntu.sh`](deploy/uninstall-ubuntu.sh) offers a
 permission-restricted backup and requires explicit confirmation. It removes
-deployd's service, Nginx configuration, credentials, runtime state, service
-account, and repository. Shared packages and deployed applications are
-preserved because they may be used independently.
+deployd's service, Nginx configuration, credentials, standard runtime state,
+and repository. Shared packages and deployed applications are preserved. The
+service account is retained when app data remains, preserving file ownership.
+Custom runtime paths outside the checkout and `/var/lib/deployd` are not included
+in the backup or removed; back them up separately. Removal aborts if the service
+cannot stop; rejected Nginx changes are restored before continuing.
+
+The installer stops deployd before rebuilding dependencies, repairs ownership
+of standard runtime files, and validates service-user access before restarting.
+Managed Python downloads live under `.python` in the checkout so systemd's
+`ProtectHome` does not hide them. Existing virtual environments pointing into a
+home directory must be recreated before installation can complete. If an upgrade
+fails after stopping deployd, resolve the reported error and rerun the installer.
+CI exercises fresh installation, repeat installation, backup, and removal on a
+disposable Ubuntu runner with real systemd and Nginx.
 
 ## Local development
 
@@ -143,16 +155,19 @@ Choose **Add application** to configure:
 
 - The app name, GitHub repository (`OWNER/REPO` or its URL), and public deployd
   API URL. This API URL is separate from the website being deployed.
-- Static website or service, release paths, health URL, and retention. Defaults
-  keep live files in `/srv/deployd/<app>/releases/current` and retain one previous
+- Static website (plain HTML or built React/Vite) or service, local site path,
+  health URL, and retention. Deployd automatically assigns internal folders and
+  keeps live files in `/srv/deployd/<app>/releases/current`, retaining one previous
   version. Static mode checks `index.html`; Nginx remains the web server.
 - A random signing secret (shown once), or your own secret of at least 32 bytes.
 - An optional per-app, read-only GitHub token for private release assets.
 
 **Edit** uses the same form. Blank credential fields preserve existing values;
-replacing a configured signing secret requires confirmation. **Advanced JSON**
-remains available for migrations and other settings. Apps with existing releases
-cannot change their release paths or layout through this form.
+replacing a configured signing secret requires confirmation. Internal paths and
+layout are not editable, and there is no JSON editor. The local site path (for
+example `/var/www/bluedatos.com`) is fixed after setup. The app card and completion
+screen show all assigned paths read-only. Existing apps keep their original layout
+and migration commands; they are not moved automatically.
 
 Credentials are stored separately in `DEPLOYD_SECRETS_FILE` with mode `0600`.
 GitHub tokens are never returned by the API. Per-app environment values

@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import os
 import secrets as pysecrets
+from pathlib import Path as FilePath
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request
@@ -39,6 +40,7 @@ def require_admin(x_admin_token: str | None = Header(default=None)):
 
 router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin)])
 AppName = Annotated[str, Path(pattern=APP_NAME_PATTERN)]
+MANAGED_ROOT = FilePath("/srv/deployd")
 
 
 class ReleaseSelection(BaseModel):
@@ -184,6 +186,8 @@ def _validate_app_update(request: Request, name: str, spec: AppSpec):
     if request.app.state.store.has_active_deploys(name):
         raise HTTPException(status_code=409, detail="app has queued or running deployments")
     existing = get_app_registry().get(name)
+    if existing and existing.site_path and spec.site_path != existing.site_path:
+        raise HTTPException(status_code=409, detail="the local site path is fixed after setup")
     if (
         existing
         and (existing.release_layout, existing.releases_dir, existing.current_link)
@@ -241,6 +245,24 @@ async def setup_app(request: Request, name: AppName, setup: AppSetup):
             )
         if not setup.create_only and name not in get_app_registry():
             raise HTTPException(status_code=404, detail="unknown app")
+        existing = get_app_registry().get(name)
+        expected = (
+            (existing.release_layout, existing.releases_dir, existing.current_link)
+            if existing
+            else (
+                "directory",
+                MANAGED_ROOT / name / "releases",
+                MANAGED_ROOT / name / "releases/current",
+            )
+        )
+        if (
+            setup.spec.release_layout,
+            setup.spec.releases_dir,
+            setup.spec.current_link,
+        ) != expected:
+            raise HTTPException(
+                status_code=422, detail="release layout and paths are managed by deployd"
+            )
         _validate_app_update(request, name, setup.spec)
         try:
             configure_app(name, setup.spec, changes)
@@ -254,6 +276,7 @@ async def setup_app(request: Request, name: AppName, setup: AppSetup):
         "app": name,
         "secret": generated,
         "fingerprint": _secret_info(name)["fingerprint"],
+        "config": setup.spec.model_dump(mode="json"),
     }
 
 

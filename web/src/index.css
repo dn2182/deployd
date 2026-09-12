@@ -1501,6 +1501,17 @@ footer {
   overflow-wrap: anywhere;
 }
 
+.app-paths dd {
+  margin: 4px 0 12px;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.app-paths dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .setup-summary dd {
   margin: 4px 0 16px;
 }

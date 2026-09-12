@@ -121,9 +121,21 @@ cd /opt/deployd
 
 [`deploy/uninstall-ubuntu.sh`](deploy/uninstall-ubuntu.sh) ofrece un respaldo
 con permisos restringidos y exige confirmación explícita. Elimina el servicio
-deployd, la configuración de Nginx, las credenciales, el estado, la cuenta de
-servicio y el repositorio. Conserva los paquetes compartidos y las aplicaciones
-desplegadas porque pueden usarse de forma independiente.
+deployd, la configuración de Nginx, las credenciales, el estado estándar y el
+repositorio. Conserva los paquetes compartidos y las aplicaciones desplegadas.
+Si quedan datos de aplicaciones, conserva también la cuenta de servicio para
+mantener su propietario. Las rutas de estado personalizadas fuera del checkout y
+`/var/lib/deployd` no se respaldan ni eliminan; respáldalas por separado.
+La desinstalación se detiene si no puede parar el servicio y restaura los cambios
+de Nginx si su validación o recarga falla.
+
+El instalador detiene deployd antes de reconstruir dependencias, repara permisos
+del estado estándar y verifica el acceso del usuario de servicio. Python
+administrado se instala en `.python` dentro del checkout para que `ProtectHome`
+no lo oculte. Si una `.venv` existente apunta al directorio personal, debe
+recrearse. Si falla una actualización tras detener el servicio, corrige el error
+indicado y ejecuta el instalador otra vez. CI prueba instalación nueva,
+reinstalación, respaldo y desinstalación con systemd y Nginx reales en Ubuntu.
 
 ## Desarrollo local
 
@@ -150,7 +162,8 @@ En **Agregar aplicación** puedes configurar:
 
 - Nombre, repositorio de GitHub (`PROPIETARIO/REPO` o su URL) y URL pública de
   la API de deployd, distinta de la URL del sitio que se despliega.
-- Sitio estático o servicio, rutas, URL de salud y retención. Por defecto, los
+- Sitio estático (HTML directo o React/Vite compilado) o servicio, ruta local,
+  URL de salud y retención. Las rutas internas se asignan automáticamente. Los
   archivos activos están en `/srv/deployd/<app>/releases/current` y se conserva
   una versión anterior. El modo estático verifica `index.html`; Nginx sigue
   siendo el servidor web.
@@ -161,8 +174,11 @@ En **Agregar aplicación** puedes configurar:
 
 **Editar** usa el mismo formulario. Los campos de credenciales vacíos conservan
 los valores existentes; reemplazar el secreto de firma requiere confirmación.
-**JSON avanzado** permite configurar migraciones y otros ajustes. No se pueden
-cambiar rutas ni diseño de carpetas si ya hay versiones en el servidor.
+No hay editor JSON ni controles para cambiar rutas internas o diseño de carpetas.
+La ruta local del sitio (por ejemplo `/var/www/bluedatos.com`) queda fija al
+guardar. La ficha de la app y el resumen muestran las rutas en modo de solo
+lectura. Las apps existentes conservan sus carpetas y comandos de migración;
+no se trasladan automáticamente.
 
 Las credenciales se guardan separadas en `DEPLOYD_SECRETS_FILE`, con modo `0600`.
 La API nunca devuelve los tokens de GitHub. Las variables de entorno por app

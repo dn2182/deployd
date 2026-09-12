@@ -20,16 +20,15 @@ function setup(spec = {}, language = 'en', busy = false, releases = versions, ac
 }
 
 describe('ReleasePanel', () => {
-  it('allows choosing real-current layout for an empty app', async () => {
+  it('preserves the existing layout when saving retention for an empty app', async () => {
     const call = setup({ releases_dir: '/srv/site/releases', current_link: '/srv/site/current',
       release_layout: 'symlink', keep_previous: 1 }, 'en', false, [], null)
     await screen.findByText('No retained versions yet.')
-    expect(screen.getByLabelText('Release layout')).not.toBeDisabled()
-    fireEvent.change(screen.getByLabelText('Release layout'), { target: { value: 'directory' } })
+    expect(screen.queryByLabelText('Release layout')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() => expect(call).toHaveBeenCalledWith('/admin/apps/site', {
       method: 'PUT', body: JSON.stringify({ releases_dir: '/srv/site/releases',
-        current_link: '/srv/site/releases/current', release_layout: 'directory', keep_previous: 1, auto_cleanup: true }),
+        current_link: '/srv/site/current', release_layout: 'symlink', keep_previous: 1, auto_cleanup: true }),
     }))
   })
 
@@ -65,7 +64,7 @@ describe('ReleasePanel', () => {
     await screen.findByText('aaaaaaaaaaaa')
     expect(screen.getAllByRole('button', { name: 'Delete files' })).toHaveLength(1)
     expect(screen.getAllByRole('button', { name: 'Activate' })[0]).toBeDisabled()
-    expect(screen.getByLabelText('Release layout')).toBeDisabled()
+    expect(screen.queryByLabelText('Release layout')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Delete files' }))
     fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete files' }))
     await waitFor(() => expect(call).toHaveBeenCalledWith('/admin/apps/site/releases/cleanup', {

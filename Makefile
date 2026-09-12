@@ -1,6 +1,7 @@
 VENV := .venv
 PY   := $(VENV)/bin/python
 UV   ?= uv
+export UV_PYTHON_INSTALL_DIR := $(CURDIR)/.python
 
 .PHONY: install build clean dev dev-web update test lint audit
 

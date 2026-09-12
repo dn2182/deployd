@@ -2,6 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from deployd import config
+from deployd.api import admin
 from deployd.main import create_app
 from deployd.worker import runner
 
@@ -11,6 +12,7 @@ TOKEN = "github_pat_" + "t" * 40
 
 @pytest.fixture
 def setup_env(tmp_path, monkeypatch):
+    monkeypatch.setattr(admin, "MANAGED_ROOT", tmp_path)
     (tmp_path / "apps.yaml").write_text("apps: {}\n")
     monkeypatch.setenv("DEPLOYD_APPS_CONFIG", str(tmp_path / "apps.yaml"))
     monkeypatch.setenv("DEPLOYD_SECRETS_FILE", str(tmp_path / "secrets.env"))
@@ -26,6 +28,7 @@ def setup_env(tmp_path, monkeypatch):
 
 
 def payload(root, **credentials):
+    root = root / "site"
     return {
         "create_only": True,
         "spec": {
@@ -157,6 +160,34 @@ def test_setup_unknown_edit_does_not_create_credentials(setup_env):
     body["create_only"] = False
     with TestClient(create_app()) as client:
         assert client.post("/admin/apps/site/setup", headers=ADMIN, json=body).status_code == 404
+    assert not (setup_env / "secrets.env").exists()
+
+
+def test_setup_paths_are_managed_and_site_files_are_untouched(setup_env):
+    site = setup_env / "www/example.com"
+    site.mkdir(parents=True)
+    (site / "index.html").write_text("existing live site")
+    body = payload(setup_env, generate_signing_secret=True)
+    body["spec"]["site_path"] = str(site)
+    with TestClient(create_app()) as client:
+        response = client.post("/admin/apps/site/setup", headers=ADMIN, json=body)
+        assert response.status_code == 200
+        assert response.json()["config"]["site_path"] == str(site)
+        body["create_only"] = False
+        body["credentials"] = {}
+        body["spec"]["site_path"] = str(setup_env / "www/other.com")
+        assert client.post("/admin/apps/site/setup", headers=ADMIN, json=body).status_code == 409
+    assert (site / "index.html").read_text() == "existing live site"
+    assert not site.is_symlink()
+
+
+def test_custom_internal_paths_are_rejected_before_any_directory_creation(setup_env):
+    body = payload(setup_env, generate_signing_secret=True)
+    unexpected = setup_env / "unexpected"
+    body["spec"].update(releases_dir=str(unexpected), current_link=str(unexpected / "current"))
+    with TestClient(create_app()) as client:
+        assert client.post("/admin/apps/site/setup", headers=ADMIN, json=body).status_code == 422
+    assert not unexpected.exists()
     assert not (setup_env / "secrets.env").exists()
 
 

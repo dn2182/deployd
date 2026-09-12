@@ -26,6 +26,7 @@ import { detectLanguage, translate } from './i18n.js'
 import ReleasePanel from './components/ReleasePanel.jsx'
 import AppEditor from './components/AppEditor.jsx'
 import SetupSummary from './components/SetupSummary.jsx'
+import AppPaths from './components/AppPaths.jsx'
 
 const STEP_ICON = {
   succeeded: <Check size={13} />,
@@ -189,11 +190,8 @@ function AppCard({ name, spec, call, onChanged, t }) {
             <span className="warning-value">{t('app.not_configured')}</span>
           )}
         </div>
-        <div className="detail-item detail-item-wide">
-          <span className="detail-label">{t('app.release_directory')}</span>
-          <code className="path-value">{spec.releases_dir}</code>
-        </div>
       </div>
+      <AppPaths spec={spec} t={t} />
 
       <Button onClick={() => setShowReleases(!showReleases)} aria-expanded={showReleases}>
         {t('releases.manage')}

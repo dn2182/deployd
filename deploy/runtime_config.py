@@ -32,7 +32,7 @@ def prepare(repo: Path, state: Path) -> str:
             # Existing state must be migrated deliberately, including SQLite WAL files.
             candidates = [source]
             if key == "DEPLOYD_DB_PATH":
-                candidates += [Path(f"{source}{suffix}") for suffix in ("-wal", "-shm")]
+                candidates += [Path(f"{source}{suffix}") for suffix in ("-wal", "-shm", ".lock")]
             if any(candidate.exists() or candidate.is_symlink() for candidate in candidates):
                 raise ValueError(
                     f"{key}: existing state at {source}; stop deployd and migrate it to "
@@ -96,6 +96,10 @@ def check() -> None:
         settings.apps_config,
         settings.secrets_file,
     ):
+        if path.is_symlink():
+            raise ValueError(f"runtime file must not be a symbolic link: {path}")
+        if path.exists() and not path.is_file():
+            raise ValueError(f"runtime path must be a regular file: {path}")
         if path.exists() and not os.access(path, os.R_OK | os.W_OK):
             raise ValueError(f"deployd cannot read/write runtime file: {path}")
     if not settings.secrets_file.is_file():

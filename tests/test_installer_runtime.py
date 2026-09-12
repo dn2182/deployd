@@ -70,7 +70,14 @@ def test_blank_admin_token_is_generated(runtime_paths):
 
 
 @pytest.mark.parametrize(
-    "existing", ["deployd.sqlite3", "deployd.sqlite3-wal", "config/apps.yaml", "config/secrets.env"]
+    "existing",
+    [
+        "deployd.sqlite3",
+        "deployd.sqlite3-wal",
+        "deployd.sqlite3.lock",
+        "config/apps.yaml",
+        "config/secrets.env",
+    ],
 )
 def test_legacy_data_requires_migration_without_mutation(runtime_paths, existing):
     repo, state = runtime_paths
@@ -152,6 +159,18 @@ def test_preflight_catches_unwritable_lock(configured_runtime, monkeypatch):
         runtime.os, "access", lambda path, mode: path != lock and original_access(path, mode)
     )
     with pytest.raises(ValueError, match="cannot read/write runtime file"):
+        runtime.check()
+
+
+@pytest.mark.parametrize(
+    "filename", ["deployd.sqlite3", "deployd.sqlite3.lock", "apps.yaml", "secrets.env"]
+)
+def test_preflight_rejects_symlinked_runtime_files(configured_runtime, filename):
+    _, state = configured_runtime
+    path = state / filename
+    path.unlink(missing_ok=True)
+    path.symlink_to(state / "missing-target")
+    with pytest.raises(ValueError, match="symbolic link"):
         runtime.check()
 
 

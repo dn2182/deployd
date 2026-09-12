@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Button } from './ui.jsx'
+import AppPaths from './AppPaths.jsx'
 
 export default function SetupSummary({ result, spec, onDismiss, t }) {
   const [copied, setCopied] = useState(false)
@@ -8,6 +9,7 @@ export default function SetupSummary({ result, spec, onDismiss, t }) {
   }
   return <section className="glass-panel app-card setup-summary" aria-label={t('setup.saved')}>
     <h3>{t('setup.saved')}</h3>
+    <AppPaths spec={spec} t={t} />
     {result.secret && <div className="secret-reveal">
       <strong>{t('app.secret_generated')}</strong>
       <p>{t('app.secret_once')}</p>

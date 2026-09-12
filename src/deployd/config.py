@@ -144,6 +144,7 @@ class HealthSpec(BaseModel):
 class AppSpec(BaseModel):
     github_repository: str | None = None
     deploy_url: str | None = None
+    site_path: Path | None = None
     releases_dir: Path
     current_link: Path
     release_layout: Literal["symlink", "directory"] = "symlink"
@@ -208,11 +209,28 @@ class AppSpec(BaseModel):
             raise ValueError("filesystem root cannot be a managed path")
         return value
 
+    @field_validator("site_path")
+    @classmethod
+    def validate_site_path(cls, value):
+        if value is not None:
+            value = Path(os.path.abspath(value)) if value.is_absolute() else value
+            if not value.is_absolute() or len(value.parts) < 4:
+                raise ValueError(
+                    "site path must be an absolute app-specific path, such as /var/www/example.com"
+                )
+        return value
+
     @model_validator(mode="after")
     def validate_path_relationships(self):
         # Normalize lexical paths without following an existing ``current`` symlink.
         releases = Path(os.path.abspath(self.releases_dir))
         current = Path(os.path.abspath(self.current_link))
+        if self.site_path and (
+            self.site_path == releases
+            or self.site_path.is_relative_to(releases)
+            or releases.is_relative_to(self.site_path)
+        ):
+            raise ValueError("site path must be separate from the managed release directory")
         if self.release_layout == "directory":
             if current != releases / "current":
                 raise ValueError("directory layout requires current_link = releases_dir/current")

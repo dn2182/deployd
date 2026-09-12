@@ -38,7 +38,7 @@ describe('AppEditor', () => {
     expect(sent.create_only).toBe(false)
   })
 
-  it('keeps credential values out of advanced JSON and sends them separately', async () => {
+  it('sends credentials separately from application settings', async () => {
     const { call } = editor()
     fireEvent.change(screen.getByLabelText('GitHub repository'), { target: { value: 'acme/site' } })
     fireEvent.change(screen.getByLabelText('GitHub access token (optional)'), { target: { value: 'private-pat-value' } })
@@ -46,12 +46,9 @@ describe('AppEditor', () => {
     fireEvent.change(screen.getByLabelText('Signing secret value'), { target: { value: 's'.repeat(32) } })
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
     fireEvent.click(screen.getByLabelText(/I understand that existing CI/))
-    fireEvent.click(screen.getByRole('button', { name: 'Advanced JSON' }))
-    const json = screen.getByLabelText('New application configuration').value
-    expect(json).not.toContain('private-pat-value')
-    expect(json).not.toContain('s'.repeat(32))
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() => expect(call).toHaveBeenCalledTimes(1))
+    expect(JSON.stringify(JSON.parse(call.mock.calls[0][1].body).spec)).not.toContain('private-pat-value')
     expect(JSON.parse(call.mock.calls[0][1].body).credentials).toMatchObject({
       signing_secret: 's'.repeat(32), github_token: 'private-pat-value',
     })
@@ -79,15 +76,12 @@ describe('AppEditor', () => {
     })
   })
 
-  it('keeps invalid advanced JSON editable without breaking the form', () => {
-    editor()
-    fireEvent.click(screen.getByRole('button', { name: 'Advanced JSON' }))
-    fireEvent.change(screen.getByLabelText('New application configuration'), { target: { value: 'null' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Guided form' }))
-    expect(screen.getByRole('alert')).toHaveTextContent('Configuration must be a JSON object')
-    fireEvent.change(screen.getByLabelText('New application configuration'), { target: { value: JSON.stringify(existing) } })
-    fireEvent.click(screen.getByRole('button', { name: 'Guided form' }))
-    expect(screen.getByLabelText('Release directory')).toHaveValue(existing.releases_dir)
+  it('hides internal controls and locks an existing local site path', () => {
+    editor({ ...existing, site_path: '/var/www/example.com' })
+    expect(screen.queryByRole('button', { name: 'Advanced JSON' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Release directory')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Active path')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Local site path')).toBeDisabled()
   })
 
   it('shows request errors and permits retrying', async () => {
@@ -103,6 +97,6 @@ describe('AppEditor', () => {
       t={(key, values) => translate('es', key, values)} />)
     expect(screen.getByLabelText('Repositorio de GitHub')).toBeInTheDocument()
     expect(screen.getByLabelText('Secreto de firma de despliegues')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'JSON avanzado' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'JSON avanzado' })).not.toBeInTheDocument()
   })
 })
