@@ -201,10 +201,16 @@ Abre la interfaz por HTTPS o un túnel SSH e ingresa el token de administración
 Busca por nombre, repositorio o ruta local. La lista muestra diez aplicaciones
 por página y solo los detalles de la seleccionada. **Conexión del sitio**,
 **Administrar versiones** y **Configuración de GitHub Actions** son pestañas: solo
-una está activa. Las rutas están en **Carpetas de la aplicación**. **Actualizar**
-consulta la salud de la API, aplicaciones, actividad y el panel abierto de conexión
-o versiones; no hay consultas periódicas de la interfaz. Actualiza después de un
-despliegue o una operación pendiente para ver el resultado. GitHub Actions sigue
+una está activa. Las rutas están en **Carpetas de la aplicación**. Cada tarjeta
+tiene un panel de estado con el release actual, la cantidad en cola, el último
+deploy y el último health check, más **Congelar** / **Descongelar**. La zona de
+actividad consulta cada 2 segundos mientras hay un deploy en cola o en ejecución
+y cada 15 segundos en reposo, muestra un aviso cuando un deploy llega a un
+estado final y ofrece **Actualizar** (o la tecla `r`) para refrescar de
+inmediato. **Deploys recientes** filtra por app y estado, busca por prefijo de
+commit, pagina con **Cargar más** y ofrece cancelar, redeploy, rollback al
+anterior y enlaces al commit y a la comparación por fila; **Auditoría** lista
+las acciones administrativas con el usuario que las hizo. GitHub Actions sigue
 consultando su propio despliegue hasta terminar.
 
 En **Agregar aplicación** puedes configurar:

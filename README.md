@@ -191,10 +191,16 @@ Open the management UI over HTTPS or an SSH tunnel and enter the admin token.
 Search applications by name, repository, or local site path; the list shows ten
 per page and only the selected application's details. **Website connection**,
 **Manage versions**, and **GitHub Actions setup** are mutually exclusive tabs.
-Internal paths are under **Application folders**. **Refresh** updates API health,
-applications, recent activity, and the open website/version panel; there is no
-background UI polling. Refresh after GitHub deployments or queued operations to
-see their result. GitHub Actions still polls its own deployment until completion.
+Internal paths are under **Application folders**. Each app card has a status
+panel with the current release, queued count, last deploy and last health
+result, plus **Freeze** / **Unfreeze**. The activity area polls every 2 seconds
+while a deploy is queued or running and every 15 seconds otherwise, shows a
+toast when a deploy reaches a terminal state, and offers **Refresh** (or the
+`r` key) for an immediate update. **Recent deploys** filters by app and status,
+searches by commit prefix, pages with **Load more**, and offers cancel,
+redeploy, roll back to previous, commit and compare links per row; **Audit
+log** lists admin actions with the acting user. GitHub Actions still polls its
+own deployment until completion.
 
 Choose **Add application** to configure:
 
