@@ -66,6 +66,16 @@ def deploy_body(digest: str) -> bytes:
     ).encode()
 
 
+def test_signed_deploy_rejected_while_removing_app(env, monkeypatch):
+    with TestClient(create_app()) as client:
+        monkeypatch.setattr(client.app.state.queue, "is_removing", lambda name: True)
+        body = deploy_body("a" * 64)
+        response = client.post("/deploys", content=body, headers=signed_headers(body))
+        assert response.status_code == 409
+        assert "removal" in response.json()["detail"]
+        assert not client.app.state.store.list_deploys()
+
+
 def test_signed_request_deploys_end_to_end(env, monkeypatch):
     artifact, digest = make_artifact(env, "app.zip", "e2e")
 

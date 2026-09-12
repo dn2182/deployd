@@ -58,3 +58,32 @@ async def test_restart_does_not_replay_connection_as_download(tmp_path):
     assert worker.recover({"app"}) == 0
     assert store.get_deploy(did)["status"] == "failed"
     assert not worker._pending_ids
+
+
+async def test_removal_lock_lasts_until_worker_finishes(tmp_path, monkeypatch):
+    store = Store(tmp_path / "state.sqlite3")
+    store.init()
+    worker = queue.DeployQueue(store)
+    finish = asyncio.Event()
+
+    async def remove(*args):
+        await finish.wait()
+
+    monkeypatch.setattr(queue, "run_removal", remove)
+    try:
+        worker.enqueue_removal("site", "id")
+        assert worker.is_removing("site")
+        finish.set()
+        await asyncio.wait_for(worker._queues["site"].join(), 1)
+        assert not worker.is_removing("site")
+    finally:
+        await worker.shutdown()
+
+
+async def test_restart_does_not_replay_removal_as_download(tmp_path):
+    store = Store(tmp_path / "state.sqlite3")
+    store.init()
+    did = store.create_deploy("app", "0" * 40, "local-website://remove", "0" * 64, "remove:app")
+    worker = queue.DeployQueue(store)
+    assert worker.recover({"app"}) == 0
+    assert store.get_deploy(did)["status"] == "failed"

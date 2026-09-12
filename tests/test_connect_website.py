@@ -171,3 +171,85 @@ def test_retry_recovers_after_interrupted_connection(site, monkeypatch, crash_at
     monkeypatch.setattr(helper, "write_json", write)
     assert run("connect")["status"] == "connected"
     assert (current.parent / "b4deployd/index.html").read_text() == "original website"
+
+
+def detach():
+    return helper.disconnect("site", "example.com", (os.getuid(), os.getgid()))
+
+
+def test_detach_leaves_unconnected_real_directory_untouched(site):
+    original, _, _ = site
+    assert detach()["status"] == "unlinked"
+    assert (original / "index.html").read_text() == "original website"
+
+
+def test_detach_refuses_foreign_link(site):
+    original, _, _ = site
+    backup = original.with_suffix(".bak")
+    original.rename(backup)
+    original.symlink_to(backup)
+    with pytest.raises(ValueError, match="not this app's symlink"):
+        detach()
+    assert original.resolve() == backup
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="real Linux renameat2 exchange")
+def test_detach_restores_current_not_baseline_and_keeps_releases(site):
+    original, current, _ = site
+    run("connect")
+    assert detach()["status"] == "restored"
+    assert original.is_dir() and not original.is_symlink()
+    assert (original / "index.html").read_text() == "new website"
+    assert not (original / helper.MANIFEST).exists()
+    assert (current / "index.html").read_text() == "new website"
+    assert (current.parent / "b4deployd/index.html").read_text() == "original website"
+    assert detach()["status"] == "restored"
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="real Linux renameat2 exchange")
+@pytest.mark.parametrize("phase", ["copy", "journal", "exchange"])
+def test_interrupted_detach_is_safe_and_retryable(site, monkeypatch, phase):
+    original, current, _ = site
+    run("connect")
+    copy, rename = helper.copy_site, helper.rename
+
+    def fail_copy(*args, **kwargs):
+        copy(*args, **kwargs)
+        if phase == "copy":
+            raise SystemExit("interrupted copy")
+
+    def fail_rename(*args):
+        rename(*args)
+        if (phase == "journal" and args[-1] == 1) or (phase == "exchange" and args[-1] == 2):
+            raise SystemExit("interrupted exchange")
+
+    monkeypatch.setattr(helper, "copy_site", fail_copy)
+    monkeypatch.setattr(helper, "rename", fail_rename)
+    with pytest.raises(SystemExit):
+        detach()
+    assert (original / "index.html").read_text() == "new website"
+    assert (current / "index.html").read_text() == "new website"
+    monkeypatch.setattr(helper, "copy_site", copy)
+    monkeypatch.setattr(helper, "rename", rename)
+    assert detach()["status"] == "restored"
+    assert not original.is_symlink()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="real Linux renameat2 exchange")
+def test_changed_live_version_cannot_be_silently_rolled_back_by_retry(site, monkeypatch):
+    original, current, _ = site
+    run("connect")
+    rename = helper.rename
+
+    def stop_after_journal(*args):
+        rename(*args)
+        raise SystemExit("before exchange")
+
+    monkeypatch.setattr(helper, "rename", stop_after_journal)
+    with pytest.raises(SystemExit):
+        detach()
+    monkeypatch.setattr(helper, "rename", rename)
+    (current / helper.MANIFEST).write_text(json.dumps({"name": "c" * 40 + "-" + "d" * 32}))
+    with pytest.raises(ValueError, match="live version changed"):
+        detach()
+    assert original.is_symlink()

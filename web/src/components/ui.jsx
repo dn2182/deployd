@@ -47,6 +47,7 @@ export function ConfirmDialog({
   confirmationValue,
   confirmationLabel,
   cancelLabel = 'Cancel',
+  children,
 }) {
   const [open, setOpen] = useState(false)
   const [value, setValue] = useState('')
@@ -70,6 +71,7 @@ export function ConfirmDialog({
           <AlertDialog.Description className="dialog-description">
             {description}
           </AlertDialog.Description>
+          {children}
           {confirmationValue !== undefined && (
             <label className="field-label dialog-confirmation">
               {confirmationLabel ?? <>Type <strong>{confirmationValue}</strong> to confirm</>}

@@ -44,6 +44,10 @@ response within a few days.
   accidental switches; it is not a security boundary against a compromised admin
   token or service account. Keep `/var/lib/deployd-connect` root-only and retain
   its recovery data until any interrupted connection has been resolved.
+- Website removal/restoration uses the same restricted helper. It stages a bounded
+  copy of the current release and exchanges only the expected web-root symlink;
+  unrelated paths are not overwritten. Stop external file writers first. Restored
+  files remain owned by deployd, so uninstall retains that account and release data.
 - Enforce request/body and rate limits at the reverse proxy as an additional
   public-edge control; deployd also limits the signed request body itself.
 

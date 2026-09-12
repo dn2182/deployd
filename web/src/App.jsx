@@ -96,6 +96,8 @@ function AppCard({ name, spec, call, onChanged, t }) {
   const [showReleases, setShowReleases] = useState(false)
   const [showGitHub, setShowGitHub] = useState(false)
   const [showWebsite, setShowWebsite] = useState(false)
+  const [removeWebsite, setRemoveWebsite] = useState('restore')
+  const [removing, setRemoving] = useState(false)
   const [freshSecret, setFreshSecret] = useState(null)
   const [copied, setCopied] = useState(false)
   const [error, setError] = useState(null)
@@ -116,11 +118,17 @@ function AppCard({ name, spec, call, onChanged, t }) {
   }
 
   const remove = async () => {
+    setRemoving(true)
     try {
-      await call(`/admin/apps/${name}`, { method: 'DELETE' })
+      await call(`/admin/apps/${name}`, {
+        method: 'DELETE',
+        ...(spec.site_path && { body: JSON.stringify({ confirm: name, website: removeWebsite }) }),
+      })
       onChanged()
     } catch (requestError) {
       setError(requestError.message)
+    } finally {
+      setRemoving(false)
     }
   }
 
@@ -165,19 +173,28 @@ function AppCard({ name, spec, call, onChanged, t }) {
           />
           <ConfirmDialog
             trigger={
-              <TooltipButton label={t('app.remove', { name })} className="icon-button-danger">
+              <TooltipButton label={t('app.remove', { name })} className="icon-button-danger" disabled={removing}>
                 <Trash2 size={16} />
               </TooltipButton>
             }
             title={t('app.remove_title', { name })}
-            description={t('app.remove_description')}
+            description={t(spec.site_path ? 'website.remove_description' : 'app.remove_description')}
             confirmLabel={t('app.remove_confirm')}
             confirmationValue={name}
             confirmationLabel={t('common.confirm_type', { value: name })}
             cancelLabel={t('common.cancel')}
             destructive
             onConfirm={remove}
-          />
+          >
+            {spec.site_path && <label className="field-label">
+              {t('website.remove_choice')}
+              <select className="text-input" value={removeWebsite} onChange={(event) => setRemoveWebsite(event.target.value)}>
+                <option value="restore">{t('website.remove_restore')}</option>
+                <option value="keep">{t('website.remove_keep')}</option>
+              </select>
+              <span className="release-help">{t('website.remove_help')}</span>
+            </label>}
+          </ConfirmDialog>
         </div>
       </div>
 

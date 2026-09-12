@@ -326,8 +326,31 @@ Interrupted switches preserve the original either in `releases/b4deployd` or in
 root-only `/var/lib/deployd-connect/<app>/original`. Retry **Connect website** to
 resume; unexpected path changes or damaged metadata require operator inspection.
 Never delete helper recovery storage while recovering. Uninstall removes the
-helper and its sudo rule but preserves website symlinks, releases, and recovery
-data, so the live website remains available.
+helper and its sudo rule but preserves releases and recovery data. It asks whether
+to restore website paths as real folders or keep their symlinks.
+
+### Remove an app or uninstall without leaving its web-root symlink
+
+Removing a website app asks you to choose **Restore current live files as a real
+folder** or **Keep the website symlink connected**, and to type the app name.
+Restore copies the current version into private staging, verifies it, and atomically
+replaces only that app's fixed `/var/www/<site>` link with the real directory.
+It does **not** switch to `b4deployd`. The app is unregistered only after restoration
+succeeds; new deployments are rejected while removal is queued or running.
+
+The uninstaller also asks **restore / keep / cancel** when it finds standard
+website links under `/var/www`, including links for apps previously unregistered
+with **Keep**. It stops deployd and creates the requested backup first, restores
+the selected sites before deleting service/configuration files, and stops if any
+restore fails. Sites restored before a later failure remain safely restored.
+
+Run the updated installer first so the root-owned helper supports restoration.
+Stop other processes writing website files. Same-mount and static-file checks
+still apply, and staging needs enough free space for another copy of the live site.
+Unrelated links and custom paths outside `/var/www` are not changed; handle those
+manually. Current and retained releases, `b4deployd`, recovery journals, and the
+deployd account are preserved. Restored folders/files are deployd-owned; this is
+path restoration, not recovery of historical Unix ownership. Nginx routes are unchanged.
 
 The Ubuntu installer creates `/srv/deployd` owned by `deployd`. Existing
 installations upgrading without rerunning the installer need this once:

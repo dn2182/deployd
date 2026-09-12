@@ -5,7 +5,7 @@ import logging
 
 from ..store.db import Store
 from .runner import run_activation, run_deploy
-from .website import run_connection
+from .website import run_connection, run_removal
 
 log = logging.getLogger("deployd.worker")
 
@@ -18,6 +18,14 @@ class DeployQueue:
         self._pending_ids: set[str] = set()
         self._activations: dict[str, str] = {}
         self._connections: set[str] = set()
+        self._removals: dict[str, str] = {}
+
+    def is_removing(self, app: str) -> bool:
+        return app in self._removals.values()
+
+    def enqueue_removal(self, app: str, deploy_id: str) -> None:
+        self._removals[deploy_id] = app
+        self.enqueue(app, deploy_id)
 
     def enqueue_connection(self, app: str, deploy_id: str) -> None:
         self._connections.add(deploy_id)
@@ -40,7 +48,7 @@ class DeployQueue:
         recovered = 0
         for app, deploy_id in self._store.recover_after_restart():
             if self._store.get_deploy(deploy_id)["triggered_by"].startswith(
-                ("activate:", "connect:")
+                ("activate:", "connect:", "remove:")
             ):
                 self._store.add_step(
                     deploy_id,
@@ -69,7 +77,9 @@ class DeployQueue:
             deploy_id = await q.get()
             try:
                 release = self._activations.pop(deploy_id, None)
-                if deploy_id in self._connections:
+                if deploy_id in self._removals:
+                    await run_removal(self._store, app, deploy_id)
+                elif deploy_id in self._connections:
                     self._connections.remove(deploy_id)
                     await run_connection(self._store, app, deploy_id)
                 elif release is None:
@@ -86,6 +96,7 @@ class DeployQueue:
                 )
                 self._store.set_status(deploy_id, "failed", finished=True)
             finally:
+                self._removals.pop(deploy_id, None)
                 self._pending_ids.discard(deploy_id)
                 q.task_done()
 

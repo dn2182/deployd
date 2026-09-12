@@ -7,6 +7,8 @@ import json
 import os
 import pwd
 import re
+import shutil
+import signal
 import stat
 import sys
 import time
@@ -146,6 +148,170 @@ def expected_link(fd, name, target):
     return bool(value and stat.S_ISLNK(value.st_mode) and os.readlink(name, dir_fd=fd) == target)
 
 
+def copy_site(source, destination, owner, *, budget=None, mount=None, depth=0):
+    if budget is None:
+        budget = [0, 0]
+        mount = mount_id(source)
+    if depth > 64 or mount_id(source) != mount:
+        raise ValueError("live website contains a mount or excessive nesting")
+    for name in os.listdir(source):
+        if name == MANIFEST and depth == 0:
+            continue
+        value = os.stat(name, dir_fd=source, follow_symlinks=False)
+        budget[0] += 1
+        budget[1] += value.st_size
+        if budget[0] > 100000 or budget[1] > 2 * 1024**3:
+            raise ValueError("website exceeds the restore copy limit")
+        if stat.S_ISDIR(value.st_mode):
+            os.mkdir(name, mode=0o700, dir_fd=destination)
+            with directory(name, source) as child, directory(name, destination) as copied:
+                copy_site(child, copied, owner, budget=budget, mount=mount, depth=depth + 1)
+        elif stat.S_ISREG(value.st_mode):
+            handle = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=source)
+            try:
+                before = os.fstat(handle)
+                if (
+                    not stat.S_ISREG(before.st_mode)
+                    or identity(before) != identity(value)
+                    or before.st_nlink != 1
+                    or before.st_size != value.st_size
+                    or mount_id(handle) != mount
+                ):
+                    raise ValueError(
+                        "live files changed while restoring; retry with writers stopped"
+                    )
+                output = os.open(
+                    name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=destination,
+                )
+                try:
+                    remaining = before.st_size
+                    while remaining:
+                        chunk = os.read(handle, min(remaining, 1024 * 1024))
+                        if not chunk:
+                            raise ValueError("live file changed during copy")
+                        remaining -= len(chunk)
+                        view = memoryview(chunk)
+                        while view:
+                            written = os.write(output, view)
+                            if written == 0:
+                                raise OSError("incomplete website copy")
+                            view = view[written:]
+                    after = os.fstat(handle)
+                    if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                        after.st_size,
+                        after.st_mtime_ns,
+                        after.st_ctime_ns,
+                    ):
+                        raise ValueError("live file changed during copy")
+                    os.fchown(output, *owner)
+                    os.fchmod(output, before.st_mode & 0o777)
+                    os.fsync(output)
+                finally:
+                    os.close(output)
+            finally:
+                os.close(handle)
+        else:
+            raise ValueError("live site contains a link or special file")
+    os.fchown(destination, *owner)
+    os.fchmod(destination, 0o755)
+    os.fsync(destination)
+
+
+def disconnect(app, site, owner):
+    if not APP.fullmatch(app) or not SITE.fullmatch(site):
+        raise ValueError("expected an app name and a direct /var/www child name")
+    target = str(RELEASE_ROOT / app / "releases/current")
+    with ExitStack() as stack:
+        web = open_path(stack, WEB_ROOT)
+        state = open_path(stack, STATE_ROOT)
+        for fd, mask in ((web, 0o022), (state, 0o077)):
+            value = os.fstat(fd)
+            if value.st_uid != ROOT_UID or value.st_mode & mask:
+                raise ValueError("website parent and helper state must be root-owned and protected")
+        lock = os.open("lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600, dir_fd=state)
+        stack.callback(os.close, lock)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if info(state, app) is None:
+            os.mkdir(app, mode=0o700, dir_fd=state)
+            os.fsync(state)
+        transaction = stack.enter_context(directory(app, state))
+        if info(transaction, "journal.json") and not info(transaction, "complete.json"):
+            raise ValueError("finish the interrupted website connection before removing it")
+        restore_name = f"restore-{site}"
+        if info(transaction, restore_name) is None:
+            os.mkdir(restore_name, mode=0o700, dir_fd=transaction)
+            os.fsync(transaction)
+        transaction = stack.enter_context(directory(restore_name, transaction))
+        if info(transaction, "detach.json"):
+            receipt = read_json(transaction, "detach.json")
+            if receipt["site"] != site:
+                raise ValueError("restore journal belongs to another website")
+            if identity(info(web, site)) == receipt["copied"]:
+                if expected_link(transaction, "detached-files", target):
+                    os.unlink("detached-files", dir_fd=transaction)
+                    os.fsync(transaction)
+                elif info(transaction, "detached-files"):
+                    raise ValueError(
+                        "unexpected restore staging files; operator inspection required"
+                    )
+                return {"status": "restored", "path": str(WEB_ROOT / site)}
+            if not expected_link(web, site, target):
+                raise ValueError("website changed after restore; refusing to overwrite it")
+            if identity(info(transaction, "detached-files")) != receipt["copied"]:
+                raise ValueError("restore staging changed; operator inspection required")
+            current = open_path(stack, Path(target))
+            if read_json(current, MANIFEST).get("name") != receipt["version"]:
+                raise ValueError(
+                    "live version changed after interrupted restore; operator inspection required"
+                )
+        else:
+            existing = info(web, site)
+            if existing is None or stat.S_ISDIR(existing.st_mode):
+                return {"status": "unlinked", "path": str(WEB_ROOT / site)}
+            if not expected_link(web, site, target):
+                raise ValueError("local path is not this app's symlink; refusing to replace it")
+            current = open_path(stack, Path(target))
+            if len({mount_id(web), mount_id(state), mount_id(current)}) != 1:
+                raise ValueError("website and helper storage must share the current release mount")
+            data = read_json(current, MANIFEST)
+            if not isinstance(data, dict) or not VERSION.fullmatch(str(data.get("name", ""))):
+                raise ValueError("current release metadata is invalid")
+            scan(current, os.fstat(current).st_dev, manifest=True)
+            # Only this private copy is disposable. Live releases and originals are never removed.
+            if info(transaction, "detached-files"):
+                shutil.rmtree("detached-files", dir_fd=transaction)
+            os.mkdir("detached-files", mode=0o700, dir_fd=transaction)
+            with directory("detached-files", transaction) as copied:
+                copy_site(current, copied, owner)
+                scan(copied, os.fstat(copied).st_dev)
+                index = info(copied, "index.html")
+                if not index or not stat.S_ISREG(index.st_mode) or not index.st_size:
+                    raise ValueError("restored website requires a non-empty index.html")
+                if info(transaction, "detach.pending.json"):
+                    os.unlink("detach.pending.json", dir_fd=transaction)
+                write_json(
+                    transaction,
+                    "detach.pending.json",
+                    {
+                        "site": site,
+                        "copied": identity(os.fstat(copied)),
+                        "version": data["name"],
+                    },
+                )
+            rename(transaction, "detach.pending.json", transaction, "detach.json", 1)
+        if not expected_link(web, site, target):
+            raise ValueError("website changed during restore; no live files were overwritten")
+        rename(web, site, transaction, "detached-files", 2)
+        if not expected_link(transaction, "detached-files", target):
+            raise ValueError("unexpected displaced link; operator inspection required")
+        os.unlink("detached-files", dir_fd=transaction)
+        os.fsync(transaction)
+        return {"status": "restored", "path": str(WEB_ROOT / site)}
+
+
 def connect(operation, app, site, owner):
     if operation not in {"check", "connect"} or not APP.fullmatch(app) or not SITE.fullmatch(site):
         raise ValueError("expected check|connect, an app name, and a direct /var/www child name")
@@ -280,12 +446,22 @@ def connect(operation, app, site, owner):
         return {"status": "connected", "backup": True}
 
 
+def deadline_expired(signum, frame):
+    raise TimeoutError("website operation timed out; inspect its recovery journal before retrying")
+
+
 def main():
     try:
         if sys.platform != "linux" or os.geteuid() != 0 or len(sys.argv) != 4:
             raise ValueError("run the installed helper through its restricted sudo rule on Linux")
+        # End privileged work before the unprivileged worker's command timeout expires.
+        signal.signal(signal.SIGALRM, deadline_expired)
+        signal.alarm(300)
         account = pwd.getpwnam("deployd")
-        result = connect(*sys.argv[1:], (account.pw_uid, account.pw_gid))
+        if sys.argv[1] == "detach":
+            result = disconnect(*sys.argv[2:], (account.pw_uid, account.pw_gid))
+        else:
+            result = connect(*sys.argv[1:], (account.pw_uid, account.pw_gid))
         print(json.dumps(result))
     except (OSError, ValueError, KeyError) as exc:
         print(json.dumps({"error": str(exc), "recovery": str(STATE_ROOT)}))

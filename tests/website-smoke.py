@@ -77,3 +77,13 @@ subprocess.run(["sudo", "-u", "www-data", "test", "-r", str(site / "index.html")
 assert (releases / "b4deployd").stat().st_uid == account.pw_uid
 assert subprocess.run([*command, "connect", "website-smoke", "../../etc"]).returncode != 0
 print("Installed helper, service sandbox, repeat connection and Nginx access passed.")
+alias = Path("/var/www/deployd-restore-smoke.example")
+assert not os.path.lexists(alias)
+alias.symlink_to(current)
+subprocess.run([*command, "detach", "website-smoke", alias.name], check=True)
+assert alias.is_dir() and not alias.is_symlink()
+assert (alias / "index.html").read_text() == "deployed site"
+assert not (alias / ".deployd-release.json").exists()
+subprocess.run([*command, "detach", "website-smoke", alias.name], check=True)
+subprocess.run(["sudo", "-u", "www-data", "test", "-r", str(alias / "index.html")], check=True)
+print("Real-folder restoration and safe retry under the service sandbox passed.")

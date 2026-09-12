@@ -5,7 +5,7 @@ import re
 import sys
 from pathlib import Path
 
-from ..config import get_app_registry
+from ..config import config_lock, delete_app_config, get_app_registry
 from . import runner
 
 HELPER = Path("/usr/local/libexec/deployd/connect-website")
@@ -45,4 +45,20 @@ async def run_connection(store, app, deploy_id):
         store.set_status(deploy_id, "failed", finished=True)
         return
     store.add_step(deploy_id, "connect", "succeeded", output=result)
+    store.set_status(deploy_id, "succeeded", finished=True)
+
+
+async def run_removal(store, app, deploy_id):
+    store.set_status(deploy_id, "running")
+    store.add_step(deploy_id, "restore-website", "running")
+    try:
+        result = await runner._run_cmd(arguments(app, get_app_registry()[app], "detach"))
+        with config_lock():
+            if not delete_app_config(app):
+                raise ValueError("app configuration disappeared during removal")
+    except Exception as exc:
+        store.add_step(deploy_id, "restore-website", "failed", output=runner._error_text(exc))
+        store.set_status(deploy_id, "failed", finished=True)
+        return
+    store.add_step(deploy_id, "restore-website", "succeeded", output=result)
     store.set_status(deploy_id, "succeeded", finished=True)

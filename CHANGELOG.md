@@ -4,6 +4,11 @@
 
 Initial release.
 
+- Ask whether to restore current website files to their original paths or retain
+  web-root symlinks when removing apps and uninstalling. Use verified staged copies,
+  atomic replacement and retryable recovery; keep release backups and stop removal
+  on restoration failures.
+
 - Confirmed website connection in the management UI, backed by an optional,
   root-owned installer helper restricted to direct `/var/www` children. Preserve
   the original site as `b4deployd`, support local activation, and exclude it from

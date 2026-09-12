@@ -7,6 +7,55 @@ import pytest
 DEPLOY = Path(__file__).parents[1] / "deploy"
 
 
+@pytest.mark.parametrize("answer", ["k\n", "keep\n"])
+def test_uninstall_keep_choice_never_runs_restoration(answer):
+    result = run_function(
+        "uninstall-ubuntu.sh",
+        """
+      list_website_links() { printf 'site\texample.com\n'; }
+      sudo() { echo unexpected-privileged-operation; return 1; }
+      restore_websites
+    """,
+        stdin=answer,
+    )
+    assert result.returncode == 0
+    assert "unexpected-privileged-operation" not in result.stdout
+
+
+@pytest.mark.parametrize("answer", ["c\n", "\n", ""])
+def test_uninstall_website_cancellation_is_safe(answer):
+    result = run_function(
+        "uninstall-ubuntu.sh",
+        """
+      list_website_links() { printf 'site\texample.com\n'; }
+      sudo() { echo unexpected-privileged-operation; return 1; }
+      restore_websites
+      echo unsafe-continuation
+    """,
+        stdin=answer,
+    )
+    assert result.returncode != 0
+    assert "unexpected-privileged-operation" not in result.stdout
+    assert "unsafe-continuation" not in result.stdout
+
+
+def test_uninstall_restores_only_confirmed_sites_and_stops_on_error():
+    result = run_function(
+        "uninstall-ubuntu.sh",
+        """
+      list_website_links() { printf 'one\tone.example\ntwo\ttwo.example\n'; }
+      sudo() { if [[ $1 == test ]]; then return 0; fi; echo "$*"; return 1; }
+      restore_websites
+      echo unsafe-continuation
+    """,
+        stdin="r\n",
+    )
+    assert result.returncode != 0
+    assert "connect-website detach one one.example" in result.stdout
+    assert "connect-website detach two two.example" not in result.stdout
+    assert "unsafe-continuation" not in result.stdout
+
+
 def run_function(script, body, stdin=""):
     return subprocess.run(
         ["bash", "-c", 'source "$1"; ' + body, "test", str(DEPLOY / script)],

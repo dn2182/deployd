@@ -342,8 +342,31 @@ Si el proceso se interrumpe, el original permanece en `releases/b4deployd` o en
 `/var/lib/deployd-connect/<app>/original`, accesible solo por root. Reintenta
 **Conectar sitio** para continuar; cambios inesperados de rutas o metadatos dañados
 requieren revisión del administrador. No borres esos datos durante la recuperación.
-Desinstalar elimina el asistente y su regla sudo, pero conserva los enlaces del sitio,
-las versiones y los datos de recuperación para mantener disponible la web.
+Desinstalar elimina el asistente y su regla sudo, pero conserva las versiones y los
+datos de recuperación. Pregunta si debe restaurar carpetas reales o mantener los enlaces.
+
+### Eliminar una app o desinstalar sin dejar el enlace del sitio
+
+Al eliminar una app web eliges **Restaurar los archivos actuales como carpeta real**
+o **Mantener conectado el enlace del sitio**, y confirmas escribiendo su nombre.
+Restaurar copia la versión activa a un área privada, la verifica y reemplaza
+atómicamente solo su enlace `/var/www/<sitio>` por una carpeta real. **No** vuelve
+a `b4deployd`. La app se elimina del registro únicamente si la restauración termina
+bien; se rechazan nuevos despliegues mientras la eliminación esté pendiente o en curso.
+
+El desinstalador también pregunta **restaurar / mantener / cancelar** cuando encuentra
+enlaces estándar bajo `/var/www`, incluidos los de apps eliminadas con **Mantener**.
+Primero detiene deployd y crea el respaldo solicitado. Restaura los sitios antes de
+eliminar el servicio y la configuración; si falla alguno, detiene la desinstalación.
+Los sitios restaurados antes de un fallo posterior permanecen restaurados y seguros.
+
+Ejecuta primero el instalador actualizado para actualizar el asistente de root.
+Detén procesos externos que escriban archivos. Se mantienen las comprobaciones de
+archivos estáticos y del mismo montaje; hace falta espacio para otra copia del sitio.
+Los enlaces ajenos y las rutas fuera de `/var/www` requieren manejo manual. Se conservan
+las versiones activas y anteriores, `b4deployd`, los registros de recuperación y la
+cuenta deployd. Los archivos restaurados pertenecen a deployd: se restaura la ruta,
+no los propietarios Unix históricos. No se modifican las rutas de Nginx.
 
 El instalador de Ubuntu crea `/srv/deployd` con propietario `deployd`. Para
 instalaciones existentes actualizadas sin ejecutar el instalador, corre una vez:

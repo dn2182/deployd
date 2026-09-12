@@ -72,6 +72,8 @@ async def create_deploy(
         current_registry = get_app_registry()
         if payload.app not in current_registry:
             raise HTTPException(status_code=409, detail="app was removed during request")
+        if request.app.state.queue.is_removing(payload.app):
+            raise HTTPException(status_code=409, detail="app removal is in progress")
         if get_app_secret(payload.app) != secret:
             raise HTTPException(status_code=401, detail="app secret changed during request")
         if not current_registry[payload.app].artifact.allows_initial_url(str(payload.artifact_url)):

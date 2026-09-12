@@ -66,3 +66,25 @@ async def test_connection_failure_is_reported_without_claiming_success(spec, mon
     monkeypatch.setattr(website.runner, "_run_cmd", denied)
     await website.run_connection(store, "site", did)
     assert store.get_deploy(did)["status"] == "failed"
+
+
+@pytest.mark.parametrize("failure", [True, False])
+async def test_removal_unregisters_only_after_successful_restore(
+    spec, monkeypatch, tmp_path, failure
+):
+    store = Store(tmp_path / "store.sqlite3")
+    store.init()
+    did = store.create_deploy("site", "0" * 40, "local-website://remove", "0" * 64, "remove:site")
+    monkeypatch.setattr(website, "get_app_registry", lambda: {"site": spec})
+    removed = []
+    monkeypatch.setattr(website, "delete_app_config", lambda name: removed.append(name) or True)
+
+    async def restore(*args):
+        if failure:
+            raise RuntimeError("restore failed")
+        return '{"status":"restored"}'
+
+    monkeypatch.setattr(website.runner, "_run_cmd", restore)
+    await website.run_removal(store, "site", did)
+    assert removed == ([] if failure else ["site"])
+    assert store.get_deploy(did)["status"] == ("failed" if failure else "succeeded")

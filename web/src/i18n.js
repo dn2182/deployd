@@ -1,5 +1,10 @@
 const messages = {
   en: {
+    'website.remove_description': 'Choose what happens to the local website path before removing this app. Deployment history and retained releases, including b4deployd, are preserved.',
+    'website.remove_choice': 'Local website path',
+    'website.remove_restore': 'Restore current live files as a real folder',
+    'website.remove_keep': 'Keep the website symlink connected',
+    'website.remove_help': 'Restore copies the current version back to the original path, without rolling back to b4deployd. Requires the updated installer helper. If restoration fails, the app is not removed. Stop external file writers first.',
     'website.title': 'Website connection',
     'website.help': 'Deploy a version first, then connect the existing local site. Requires the optional installer helper and a static website directly under /var/www on the same filesystem as releases and helper storage.',
     'website.ready': 'Ready to connect. Your original website is still in place.',
@@ -192,6 +197,11 @@ const messages = {
     'footer.description': 'Private deployment control plane',
   },
   es: {
+    'website.remove_description': 'Elige qué hacer con la ruta local del sitio antes de eliminar esta app. Se conservan el historial y las versiones guardadas, incluida b4deployd.',
+    'website.remove_choice': 'Ruta local del sitio',
+    'website.remove_restore': 'Restaurar los archivos actuales como carpeta real',
+    'website.remove_keep': 'Mantener conectado el enlace del sitio',
+    'website.remove_help': 'Restaurar copia la versión activa a la ruta original, sin volver a b4deployd. Requiere el asistente actualizado del instalador. Si falla, no se elimina la app. Detén antes los procesos externos que escriban archivos.',
     'website.title': 'Conexión del sitio',
     'website.help': 'Despliega una versión primero y luego conecta el sitio local existente. Requiere el asistente opcional del instalador y un sitio estático directamente en /var/www, en el mismo sistema de archivos que las versiones y los datos de recuperación.',
     'website.ready': 'Listo para conectar. El sitio original sigue en su lugar.',

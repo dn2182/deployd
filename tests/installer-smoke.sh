@@ -35,12 +35,15 @@ after=$(sudo sha256sum /opt/deployd/.env /var/lib/deployd/apps.yaml /var/lib/dep
 [[ $before == "$after" ]]
 sudo systemctl is-active --quiet deployd
 
-printf 'y\nREMOVE deployd\n' | /opt/deployd/deploy/uninstall-ubuntu.sh
+printf 'y\nREMOVE deployd\nr\n' | /opt/deployd/deploy/uninstall-ubuntu.sh
 [[ ! -e /opt/deployd && ! -e /var/lib/deployd ]]
 [[ ! -e /etc/nginx/sites-enabled/deployd && ! -e /etc/systemd/system/deployd.service ]]
 [[ $(id -u deployd) == "$owner" && -f /srv/deployd/retained-app-data ]]
 [[ ! -e /etc/sudoers.d/deployd-connect && ! -e /usr/local/libexec/deployd/connect-website ]]
-[[ -L /var/www/deployd-smoke.example && -f /srv/deployd/website-smoke/releases/b4deployd/index.html ]]
+[[ -d /var/www/deployd-smoke.example && ! -L /var/www/deployd-smoke.example ]]
+[[ -f /srv/deployd/website-smoke/releases/b4deployd/index.html ]]
+[[ $(< /var/www/deployd-smoke.example/index.html) == 'deployed site' ]]
+sudo -u www-data test -r /var/www/deployd-smoke.example/index.html
 sudo test -f /var/lib/deployd-connect/website-smoke/complete.json
 sudo nginx -t
 backup=$(find "$HOME" -maxdepth 1 -name 'deployd-uninstall-*.tar.gz' -print -quit)

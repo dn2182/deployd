@@ -50,7 +50,8 @@ show_scope() {
     "" \
     "Shared packages, deployed application releases, firewall rules, DNS, and" \
     "user-created sudoers rules are not removed." \
-    "Website symlinks, b4deployd versions and /var/lib/deployd-connect recovery data are preserved." \
+    "You will choose whether to restore connected websites to real folders or keep their symlinks." \
+    "Releases, b4deployd versions and /var/lib/deployd-connect recovery data are preserved." \
     "Custom runtime paths outside /opt/deployd and /var/lib/deployd are not backed up or removed."
 }
 
@@ -209,6 +210,49 @@ check_removal_targets() {
   fi
 }
 
+list_website_links() {
+  /usr/bin/python3 -I -c '
+import os, re
+from pathlib import Path
+root = Path("/var/www")
+if root.exists():
+    for path in sorted(root.iterdir()):
+        if not path.is_symlink():
+            continue
+        match = re.fullmatch(r"/srv/deployd/([a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)/releases/current", os.readlink(path))
+        if match:
+            if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}", path.name):
+                raise SystemExit("unsupported connected website name; restore it manually first")
+            print(match[1] + "\t" + path.name)
+'
+}
+
+restore_websites() {
+  local connections app site answer
+  connections=$(list_website_links) || die "could not inspect connected websites; uninstall stopped"
+  [[ -n $connections ]] || return 0
+  printf 'Connected websites (including sites whose app was already removed):\n'
+  while IFS=$'\t' read -r app site; do
+    printf '  /var/www/%s -> /srv/deployd/%s/releases/current\n' "$site" "$app"
+  done <<<"$connections"
+  printf '%s\n' \
+    'Restore copies the CURRENT live files back to each original website path and removes its symlink.' \
+    'It does not roll back to b4deployd. Retained releases are kept. Stop external file writers first.' \
+    'Keep leaves the symlinks and their /srv/deployd targets in place. Custom paths need manual handling.'
+  read -r -p 'Website paths: [r]estore real folders, [k]eep symlinks, or [c]ancel: ' answer || die "no website choice; uninstall cancelled"
+  case "$answer" in
+    k|K|keep|KEEP) printf 'Keeping website symlinks and their release files.\n'; return 0 ;;
+    r|R|restore|RESTORE) ;;
+    *) die "uninstall cancelled; website paths were not changed" ;;
+  esac
+  sudo test -x /usr/local/libexec/deployd/connect-website || die "run the installer and enable the updated website helper before restoring; uninstall stopped"
+  while IFS=$'\t' read -r app site; do
+    if ! sudo /usr/local/libexec/deployd/connect-website detach "$app" "$site"; then
+      die "website restoration failed; uninstall stopped and remaining sites were not changed. Any previously restored sites are safe. Update the helper or inspect recovery storage before retrying"
+    fi
+  done <<<"$connections"
+}
+
 main() {
   require_uninstall_user
   check_checkout
@@ -248,6 +292,7 @@ main() {
     printf 'Backup created: %s\n' "$backup_path"
   fi
 
+  restore_websites
   remove_nginx_config
   remove_service
   remove_file /etc/sudoers.d/deployd-connect

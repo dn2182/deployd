@@ -400,6 +400,34 @@ def test_delete_app(env):
         assert client.delete("/admin/apps/app-x", headers=ADMIN).status_code == 404
 
 
+@pytest.mark.parametrize("choice", ["restore", "keep"])
+def test_website_removal_requires_explicit_choice(env, monkeypatch, choice):
+    with TestClient(create_app()) as client:
+        config.get_app_registry()["app-x"].site_path = env / "site"
+        endpoint = "/admin/apps/app-x"
+        assert client.delete(endpoint, headers=ADMIN).status_code == 422
+        assert (
+            client.request(
+                "DELETE", endpoint, headers=ADMIN, json={"confirm": "wrong", "website": choice}
+            ).status_code
+            == 422
+        )
+        monkeypatch.setattr(website, "arguments", lambda *args: ["unused"])
+        queued = []
+        monkeypatch.setattr(
+            client.app.state.queue, "enqueue_removal", lambda *args: queued.append(args)
+        )
+        result = client.request(
+            "DELETE", endpoint, headers=ADMIN, json={"confirm": "app-x", "website": choice}
+        )
+        assert result.status_code == (202 if choice == "restore" else 200)
+        if choice == "restore":
+            assert queued == [("app-x", result.json()["deploy_id"])]
+            assert "app-x" in config.get_app_registry()
+        else:
+            assert not queued and "app-x" not in config.get_app_registry()
+
+
 def test_delete_app_scrubs_its_secret(env):
     with TestClient(create_app()) as client:
         client.post("/admin/apps/app-x/rotate-secret", headers=ADMIN)

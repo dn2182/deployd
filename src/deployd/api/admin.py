@@ -7,9 +7,9 @@ import hmac
 import os
 import secrets as pysecrets
 from pathlib import Path as FilePath
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request, Response
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 
 from ..config import (
@@ -50,6 +50,11 @@ class ReleaseSelection(BaseModel):
 
 class WebsiteConfirmation(BaseModel):
     confirm: str
+
+
+class AppRemoval(BaseModel):
+    confirm: str
+    website: Literal["restore", "keep"]
 
 
 class AppCredentials(BaseModel):
@@ -358,7 +363,9 @@ async def upsert_app_route(request: Request, name: AppName, spec: AppSpec):
 
 
 @router.delete("/apps/{name}")
-async def delete_app(request: Request, name: AppName):
+async def delete_app(
+    request: Request, response: Response, name: AppName, selection: AppRemoval | None = None
+):
     with config_lock():
         if request.app.state.store.has_active_deploys(name):
             raise HTTPException(status_code=409, detail="app has queued or running deployments")
@@ -372,6 +379,23 @@ async def delete_app(request: Request, name: AppName):
                 status_code=409,
                 detail="unset the app GitHub token from the service environment before deletion",
             )
+        spec = _release_app(request, name)
+        if spec.site_path and (selection is None or selection.confirm != name):
+            raise HTTPException(
+                status_code=422,
+                detail="confirm the app name and choose whether to restore the website path or keep its link",
+            )
+        if spec.site_path and selection.website == "restore":
+            try:
+                website.arguments(name, spec, "detach")
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            deploy_id = request.app.state.store.create_deploy(
+                name, "0" * 40, "local-website://remove", "0" * 64, f"remove:{name}"
+            )
+            request.app.state.queue.enqueue_removal(name, deploy_id)
+            response.status_code = 202
+            return {"status": "queued", "app": name, "deploy_id": deploy_id}
         if not delete_app_config(name):
             raise HTTPException(status_code=404, detail="unknown app")
     return {"status": "deleted", "app": name}
@@ -415,6 +439,8 @@ async def redeploy(request: Request, deploy_id: str):
         spec = get_app_registry().get(old["app"])
         if spec is None:
             raise HTTPException(status_code=409, detail="app no longer registered")
+        if request.app.state.queue.is_removing(old["app"]):
+            raise HTTPException(status_code=409, detail="app removal is in progress")
         if not spec.artifact.allows_initial_url(old["artifact_url"]):
             raise HTTPException(status_code=409, detail="artifact URL is no longer allowed")
         new_id = store.create_deploy(

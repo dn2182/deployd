@@ -189,6 +189,24 @@ describe('App', () => {
     )
   })
 
+  it.each(['restore', 'keep'])('asks what happens to the website when removing it: %s', async (choice) => {
+    const fetcher = mockFetch({
+      'GET /api/healthz': { status: 'ok' },
+      'GET /api/admin/apps': { 'my-api': { ...APPS['my-api'], site_path: '/var/www/example.com' } },
+      'GET /api/admin/deploys': DEPLOYS,
+      'DELETE /api/admin/apps/my-api': { status: 'queued', app: 'my-api' },
+    })
+    global.fetch = fetcher
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove my-api' }))
+    expect(screen.getByText(/without rolling back to b4deployd/)).toBeInTheDocument()
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: choice } })
+    fireEvent.change(screen.getByLabelText(/Type my-api to confirm/), { target: { value: 'my-api' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Remove app' }))
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith('/api/admin/apps/my-api',
+      expect.objectContaining({ method: 'DELETE', body: JSON.stringify({ confirm: 'my-api', website: choice }) })))
+  })
+
   it('validates the new-app name', async () => {
     global.fetch = mockFetch({
       'GET /api/healthz': { status: 'ok' },
