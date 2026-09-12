@@ -354,3 +354,62 @@ async def test_activation_never_deletes_the_release_it_uses(tmp_path, store, mon
     assert store.get_deploy(activation)["status"] == "rolled_back"
     assert retained.is_dir()
     assert (spec.current_link / "app.txt").read_text() == "v2"
+
+
+async def test_env_passthrough_forwards_only_listed_variables(tmp_path, monkeypatch):
+    monkeypatch.setenv("DEPLOYD_MIGRATE_DSN", "Driver=x;Server=y")
+    monkeypatch.setenv("OTHER_SECRET", "nope")
+    spec = _spec(tmp_path, env_passthrough=["DEPLOYD_MIGRATE_DSN", "MISSING_VAR"])
+    env = runner._deploy_env(spec, {"app": "app-x"}, {})
+    assert env["DEPLOYD_MIGRATE_DSN"] == "Driver=x;Server=y"
+    assert "OTHER_SECRET" not in env and "MISSING_VAR" not in env
+
+
+def test_env_passthrough_rejects_service_secrets(tmp_path):
+    for name in (
+        "DEPLOYD_ADMIN_TOKEN",
+        "DEPLOYD_SECRET_APP_X",
+        "DEPLOYD_GITHUB_TOKEN_APP_X",
+        "bad-name",
+    ):
+        with pytest.raises(ValueError):
+            _spec(tmp_path, env_passthrough=[name])
+
+
+async def test_directory_layout_rollback_to_previous(tmp_path, store, monkeypatch):
+    if sys.platform not in ("linux", "darwin"):
+        pytest.skip("directory layout needs atomic exchange")
+    spec = _spec(
+        tmp_path,
+        release_layout="directory",
+        releases_dir=str(tmp_path / "releases"),
+        current_link=str(tmp_path / "releases/current"),
+    )
+    for version, sha in (("v1", SHA_V1), ("v2", "b" * 40)):
+        artifact, digest = make_artifact(tmp_path, f"{version}.zip", version)
+        wire(monkeypatch, spec, artifact)
+        did = new_deploy(store, sha, digest)
+        await runner.run_deploy(store, "app-x", did)
+        assert store.get_deploy(did)["status"] == "succeeded"
+    assert (spec.current_link / "app.txt").read_text() == "v2"
+    activation = store.create_deploy("app-x", "0" * 40, "x", "y", "activate:previous", "activate")
+    await runner.run_activation(store, "app-x", activation, "previous")
+    assert store.get_deploy(activation)["status"] == "succeeded"
+    assert (spec.current_link / "app.txt").read_text() == "v1"
+    with pytest.raises(ValueError, match="protected"):
+        runner.remove_release(spec, "previous")
+
+
+async def test_notification_failures_never_change_the_result(tmp_path, store, monkeypatch):
+    spec = _spec(tmp_path, notify={"url": "https://hooks.example.com/x", "events": ["succeeded"]})
+    monkeypatch.setattr(notify, "BACKOFF_SECONDS", 0)
+    original = notify.httpx.AsyncClient
+    notify.httpx.AsyncClient = lambda **kw: (_ for _ in ()).throw(RuntimeError("client broke"))
+    artifact, digest = make_artifact(tmp_path, "v1.zip", "v1")
+    wire(monkeypatch, spec, artifact)
+    did = new_deploy(store, SHA_V1, digest)
+    try:
+        await runner.run_deploy(store, "app-x", did)
+    finally:
+        notify.httpx.AsyncClient = original
+    assert store.get_deploy(did)["status"] == "succeeded"

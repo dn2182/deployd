@@ -82,6 +82,7 @@ async def lifespan(app: FastAPI):
     store = Store(settings.db_path)
     background: list[asyncio.Task] = []
     try:
+        sd_notify("WATCHDOG=1")
         store.init()
         store.purge_old_nonces()
         app.state.store = store

@@ -180,3 +180,24 @@ async def test_shutdown_waits_for_protected_work(tmp_path, monkeypatch):
     release.set()
     await asyncio.wait_for(stopper, 1)
     assert finished.is_set()
+
+
+async def test_recovery_supersedes_older_queued_artifacts(tmp_path, monkeypatch):
+    store = _store(tmp_path)
+    older, newer = _artifact(store), _artifact(store)
+    other = _artifact(store, app="other")
+    ran = []
+
+    async def deploy(store_, app, deploy_id):
+        ran.append(deploy_id)
+
+    monkeypatch.setattr(runner, "run_deploy", deploy)
+    worker = queue.DeployQueue(store)
+    try:
+        assert worker.recover({"app", "other"}) == 3
+        await asyncio.wait_for(worker._queues["app"].join(), 1)
+        await asyncio.wait_for(worker._queues["other"].join(), 1)
+    finally:
+        await worker.shutdown()
+    assert store.get_deploy(older)["status"] == "superseded"
+    assert sorted(ran) == sorted([newer, other])

@@ -137,6 +137,23 @@ class RestartSpec(BaseModel):
         return value
 
 
+_ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
+# Service secrets never travel to commands, whatever the app asks for.
+_ENV_PASSTHROUGH_DENY = ("DEPLOYD_ADMIN_TOKEN", "DEPLOYD_GITHUB_TOKEN", "DEPLOYD_SECRET_")
+
+
+def validate_env_passthrough(value: list[str]) -> list[str]:
+    seen = []
+    for name in value:
+        if not _ENV_NAME_RE.fullmatch(name):
+            raise ValueError(f"invalid environment variable name: {name}")
+        if name.startswith(_ENV_PASSTHROUGH_DENY):
+            raise ValueError(f"{name} cannot be passed to commands")
+        if name not in seen:
+            seen.append(name)
+    return seen
+
+
 class HooksSpec(BaseModel):
     before_cutover: list[str] | None = None
     after_health: list[str] | None = None
@@ -235,6 +252,14 @@ class AppSpec(BaseModel):
     restart: RestartSpec
     health: HealthSpec = Field(default_factory=HealthSpec)
     notify: NotifySpec = Field(default_factory=NotifySpec)
+    # Names of service environment variables forwarded to migrate, restart and hooks
+    # (for example a DSN variable); everything else stays with the service.
+    env_passthrough: list[str] = Field(default_factory=list, max_length=32)
+
+    @field_validator("env_passthrough")
+    @classmethod
+    def validate_passthrough(cls, value: list[str]) -> list[str]:
+        return validate_env_passthrough(value)
 
     @field_validator("github_repository")
     @classmethod

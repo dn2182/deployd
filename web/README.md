@@ -12,8 +12,9 @@ searches by commit prefix, and pages with Load more. An Audit log tab reads
 `/admin/audit`.
 
 While any deploy is queued or running the console polls `/admin/deploys` and
-the expanded deploy detail every two seconds and toasts terminal results; it
-stops polling when idle. Refresh is always available (button or `r`). Other
+the expanded deploy detail every two seconds and toasts terminal results; when
+idle it polls every 15 seconds so CI-started deploys still appear, and it
+pauses while the tab is hidden. Refresh is always available (button or `r`). Other
 shortcuts: `/` focuses the application search, Esc clears it.
 
 Styling is Tailwind v4; `src/index.css` holds the design tokens and the

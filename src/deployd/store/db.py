@@ -68,6 +68,20 @@ TERMINAL_STATUSES = ("succeeded", "failed", "rolled_back", "superseded", "cancel
 KIND_PREFIXES = {"activate:": "activate", "connect:": "connect", "remove:": "remove"}
 
 
+def _run_statements(c: sqlite3.Connection, script: str) -> None:
+    """executescript would commit first; this keeps DDL inside the open transaction."""
+    buffer = ""
+    for line in script.splitlines():
+        buffer += line + "\n"
+        if sqlite3.complete_statement(buffer):
+            statement = buffer.strip()
+            if statement:
+                c.execute(statement)
+            buffer = ""
+    if buffer.strip():
+        c.execute(buffer)
+
+
 class InstanceLock:
     def __init__(self, db_path: Path):
         self._path = db_path.with_name(db_path.name + ".lock")
@@ -130,17 +144,24 @@ class Store:
             for target, script in _MIGRATIONS:
                 if version >= target:
                     continue
-                if target == 1:
-                    self._migrate_unversioned(c, script)
-                elif target == 2:
-                    self._migrate_to_2(c, script)
-                else:
-                    c.executescript(script)
-                c.execute(f"PRAGMA user_version = {target}")
+                # One transaction per version so a crash never leaves a half-applied step.
+                c.execute("BEGIN")
+                try:
+                    if target == 1:
+                        self._migrate_unversioned(c, script)
+                    elif target == 2:
+                        self._migrate_to_2(c, script)
+                    else:
+                        _run_statements(c, script)
+                    c.execute(f"PRAGMA user_version = {target}")
+                    c.execute("COMMIT")
+                except BaseException:
+                    c.execute("ROLLBACK")
+                    raise
 
     @staticmethod
     def _migrate_unversioned(c: sqlite3.Connection, script: str) -> None:
-        c.executescript(script)
+        _run_statements(c, script)
         nonce_columns = {row["name"] for row in c.execute("PRAGMA table_info(nonces)").fetchall()}
         if "request_hash" not in nonce_columns:
             c.execute("ALTER TABLE nonces ADD COLUMN request_hash TEXT")
@@ -149,7 +170,7 @@ class Store:
 
     @staticmethod
     def _migrate_to_2(c: sqlite3.Connection, script: str) -> None:
-        c.executescript(script)
+        _run_statements(c, script)
         # Rows written before the kind column existed carried the kind in triggered_by.
         for prefix, kind in KIND_PREFIXES.items():
             c.execute(

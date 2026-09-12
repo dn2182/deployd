@@ -24,6 +24,9 @@ apps:
       # optional; run from the NEW release dir before cutover; non-zero exit halts deploy
       command: null
       timeout_seconds: 600
+    # service environment variables forwarded to migrate, restart and hooks; commands
+    # otherwise run with a clean environment and never see deployd's own secrets
+    env_passthrough: []                            # e.g. [DEPLOYD_MIGRATE_DSN]
     hooks:
       # optional argv lists; before_cutover runs in the new release dir after migrate,
       # after_health runs in the live release once health passed (failure rolls back).

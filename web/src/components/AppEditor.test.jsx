@@ -46,7 +46,8 @@ describe('AppEditor', () => {
       releases_dir: existing.releases_dir, current_link: existing.current_link,
       keep_previous: 4, auto_cleanup: false, frozen: true,
       artifact: existing.artifact, migrate: existing.migrate, restart: existing.restart,
-      health: existing.health, hooks: existing.hooks, notify: existing.notify,
+      health: existing.health, hooks: { ...existing.hooks, timeout_seconds: 600 }, notify: existing.notify,
+      env_passthrough: [],
     })
     expect(sent.credentials).toEqual({ generate_signing_secret: false, remove_github_token: false })
     expect(sent.create_only).toBe(false)
@@ -69,7 +70,8 @@ describe('AppEditor', () => {
     await waitFor(() => expect(call).toHaveBeenCalledTimes(1))
     const spec = sentSpec(call)
     expect(spec.health).toMatchObject({ expect_body: 'build {commit_sha}', expect_header: 'X-Release: {commit_sha}' })
-    expect(spec.hooks).toEqual({ before_cutover: ['/usr/local/bin/prepare', '--fast', 'now'], after_health: null })
+    expect(spec.hooks).toEqual({ before_cutover: ['/usr/local/bin/prepare', '--fast', 'now'], after_health: null, timeout_seconds: 600 })
+    expect(spec.env_passthrough).toEqual([])
     expect(spec.notify).toEqual({ url: 'https://hooks.example.com/y', events: ['succeeded'], format: 'discord' })
     expect(spec.restart.timeout_seconds).toBe(30)
     expect(spec.migrate).toEqual({ command: ['/usr/bin/migrate', '--apply'], timeout_seconds: 900 })
@@ -84,8 +86,9 @@ describe('AppEditor', () => {
       frozen: false,
       migrate: { command: null, timeout_seconds: 600 },
       restart: { timeout_seconds: 600 },
-      hooks: { before_cutover: null, after_health: null },
+      hooks: { before_cutover: null, after_health: null, timeout_seconds: 600 },
       notify: { url: null, events: [], format: 'generic' },
+      env_passthrough: [],
     })
   })
 

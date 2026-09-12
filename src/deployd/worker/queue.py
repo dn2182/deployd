@@ -69,13 +69,14 @@ class DeployQueue:
 
     def recover(self, registered_apps: set[str]) -> int:
         recovered = 0
+        newest: dict[str, str] = {}
         for app, deploy_id, kind in self._store.recover_after_restart():
             if kind in LOCAL_KINDS:
                 self._store.add_step(
                     deploy_id,
                     "recovery",
                     "failed",
-                    output="local operation interrupted; inspect website and current release before retrying",
+                    output="local operation not resumed after restart; inspect website and current release before retrying",
                 )
                 self._store.set_status(deploy_id, "failed", finished=True)
                 continue
@@ -88,8 +89,12 @@ class DeployQueue:
                 )
                 self._store.set_status(deploy_id, "failed", finished=True)
                 continue
+            newest[app] = deploy_id
             self.enqueue(app, deploy_id)
             recovered += 1
+        for app, deploy_id in newest.items():
+            for superseded in self._store.supersede_queued(app, deploy_id):
+                log.info("deploy %s superseded by %s during recovery", superseded, deploy_id)
         return recovered
 
     async def _consume(self, app: str) -> None:

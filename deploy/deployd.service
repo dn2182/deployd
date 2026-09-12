@@ -30,7 +30,10 @@ Restart=on-failure
 RestartSec=3
 # The service pings the watchdog every 15 s; systemd restarts it after a missed minute.
 WatchdogSec=60
-# Per-app migrate/restart commands may run up to 600 s; the stop grace period exceeds that.
+# On stop only deployd gets SIGTERM; in-flight migrate/restart/hook children keep
+# running until the drain finishes, then everything left is killed at the timeout.
+# Keep this above DEPLOYD_DRAIN_TIMEOUT_SECONDS plus the largest command timeout.
+KillMode=mixed
 TimeoutStopSec=660
 # Restart via sudo requires narrow sudoers rules; otherwise enable NoNewPrivileges.
 NoNewPrivileges=no

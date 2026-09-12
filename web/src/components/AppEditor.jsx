@@ -36,6 +36,8 @@ function fields(spec = {}) {
     expectHeader: spec.health?.expect_header || '',
     beforeCutover: commandFields(spec.hooks?.before_cutover),
     afterHealth: commandFields(spec.hooks?.after_health),
+    hooksTimeout: spec.hooks?.timeout_seconds ?? DEFAULT_TIMEOUT,
+    envPassthrough: (spec.env_passthrough || []).join('\n'),
     notifyUrl: spec.notify?.url || '',
     notifyEvents: spec.notify?.events || [],
     notifyFormat: spec.notify?.format || 'generic',
@@ -140,7 +142,9 @@ export default function AppEditor({ name: existingName, initialSpec, call, onSav
       hooks: {
         before_cutover: commandFrom(form.beforeCutover.executable, form.beforeCutover.arguments),
         after_health: commandFrom(form.afterHealth.executable, form.afterHealth.arguments),
+        timeout_seconds: Number(form.hooksTimeout),
       },
+      env_passthrough: form.envPassthrough.split('\n').map((name) => name.trim()).filter(Boolean),
       notify: {
         url: form.notifyUrl.trim() || null,
         events: NOTIFY_EVENTS.filter((event) => form.notifyEvents.includes(event)),
@@ -209,11 +213,11 @@ export default function AppEditor({ name: existingName, initialSpec, call, onSav
       </> : <Help>{t('setup.static_help')}</Help>}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Field label={t('setup.restart_timeout')}>
-          <input className={inputClass} type="number" min="1" max="86400" required value={form.restartTimeout}
+          <input className={inputClass} type="number" min="1" max="3600" required value={form.restartTimeout}
             onChange={(event) => change('restartTimeout', event.target.value)} />
         </Field>
         <Field label={t('setup.migrate_timeout')}>
-          <input className={inputClass} type="number" min="1" max="86400" required value={form.migrateTimeout}
+          <input className={inputClass} type="number" min="1" max="3600" required value={form.migrateTimeout}
             onChange={(event) => change('migrateTimeout', event.target.value)} />
         </Field>
       </div>
@@ -249,6 +253,14 @@ export default function AppEditor({ name: existingName, initialSpec, call, onSav
         <CommandFields value={form.afterHealth} placeholder="/usr/local/bin/warm-cache"
           executableLabel={t('setup.after_health')} argumentsLabel={t('setup.after_health_arguments')}
           onChange={(value) => change('afterHealth', value)} />
+        <Field label={t('setup.hooks_timeout')} className="sm:max-w-64">
+          <input className={inputClass} type="number" min="1" max="3600" required value={form.hooksTimeout}
+            onChange={(event) => change('hooksTimeout', event.target.value)} />
+        </Field>
+        <Field label={t('setup.env_passthrough')} help={t('setup.env_passthrough_help')}>
+          <textarea className={inputClass} rows={2} value={form.envPassthrough} placeholder="DEPLOYD_MIGRATE_DSN"
+            spellCheck={false} onChange={(event) => change('envPassthrough', event.target.value)} />
+        </Field>
       </Section>
 
       <Section title={t('setup.notify_section')} help={t('setup.notify_help')}>

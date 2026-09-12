@@ -195,6 +195,11 @@ def records(spec: AppSpec) -> dict:
 
 
 def local_release(spec: AppSpec, name: str) -> Path:
+    if name == "previous":
+        previous = records(spec)["previous_path"]
+        if previous is None:
+            raise ValueError("previous release is unavailable")
+        return Path(previous)
     if not RELEASE_NAME.fullmatch(name):
         raise ValueError("select a retained release by its version name")
     path = spec.releases_dir / name
@@ -249,6 +254,8 @@ def restore(spec: AppSpec, ctx: dict) -> bool:
 
 
 def remove_release(spec: AppSpec, name: str) -> None:
+    if name == "previous":
+        raise ValueError("the previous release is protected")
     path = local_release(spec, name)
     row = next(row for row in records(spec)["releases"] if row["name"] == name)
     if row["protected"]:

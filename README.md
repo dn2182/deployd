@@ -512,7 +512,10 @@ deployd-migrate --dir migrations status
 ```
 
 Pass the DSN through `--dsn-env` (default `DEPLOYD_MIGRATE_DSN`) or
-`--dsn-file`; `--dsn` works but is visible to other users in `ps`. On SQL
+`--dsn-file`; `--dsn` works but is visible to other users in `ps`. Commands run
+with a scrubbed environment, so a DSN variable set in the service environment
+must be listed in the app's `env_passthrough` to reach `deployd-migrate`;
+`--dsn-file` needs no passthrough. On SQL
 Server each file runs with `SET XACT_ABORT ON` inside one transaction, every
 result set is drained so errors after a `PRINT` still fail the file, and a
 file that manages its own transactions is rejected. Runners sharing one
@@ -535,8 +538,9 @@ database serialize on `sp_getapplock` (SQL Server) or `pg_advisory_xact_lock`
   check passed and rolls back on failure. Both are argv lists with their own
   `timeout_seconds`, like `migrate` and `restart`. Commands receive
   `DEPLOYD_APP`, `DEPLOYD_DEPLOY_ID`, `DEPLOYD_COMMIT_SHA`,
-  `DEPLOYD_RELEASE_DIR` and `DEPLOYD_CURRENT`, and nothing else from the
-  service environment.
+  `DEPLOYD_RELEASE_DIR` and `DEPLOYD_CURRENT`, plus any service variables
+  listed in the app's `env_passthrough` (never the admin, GitHub or signing
+  secrets), and nothing else from the service environment.
 - **Health assertions**: `health.expect_body` (substring) and
   `health.expect_header` (`Name: value`) accept a `{commit_sha}` placeholder.
   Expose the running SHA from your app and set one of them; a restart that

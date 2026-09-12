@@ -3,6 +3,7 @@
 set -Eeuo pipefail
 
 # shellcheck source=deploy/lib.sh
+# shellcheck source=deploy/lib.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/lib.sh"
 
 readonly PNPM_VERSION="11.20.0"
@@ -286,8 +287,9 @@ try:
         "SELECT count(*) FROM deploys WHERE status IN ('queued', 'running')"
     ).fetchone()
     print(row[0])
-except sqlite3.OperationalError:
-    print(0)
+except sqlite3.Error as exc:
+    print(f"error: {exc}", file=sys.stderr)
+    sys.exit(1)
 finally:
     conn.close()
 PY

@@ -41,11 +41,17 @@ async def send(spec: AppSpec, deploy: dict, status: str, failed_step: str | None
     notify = spec.notify
     if not notify.url or status not in notify.events:
         return
-    payload = build_payload(notify, deploy, status, failed_step)
+    try:
+        await _deliver(notify.url, build_payload(notify, deploy, status, failed_step), deploy)
+    except Exception:
+        log.warning("notification for %s could not be sent", deploy["deploy_id"], exc_info=True)
+
+
+async def _deliver(url: str, payload: dict, deploy: dict) -> None:
     async with httpx.AsyncClient(timeout=_TIMEOUT, trust_env=False) as client:
         for attempt in range(1, _ATTEMPTS + 1):
             try:
-                response = await client.post(notify.url, json=payload)
+                response = await client.post(url, json=payload)
                 if response.status_code < 500 and response.status_code != 429:
                     if response.status_code >= 400:
                         log.warning(

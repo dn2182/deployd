@@ -99,6 +99,12 @@ class Runner:
 
     def _lock_session(self) -> None:
         # Serializes runners sharing one database so two apps never interleave bookkeeping.
+        if self._dialect == "postgres":
+            cur = self._conn.cursor()
+            cur.execute("SELECT pg_advisory_lock(%s)", (PG_LOCK_KEY,))
+            _drain(cur)
+            self._conn.commit()
+            return
         if self._dialect != "mssql":
             return
         cur = self._conn.cursor()
@@ -121,6 +127,11 @@ class Runner:
             _drain(cur)
 
     def release(self) -> None:
+        if self._dialect == "postgres":
+            cur = self._conn.cursor()
+            cur.execute("SELECT pg_advisory_unlock(%s)", (PG_LOCK_KEY,))
+            _drain(cur)
+            self._conn.commit()
         if self._dialect == "mssql":
             cur = self._conn.cursor()
             cur.execute(
@@ -184,10 +195,14 @@ class Runner:
         cur = self._conn.cursor()
         try:
             self._lock_transaction(cur)
-            baseline = self._trancount(cur) if self._dialect == "mssql" else 0
+            baseline = 0
+            if self._dialect == "mssql":
+                # A session setting, issued on its own so batches that must start with
+                # CREATE PROCEDURE and friends stay valid.
+                cur.execute("SET XACT_ABORT ON")
+                _drain(cur)
+                baseline = self._trancount(cur)
             for batch in split_batches(sql):
-                if self._dialect == "mssql":
-                    batch = "SET XACT_ABORT ON;\n" + batch
                 cur.execute(batch)
                 _drain(cur)
             if self._dialect == "mssql" and self._trancount(cur) != baseline:

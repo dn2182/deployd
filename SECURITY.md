@@ -52,9 +52,11 @@ response within a few days.
   public-edge control; deployd also limits the signed request body itself.
 - Migration, restart and hook commands run with a scrubbed environment (PATH,
   HOME, locale and temp variables, plus `DEPLOYD_APP`, `DEPLOYD_DEPLOY_ID`,
-  `DEPLOYD_COMMIT_SHA`, `DEPLOYD_RELEASE_DIR`, `DEPLOYD_CURRENT`). The admin
-  token, GitHub tokens and pinned signing secrets loaded from `.env` never reach
-  code shipped in an artifact. Do not wrap commands in scripts that re-source
+  `DEPLOYD_COMMIT_SHA`, `DEPLOYD_RELEASE_DIR`, `DEPLOYD_CURRENT`, and the
+  service variables an app lists in `env_passthrough`). The admin token, GitHub
+  tokens and pinned signing secrets loaded from `.env` never reach code shipped
+  in an artifact; `env_passthrough` refuses those names. The systemd unit uses
+  `KillMode=mixed` so a stop lets in-flight commands finish during the drain. Do not wrap commands in scripts that re-source
   the service environment.
 - `GET /deploys/{id}` is unauthenticated for CI polling and returns step names
   and statuses only; command output is included only when the request carries

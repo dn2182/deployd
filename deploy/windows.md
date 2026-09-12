@@ -9,7 +9,7 @@ Linux. Only the touch-points differ.
 
 ## Install
 
-Prerequisites: Python 3.12+ (or `uv`), [NSSM](https://nssm.cc) on `PATH`, and an
+Prerequisites: Python 3.11.4+ (or `uv`), [NSSM](https://nssm.cc) on `PATH`, and an
 elevated PowerShell session.
 
 ```powershell
@@ -87,6 +87,7 @@ apps:
     migrate:
       command: ["C:\\deployd\\.venv\\Scripts\\deployd-migrate.exe", "--dir", "migrations", "--dsn-env", "EXAMPLE_API_DSN"]
       timeout_seconds: 600
+    env_passthrough: [EXAMPLE_API_DSN]
     restart:
       command: ["powershell", "-NoProfile", "-Command", "Restart-WebAppPool example-api"]
       timeout_seconds: 120
@@ -114,8 +115,9 @@ C:\deployd\.venv\Scripts\python.exe -m pip install "deployd[mssql]"
 ```
 
 Provide the DSN through the service environment (`nssm set deployd
-AppEnvironmentExtra EXAMPLE_API_DSN=...`) or a file readable only by the
-service account (`--dsn-file`). Avoid `--dsn` on the command line: the value
+AppEnvironmentExtra EXAMPLE_API_DSN=...`) and list the variable in the app's
+`env_passthrough`, since commands otherwise run with a scrubbed environment;
+or use a file readable only by the service account (`--dsn-file`). Avoid `--dsn` on the command line: the value
 is visible to other users in process listings.
 
 ```

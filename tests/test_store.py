@@ -207,3 +207,34 @@ def test_instance_lock_rejects_second_owner(tmp_path):
 
     second.acquire()
     second.release()
+
+
+def test_schema_migration_is_atomic(tmp_path, monkeypatch):
+    import sqlite3
+
+    from deployd.store import db as db_module
+
+    path = tmp_path / "v1.sqlite3"
+    all_migrations = db_module._MIGRATIONS
+    monkeypatch.setattr(db_module, "_MIGRATIONS", all_migrations[:1])
+    monkeypatch.setattr(db_module, "SCHEMA_VERSION", 1)
+    Store(path).init()
+    monkeypatch.setattr(db_module, "_MIGRATIONS", all_migrations)
+    monkeypatch.setattr(db_module, "SCHEMA_VERSION", 2)
+    original = Store._migrate_to_2
+
+    def explode(c, script):
+        original(c, script)
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(Store, "_migrate_to_2", staticmethod(explode))
+    with pytest.raises(sqlite3.OperationalError):
+        Store(path).init()
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert "kind" not in {row[1] for row in conn.execute("PRAGMA table_info(deploys)")}
+    monkeypatch.setattr(Store, "_migrate_to_2", staticmethod(original))
+    Store(path).init()
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert "kind" in {row[1] for row in conn.execute("PRAGMA table_info(deploys)")}

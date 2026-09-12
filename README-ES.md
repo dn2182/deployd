@@ -529,7 +529,10 @@ deployd-migrate --dir migrations status
 ```
 
 Pasa el DSN con `--dsn-env` (por defecto `DEPLOYD_MIGRATE_DSN`) o `--dsn-file`;
-`--dsn` funciona pero es visible para otros usuarios en `ps`. En SQL Server cada
+`--dsn` funciona pero es visible para otros usuarios en `ps`. Los comandos corren
+con un entorno depurado, así que una variable de DSN definida en el entorno del
+servicio debe listarse en `env_passthrough` de la app para llegar a
+`deployd-migrate`; `--dsn-file` no necesita passthrough. En SQL Server cada
 archivo corre con `SET XACT_ABORT ON` dentro de una transacción, se drenan todos
 los result sets para que un error después de un `PRINT` siga fallando el
 archivo, y un archivo que maneja sus propias transacciones se rechaza. Los
@@ -553,8 +556,9 @@ runners que comparten una base se serializan con `sp_getapplock` (SQL Server) o
   cuando el health check pasó y hace rollback si falla. Ambos son listas argv
   con su propio `timeout_seconds`, igual que `migrate` y `restart`. Los comandos
   reciben `DEPLOYD_APP`, `DEPLOYD_DEPLOY_ID`, `DEPLOYD_COMMIT_SHA`,
-  `DEPLOYD_RELEASE_DIR` y `DEPLOYD_CURRENT`, y nada más del entorno del
-  servicio.
+  `DEPLOYD_RELEASE_DIR` y `DEPLOYD_CURRENT`, más las variables del servicio
+  listadas en `env_passthrough` de la app (nunca los secretos de
+  administración, GitHub o firma), y nada más del entorno del servicio.
 - **Aserciones de salud**: `health.expect_body` (subcadena) y
   `health.expect_header` (`Nombre: valor`) aceptan el marcador `{commit_sha}`.
   Expón el SHA en ejecución desde tu app y configura una de las dos; un restart

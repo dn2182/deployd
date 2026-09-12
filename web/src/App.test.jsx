@@ -308,7 +308,7 @@ describe('App', () => {
     global.fetch = fetcher
     render(<App />)
     const panel = await screen.findByRole('region', { name: 'my-api status' })
-    expect(within(panel).getByText('aaaaaaaaaaaa')).toBeInTheDocument()
+    expect(await within(panel).findByText('aaaaaaaaaaaa')).toBeInTheDocument()
     expect(within(panel).getByText('2')).toBeInTheDocument()
     expect(within(panel).getByText('200 OK')).toBeInTheDocument()
     expect(within(panel).getByText('Accepting deploys')).toBeInTheDocument()

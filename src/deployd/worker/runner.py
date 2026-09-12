@@ -198,7 +198,9 @@ async def _run_steps(
 
 
 def _deploy_env(spec: AppSpec, deploy: dict, ctx: dict) -> dict[str, str]:
+    forwarded = {name: os.environ[name] for name in spec.env_passthrough if name in os.environ}
     return {
+        **forwarded,
         "DEPLOYD_APP": deploy.get("app", ""),
         "DEPLOYD_DEPLOY_ID": deploy.get("deploy_id", ""),
         "DEPLOYD_COMMIT_SHA": deploy.get("commit_sha", ""),
@@ -587,26 +589,37 @@ async def _read_bounded_output(proc: asyncio.subprocess.Process) -> str:
                 kept.extend(chunk[: MAX_COMMAND_OUTPUT_BYTES - len(kept)])
 
     reader = asyncio.ensure_future(read())
-    # Process.wait() returns only once every pipe closes, so a daemon left behind
-    # by a restart script would block it forever; exit is tracked directly instead.
-    while proc.returncode is None:
-        done, _ = await asyncio.wait({reader}, timeout=0.1)
-        if done:
-            break
-    if not reader.done():
-        await asyncio.wait({reader}, timeout=1)
-    detached = not reader.done()
-    if detached:
-        reader.cancel()
-    await asyncio.gather(reader, return_exceptions=True)
+    try:
+        # Process.wait() returns only once every pipe closes, so a daemon left behind
+        # by a restart script would block it forever; exit is tracked directly instead.
+        while proc.returncode is None:
+            done, _ = await asyncio.wait({reader}, timeout=0.1)
+            if done:
+                break
+        if not reader.done():
+            await asyncio.wait({reader}, timeout=1)
+    finally:
+        detached = not reader.done()
+        if detached:
+            reader.cancel()
+        await asyncio.gather(reader, return_exceptions=True)
     if proc.returncode is None:
-        await proc.wait()
+        await _wait_exit(proc)
     output = kept.decode(errors="replace").strip()
     if total > len(kept):
         output += f"\n[output truncated; {total - len(kept)} bytes omitted]"
     if detached:
         output += "\n[a background process kept stdout open; remaining output not captured]"
     return output
+
+
+async def _wait_exit(proc: asyncio.subprocess.Process, timeout: float = 5) -> None:
+    # Bounded on purpose: a grandchild in its own session may keep stdout open forever.
+    deadline = asyncio.get_running_loop().time() + timeout
+    while proc.returncode is None and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.05)
+    if proc.returncode is None:
+        log.warning("process %s did not report exit within %ss", proc.pid, timeout)
 
 
 async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
@@ -628,7 +641,7 @@ async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
             os.killpg(proc.pid, signal.SIGKILL)
     except OSError:
         proc.kill()
-    await proc.wait()
+    await _wait_exit(proc)
 
 
 async def _verify_rollback(spec: AppSpec, ctx: dict) -> None:

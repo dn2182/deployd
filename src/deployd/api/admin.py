@@ -549,6 +549,7 @@ async def redeploy(request: Request, deploy_id: str):
             old["artifact_sha256"],
             f"redeploy:{deploy_id[:8]}",
         )
+        store.supersede_queued(old["app"], new_id)
         request.app.state.queue.enqueue(old["app"], new_id)
         _audit(request, "deploy.redeploy", old["app"], f"{deploy_id} -> {new_id}")
     return {"deploy_id": new_id, "status": "queued"}
