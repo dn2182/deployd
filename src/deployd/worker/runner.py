@@ -76,7 +76,8 @@ async def run_deploy(store: Store, app: str, deploy_id: str) -> None:
                     deploy_id, "rolled_back" if rolled_back else "failed", finished=True
                 )
                 return
-            store.add_step(deploy_id, step, "succeeded", output=output or "")
+            status = "skipped" if step == "health" and not spec.health.url else "succeeded"
+            store.add_step(deploy_id, step, status, output=output or "")
 
         succeeded = True
         if spec.auto_cleanup:
@@ -306,6 +307,8 @@ async def _step_restart(spec: AppSpec, deploy: dict, ctx: dict) -> str:
 
 
 async def _step_health(spec: AppSpec, deploy: dict, ctx: dict) -> str:
+    if not spec.health.url:
+        return "HTTP health check skipped: no URL configured"
     last_error = "no attempts made"
     async with httpx.AsyncClient(timeout=5) as client:
         for attempt in range(1, spec.health.retries + 1):
@@ -388,6 +391,9 @@ async def _maybe_rollback(
     # failures before cutover never touched the running version
     if failed_step not in ("cutover", "restart", "health"):
         return False
+    verification = (
+        "health verified" if spec.health.url else "HTTP health check skipped: no URL configured"
+    )
     if spec.release_layout == "directory":
         transaction = ctx.get("directory_transaction")
         if not transaction or not transaction["switched"]:
@@ -412,7 +418,7 @@ async def _maybe_rollback(
             deploy_id,
             "rollback",
             "succeeded",
-            output="previous directory restored; health verified",
+            output=f"previous directory restored; {verification}",
         )
         return True
     previous = ctx.get("previous_release")
@@ -446,7 +452,7 @@ async def _maybe_rollback(
         deploy_id,
         "rollback",
         "succeeded",
-        output=f"reverted to {previous.name}; health verified",
+        output=f"reverted to {previous.name}; {verification}",
     )
     return True
 
@@ -628,7 +634,8 @@ async def run_activation(store: Store, app: str, deploy_id: str, name: str) -> N
             rolled_back = await _maybe_rollback(step, spec, ctx, store, deploy_id)
             store.set_status(deploy_id, "rolled_back" if rolled_back else "failed", finished=True)
             return
-        store.add_step(deploy_id, step, "succeeded", output=output or "")
+        status = "skipped" if step == "health" and not spec.health.url else "succeeded"
+        store.add_step(deploy_id, step, status, output=output or "")
     store.set_status(deploy_id, "succeeded", finished=True)
 
 

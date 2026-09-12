@@ -123,6 +123,83 @@ async def test_full_deploy_succeeds(tmp_path, spec, store, monkeypatch):
     assert succeeded == runner.STEPS
 
 
+@pytest.mark.parametrize("layout", ["symlink", "directory"])
+@pytest.mark.parametrize("empty_index", [False, True])
+async def test_static_deploy_activation_and_rollback_without_http_health(
+    tmp_path, spec, store, monkeypatch, layout, empty_index
+):
+    spec.release_layout = layout
+    if layout == "directory":
+        spec.current_link = spec.releases_dir / "current"
+    spec.health.url = None
+    spec.restart.command = [shutil.which("test"), "-s", str(spec.current_link / "index.html")]
+
+    def no_http(*args, **kwargs):
+        pytest.fail("HTTP must not be attempted without a configured health URL")
+
+    monkeypatch.setattr(httpx, "AsyncClient", no_http)
+    deployments = []
+    for sha in (SHA_V1, SHA_V2):
+        artifact = tmp_path / f"{sha}.zip"
+        with zipfile.ZipFile(artifact, "w") as archive:
+            archive.writestr("index.html", sha)
+        digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+        wire(monkeypatch, spec, artifact)
+        monkeypatch.setitem(runner._STEP_FNS, "health", runner._step_health)
+        did = new_deploy(store, sha, digest)
+        deployments.append(did)
+        await runner.run_deploy(store, "app-x", did)
+        row = store.get_deploy(did)
+        assert row["status"] == "succeeded"
+        health = next(step for step in row["steps"] if step["step"] == "health")
+        assert health["status"] == "skipped" and "no URL configured" in health["output"]
+
+    activation = new_deploy(store, SHA_V1, "c" * 64)
+    await runner.run_activation(store, "app-x", activation, f"{SHA_V1}-{deployments[0]}")
+    row = store.get_deploy(activation)
+    assert row["status"] == "succeeded"
+    assert next(step for step in row["steps"] if step["step"] == "health")["status"] == "skipped"
+    assert (spec.current_link / "index.html").read_text() == SHA_V1
+
+    artifact, digest = make_artifact(tmp_path, "missing-index.zip", "not an index page")
+    if empty_index:
+        with zipfile.ZipFile(artifact, "a") as archive:
+            archive.writestr("index.html", "")
+        digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    wire(monkeypatch, spec, artifact)
+    monkeypatch.setitem(runner._STEP_FNS, "health", runner._step_health)
+    failed = new_deploy(store, "c" * 40, digest)
+    await runner.run_deploy(store, "app-x", failed)
+    row = store.get_deploy(failed)
+    assert row["status"] == "rolled_back"
+    rollback = next(step for step in row["steps"] if step["step"] == "rollback")
+    assert "HTTP health check skipped" in rollback["output"]
+    assert "health verified" not in rollback["output"]
+    assert (spec.current_link / "index.html").read_text() == SHA_V1
+
+
+@pytest.mark.parametrize("status", [200, 503])
+async def test_configured_http_health_is_still_checked(spec, monkeypatch, status):
+    requested = []
+    real_client = httpx.AsyncClient
+
+    def respond(request):
+        requested.append(str(request.url))
+        return httpx.Response(status)
+
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    if status == 200:
+        assert await runner._step_health(spec, {}, {}) == "healthy after 1 attempt(s)"
+    else:
+        with pytest.raises(RuntimeError, match="HTTP 503"):
+            await runner._step_health(spec, {}, {})
+    assert requested == [spec.health.url]
+
+
 async def test_sha_mismatch_fails_before_cutover(tmp_path, spec, store, monkeypatch):
     artifact, _ = make_artifact(tmp_path, "v1.zip", "v1")
     wire(monkeypatch, spec, artifact)

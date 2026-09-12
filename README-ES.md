@@ -180,6 +180,16 @@ guardar. La ficha de la app y el resumen muestran las rutas en modo de solo
 lectura. Las apps existentes conservan sus carpetas y comandos de migración;
 no se trasladan automáticamente.
 
+La URL de salud es opcional. Déjala vacía para omitir la comprobación HTTP en
+despliegues, activaciones y rollback; el registro la muestra como omitida. Los
+sitios estáticos siguen requiriendo un `current/index.html` no vacío. Sin URL de
+salud, los fallos de disponibilidad HTTP no activan rollback automático. Las
+URLs existentes se siguen comprobando salvo que se borren explícitamente.
+
+Para un frontend y una API, registra dos aplicaciones aunque compartan repositorio
+y dominio. Cada una tiene su artefacto, secreto de firma, versiones y rollback.
+Un solo workflow de GitHub Actions puede desplegar una o ambas.
+
 Las credenciales se guardan separadas en `DEPLOYD_SECRETS_FILE`, con modo `0600`.
 La API nunca devuelve los tokens de GitHub. Las variables de entorno por app
 (`DEPLOYD_SECRET_<APP_NAME_UPPER_SNAKE>` y

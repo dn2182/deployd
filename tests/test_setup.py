@@ -191,6 +191,17 @@ def test_custom_internal_paths_are_rejected_before_any_directory_creation(setup_
     assert not (setup_env / "secrets.env").exists()
 
 
+def test_static_setup_accepts_no_health_url(setup_env):
+    body = payload(setup_env, generate_signing_secret=True)
+    body["spec"]["health"] = {"url": None}
+    with TestClient(create_app()) as client:
+        response = client.post("/admin/apps/site/setup", headers=ADMIN, json=body)
+        assert response.status_code == 200
+        config.get_app_registry.cache_clear()
+        assert config.get_app_registry()["site"].health.url is None
+        assert config.get_app_registry()["site"].restart.command[1] == "-s"
+
+
 def test_setup_app_token_is_scoped_and_removal_uses_fallback(setup_env, monkeypatch):
     monkeypatch.setenv("DEPLOYD_GITHUB_TOKEN", "fallback-token")
     config.get_settings.cache_clear()

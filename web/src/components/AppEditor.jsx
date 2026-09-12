@@ -76,7 +76,7 @@ export default function AppEditor({ name: existingName, initialSpec, call, onSav
         : form.executable === baseFields.executable && form.arguments === baseFields.arguments && base.restart
           ? base.restart.command
           : [form.executable.trim(), ...form.arguments.split('\n').filter((argument) => argument !== '')] },
-      health: { ...base.health, url: form.healthUrl.trim(), retries: base.health?.retries ?? 5,
+      health: { ...base.health, url: form.healthUrl.trim() || null, retries: base.health?.retries ?? 5,
         interval_seconds: base.health?.interval_seconds ?? 3 },
     }
   }
@@ -147,7 +147,7 @@ export default function AppEditor({ name: existingName, initialSpec, call, onSav
           <p className="release-help">{t('setup.command_help')}</p>
         </> : <p className="release-help">{t('setup.static_help')}</p>}
         <label className="field-label">{t('setup.health_url')}
-          <input className="text-input" type="url" required value={form.healthUrl}
+          <input className="text-input" type="url" value={form.healthUrl}
             placeholder="https://example.com/healthz" onChange={(event) => change('healthUrl', event.target.value)} />
         </label>
         <p className="release-help">{t('setup.health_help')}</p>

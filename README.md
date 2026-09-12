@@ -169,6 +169,16 @@ example `/var/www/bluedatos.com`) is fixed after setup. The app card and complet
 screen show all assigned paths read-only. Existing apps keep their original layout
 and migration commands; they are not moved automatically.
 
+The application health URL is optional. Leave it blank to skip HTTP checks on
+deployment, version activation, and rollback; the log records the check as
+skipped. Static sites still require a non-empty `current/index.html`. Without
+a health URL, HTTP availability failures cannot trigger automatic rollback.
+Existing configured health URLs continue to be checked unless explicitly cleared.
+
+For a frontend plus an API, register two applications, even if they share a
+repository and domain. Each has its own artifact, signing secret, versions, and
+rollback. One GitHub Actions workflow can deploy either or both.
+
 Credentials are stored separately in `DEPLOYD_SECRETS_FILE` with mode `0600`.
 GitHub tokens are never returned by the API. Per-app environment values
 (`DEPLOYD_SECRET_<APP_NAME_UPPER_SNAKE>` and

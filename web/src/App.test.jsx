@@ -76,7 +76,7 @@ describe('App', () => {
     fireEvent.change(screen.getByPlaceholderText(/app name/), { target: { value: 'bluedatos' } })
     fireEvent.change(screen.getByLabelText('GitHub repository'), { target: { value: 'https://github.com/dn2182/BlueDatos.com.git' } })
     fireEvent.change(screen.getByLabelText('Public deployd URL'), { target: { value: 'https://deployd.example.com' } })
-    fireEvent.change(screen.getByLabelText('Application health URL'), { target: { value: 'https://example.com' } })
+    expect(screen.getByLabelText('Application health URL (optional)')).not.toBeRequired()
     fireEvent.change(screen.getByLabelText('Local site path'), { target: { value: '/var/www/bluedatos.com' } })
     expect(screen.queryByLabelText('Release directory')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Active path')).not.toBeInTheDocument()
@@ -85,6 +85,7 @@ describe('App', () => {
     const sent = fetcher.mock.calls.find(([url, options]) => url === '/api/admin/apps/bluedatos/setup' && options.method === 'POST')
     expect(JSON.parse(sent[1].body)).toMatchObject({ create_only: true,
       credentials: { generate_signing_secret: true }, spec: { release_layout: 'directory', keep_previous: 1,
+        health: { url: null },
         site_path: '/var/www/bluedatos.com',
         github_repository: 'dn2182/BlueDatos.com', current_link: '/srv/deployd/bluedatos/releases/current' } })
     expect(await screen.findByText('s'.repeat(64))).toBeInTheDocument()

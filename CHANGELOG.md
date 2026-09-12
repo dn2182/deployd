@@ -17,6 +17,8 @@ Initial release.
 - Guided bilingual application setup for repositories, signing secrets, per-app
   private GitHub credentials, local site paths, health checks, and retention.
   Internal paths are automatic and read-only; no JSON editor is exposed.
+- Optional HTTP health checks with explicit skipped status; static entry-file
+  validation and command-failure rollback remain enabled.
 - Local version activation and confirmed cleanup, with optional per-app retention
   of a chosen number of previous versions and active-version protection.
 - Standard real-current directory layout with native atomic exchange,

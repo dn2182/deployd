@@ -126,13 +126,16 @@ class RestartSpec(BaseModel):
 
 
 class HealthSpec(BaseModel):
-    url: str
+    url: str | None = None
     retries: int = Field(default=10, ge=1, le=100)
     interval_seconds: float = Field(default=3, ge=0, le=300)
 
     @field_validator("url")
     @classmethod
-    def validate_health_url(cls, value: str) -> str:
+    def validate_health_url(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        value = value.strip()
         parsed = urlsplit(value)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise ValueError("health URL must be an absolute HTTP(S) URL")
@@ -153,7 +156,7 @@ class AppSpec(BaseModel):
     artifact: ArtifactRules
     migrate: MigrateSpec = Field(default_factory=MigrateSpec)
     restart: RestartSpec
-    health: HealthSpec
+    health: HealthSpec = Field(default_factory=HealthSpec)
 
     @field_validator("github_repository")
     @classmethod

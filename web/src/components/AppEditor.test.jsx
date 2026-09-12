@@ -23,6 +23,16 @@ function editor(spec = existing) {
 }
 
 describe('AppEditor', () => {
+  it('allows clearing an existing HTTP health URL', async () => {
+    const { call } = editor()
+    fireEvent.change(screen.getByLabelText('Application health URL (optional)'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(call).toHaveBeenCalledTimes(1))
+    expect(JSON.parse(call.mock.calls[0][1].body).spec.health).toEqual({
+      url: null, retries: 12, interval_seconds: 5,
+    })
+  })
+
   it('preserves existing configuration and credentials when edited without changes', async () => {
     const { call } = editor()
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))

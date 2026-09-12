@@ -3,7 +3,26 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from deployd.config import AppSpec, ArtifactRules, Settings, validate_app_name
+from deployd.config import AppSpec, ArtifactRules, HealthSpec, Settings, validate_app_name
+
+
+@pytest.mark.parametrize("health", [{}, {"url": None}, {"url": ""}, {"url": "  "}])
+def test_health_url_can_be_omitted(tmp_path, health):
+    assert app_spec(tmp_path, health=health).health.url is None
+
+
+def test_health_configuration_defaults_to_disabled(tmp_path):
+    data = app_spec(tmp_path).model_dump()
+    del data["health"]
+    assert AppSpec.model_validate(data).health.url is None
+
+
+@pytest.mark.parametrize(
+    "url", ["not-a-url", "ftp://example.com", "https://user:secret@example.com"]
+)
+def test_optional_health_still_rejects_invalid_urls(url):
+    with pytest.raises(ValidationError):
+        HealthSpec(url=url)
 
 
 def test_github_token_is_redacted(monkeypatch):
