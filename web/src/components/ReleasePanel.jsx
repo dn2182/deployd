@@ -51,7 +51,7 @@ export default function ReleasePanel({ name, spec, call, onChanged, revision = 0
     setNotice('')
     try {
       await call(`${base}/${operation}`, { method: 'POST', body: JSON.stringify({ release }) })
-      setNotice(t(operation === 'activate' ? 'releases.queued' : 'releases.removed'))
+      setNotice(t(operation === 'activate' ? 'releases.queued' : 'releases.cleanup_queued'))
       setError(null)
       onChanged()
       await load()

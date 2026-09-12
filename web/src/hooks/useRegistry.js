@@ -4,9 +4,6 @@ import { fetchHealth } from '../api.js'
 export const PAGE_SIZE = 50
 export const ACTIVE_STATUSES = new Set(['queued', 'running'])
 export const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'rolled_back', 'superseded', 'cancelled'])
-// Fast while something is running; slow otherwise so CI-started deploys still show up.
-export const ACTIVE_POLL_MS = 2000
-export const IDLE_POLL_MS = 15000
 
 export function useRegistry({ token, api, onTerminal }) {
   const [health, setHealth] = useState(null)
@@ -105,15 +102,6 @@ export function useRegistry({ token, api, onTerminal }) {
     return () => clearTimeout(timer)
   }, [refresh])
 
-  const hasActive = deploys.some((deploy) => ACTIVE_STATUSES.has(deploy.status))
-  useEffect(() => {
-    if (!token) return
-    const timer = setInterval(() => {
-      if (document.visibilityState !== 'hidden') refresh({ silent: true })
-    }, hasActive ? ACTIVE_POLL_MS : IDLE_POLL_MS)
-    return () => clearInterval(timer)
-  }, [hasActive, token, refresh])
-
   const isBusy = useCallback(
     (name) => deploys.some((deploy) => deploy.app === name && ACTIVE_STATUSES.has(deploy.status)),
     [deploys],
@@ -121,6 +109,6 @@ export function useRegistry({ token, api, onTerminal }) {
 
   return {
     health, apps, deploys, hasMore, filters, setFilters, error, refreshing, loadingMore,
-    revision, refresh, loadMore, hasActive, isBusy,
+    revision, refresh, loadMore, isBusy,
   }
 }

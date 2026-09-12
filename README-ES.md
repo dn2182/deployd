@@ -36,10 +36,8 @@ fijo firmado por HMAC es toda la superficie de ataque.
 - **UI de administración** — registro de aplicaciones, rotación de secretos
   en un clic (se muestran una sola vez), historial con log por paso, redeploy,
   cancelar, congelar, rollback, estado por app, bitácora de auditoría y
-  actualización en vivo mientras corre un deploy
-- **Notificaciones** — webhook HTTPS por app (JSON genérico, Slack o Discord)
-  en éxito, fallo o rollback
-- **Nativo en bare-host** — systemd en Linux, NSSM/IIS en Windows; un solo
+  actualización manual
+- **Nativo en bare-host** — systemd en Linux; un solo
   servicio Python con un archivo de estado SQLite, el comando `deployd check`
   y soporte para el watchdog de systemd
 - **Cola consciente de reinicios** — los deploys en cola se recuperan; un push
@@ -68,7 +66,7 @@ Worker de despliegue (cola serializada por app)
       +--> cutover                                  (intercambio de directorios o enlaces)
       +--> restart + health check                   (falla => rollback automático)
       +--> hook after_health                        (opcional, falla => rollback automático)
-      +--> registra estado, notifica, log por paso  (CI consulta GET /deploys/{id})
+      +--> registra estado y log por paso          (CI consulta GET /deploys/{id})
 ```
 
 Todo lo que va desde `migrate` en adelante es la fase de commit: una vez que
@@ -153,6 +151,12 @@ reiniciar. Para cambios únicamente del frontend basta con ejecutar
 
 ## Desinstalación en Ubuntu
 
+Para reinstalar desde cero, usa el desinstalador normal sin `--purge`, acepta el
+respaldo y restaura los sitios conectados a carpetas reales primero. Después clona
+e instala nuevamente. La desinstalación elimina configuración, tokens y estado de
+deployd; sin restaurar el respaldo tendrás que registrar las apps y actualizar sus
+secretos en GitHub. Las carpetas de releases no reconstruyen su historial.
+
 ```bash
 cd /opt/deployd
 ./deploy/uninstall-ubuntu.sh            # agrega --purge para eliminar también /srv/deployd,
@@ -204,14 +208,14 @@ por página y solo los detalles de la seleccionada. **Conexión del sitio**,
 una está activa. Las rutas están en **Carpetas de la aplicación**. Cada tarjeta
 tiene un panel de estado con el release actual, la cantidad en cola, el último
 deploy y el último health check, más **Congelar** / **Descongelar**. La zona de
-actividad consulta cada 2 segundos mientras hay un deploy en cola o en ejecución
-y cada 15 segundos en reposo, muestra un aviso cuando un deploy llega a un
-estado final y ofrece **Actualizar** (o la tecla `r`) para refrescar de
-inmediato. **Deploys recientes** filtra por app y estado, busca por prefijo de
-commit, pagina con **Cargar más** y ofrece cancelar, redeploy, rollback al
-anterior y enlaces al commit y a la comparación por fila; **Auditoría** lista
-las acciones administrativas con el usuario que las hizo. GitHub Actions sigue
-consultando su propio despliegue hasta terminar.
+actividad se actualiza con **Actualizar** (o la tecla `r`), sin consultas
+periódicas en segundo plano. Al actualizar, muestra avisos de resultados recién
+detectados. **Deploys recientes** filtra por app y estado, busca por prefijo de
+commit, pagina con **Cargar más** y ofrece cancelar, redeploy y enlaces al commit
+y a la comparación por fila. El rollback se hace eligiendo la versión exacta en
+**Administrar versiones**. **Auditoría** lista las acciones administrativas con
+el usuario que las hizo. GitHub Actions sigue consultando su propio despliegue
+hasta terminar.
 
 En **Agregar aplicación** puedes configurar:
 
@@ -549,8 +553,11 @@ runners que comparten una base se serializan con `sp_getapplock` (SQL Server) o
 - **Cancelar** un deploy en cola desde el historial
   (`POST /admin/deploys/{id}/cancel`). Los deploys en ejecución no se cancelan;
   un push más nuevo reemplaza automáticamente a los que están en cola.
-- **Rollback** desde una fila fallida del historial: activa el release anterior
-  retenido por el mismo camino de cutover, restart y health check.
+- **Rollback** desde **Administrar versiones**: selecciona la versión guardada
+  exacta y actívala por el mismo camino de cutover, restart y health check.
+- **Limpieza** desde **Administrar versiones**: se pone en la misma cola de la
+  app que los despliegues y queda registrada en actividad. Actualiza para ver
+  el resultado. Se vuelve a comprobar la protección de la versión antes de borrarla.
 - **Hooks**: `hooks.before_cutover` corre en el directorio del release nuevo
   después de las migraciones; `hooks.after_health` corre en el release vivo
   cuando el health check pasó y hace rollback si falla. Ambos son listas argv
@@ -563,21 +570,19 @@ runners que comparten una base se serializan con `sp_getapplock` (SQL Server) o
   `health.expect_header` (`Nombre: valor`) aceptan el marcador `{commit_sha}`.
   Expón el SHA en ejecución desde tu app y configura una de las dos; un restart
   que dejó al proceso viejo sirviendo falla y hace rollback.
-- **Notificaciones**: `notify.url` (HTTPS), `notify.events` (cualquiera de
-  `succeeded`, `failed`, `rolled_back`) y `notify.format` (`generic` JSON,
-  `slack` o `discord` en texto). La entrega se reintenta ante errores del
-  servidor y nunca afecta el resultado del deploy.
 - **Bitácora de auditoría**: cada mutación administrativa registra al usuario
   de Basic Auth que actuó (desde `X-Remote-User`, fijado por el sitio Nginx de
   administración) en **Auditoría** y en `GET /admin/audit`.
-- **Retención**: los deploys terminados con más de `DEPLOYD_HISTORY_KEEP_DAYS`
-  días (90 por defecto) salen del historial en el mantenimiento horario, junto
-  con los nonces viejos. Las descargas huérfanas bajo `releases/.incoming` se
-  eliminan al arrancar.
-- **`deployd check`** valida settings, la base de estado, los secretos y el
-  modo de su archivo, las rutas administradas, los ejecutables de
-  restart/migrate/hooks y avisos por app sin arrancar el servicio. Ejecútalo
-  después de editar la configuración a mano.
+- **Historial**: se conserva, incluidos los registros necesarios para activar
+  versiones guardadas. La retención de archivos sigue siendo configurable por app.
+  El mantenimiento horario solo elimina nonces vencidos; las descargas huérfanas
+  bajo `releases/.incoming` se eliminan al arrancar.
+- **`deployd check`** es de solo lectura: inspecciona configuración, permisos de
+  las rutas de estado, secretos, metadatos de versiones y ejecutables. No crea ni
+  migra la base, no prueba escrituras ni repara carpetas. No garantiza la integridad
+  de la base ni que una escritura tenga éxito. Ejecútalo tras editar la configuración.
+  Si reporta recuperación pendiente, reinicia el servicio de forma controlada
+  cuando termine cualquier operación en curso.
 - **`/healthz`** devuelve `{"status": "ok"}` solo cuando la base de estado es
   escribible y todas las tareas worker están vivas; si no, `degraded` con el
   chequeo que falla.
@@ -607,7 +612,6 @@ src/deployd/
   security.py              verificación HMAC (firma, ventana, nonce)
   models.py                esquemas de request/response
   check.py                 validador de configuración `deployd check`
-  notify.py                notificaciones salientes por webhook
   api/routes.py            POST /deploys, GET /deploys/{id}, GET /healthz
   api/admin.py             /admin: registro, secretos, historial, cancelar, congelar, estado, auditoría
   worker/queue.py          cola asyncio serializada por app, con supervisión y drenado

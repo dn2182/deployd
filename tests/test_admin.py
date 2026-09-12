@@ -271,7 +271,14 @@ def test_cleanup_deletes_only_selected_files_and_preserves_history(env):
             == 409
         )
         response = client.post(f"{base}/cleanup", headers=ADMIN, json={"release": old.name})
-        assert response.status_code == 200
+        assert response.status_code == 202
+        did = response.json()["deploy_id"]
+        for _ in range(200):
+            result = client.app.state.store.get_deploy(did)
+            if result["status"] not in ("queued", "running"):
+                break
+            time.sleep(0.01)
+        assert result["status"] == "succeeded" and result["kind"] == "cleanup"
         assert current.exists() and not old.exists()
         assert client.app.state.store.get_deploy(old.name[41:])["status"] == "succeeded"
 

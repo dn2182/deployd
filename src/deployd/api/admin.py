@@ -2,7 +2,6 @@
 Bind to localhost/tailnet or front with Cloudflare Access; never expose bare.
 """
 
-import asyncio
 import hashlib
 import os
 import re
@@ -182,16 +181,26 @@ async def activate_app_release(request: Request, name: AppName, selection: Relea
     return {"deploy_id": deploy_id, "status": "queued"}
 
 
-@router.post("/apps/{name}/releases/cleanup")
+@router.post("/apps/{name}/releases/cleanup", status_code=202)
 async def cleanup_app_release(request: Request, name: AppName, selection: ReleaseSelection):
+    store = request.app.state.store
     with config_lock():
         spec = _release_app(request, name, idle=True)
         try:
-            await asyncio.to_thread(runner.remove_release, spec, selection.release)
+            runner.removable_release(spec, selection.release)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        _audit(request, "release.remove", name, selection.release)
-    return {"removed": selection.release}
+        deploy_id = store.create_deploy(
+            name,
+            "0" * 40,
+            f"local-cleanup://{selection.release}",
+            "0" * 64,
+            f"cleanup:{selection.release}",
+            kind="cleanup",
+        )
+        request.app.state.queue.enqueue_cleanup(name, deploy_id, selection.release)
+        _audit(request, "release.cleanup", name, selection.release)
+    return {"deploy_id": deploy_id, "status": "queued"}
 
 
 @router.get("/apps/{name}/website")

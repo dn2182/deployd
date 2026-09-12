@@ -11,7 +11,6 @@ const existing = {
   restart: { command: ['/usr/bin/restart', 'arg with spaces', 'two\nlines'], timeout_seconds: 600 },
   health: { url: 'https://example.com/health', retries: 12, interval_seconds: 5, expect_body: null, expect_header: null },
   hooks: { before_cutover: null, after_health: ['/usr/local/bin/warm', '--all'] },
-  notify: { url: 'https://hooks.example.com/x', events: ['failed'], format: 'slack' },
   secret: { configured: true, env_override: false, fingerprint: '123456' },
   github: { configured: true, source: 'app', env_override: false },
 }
@@ -46,24 +45,22 @@ describe('AppEditor', () => {
       releases_dir: existing.releases_dir, current_link: existing.current_link,
       keep_previous: 4, auto_cleanup: false, frozen: true,
       artifact: existing.artifact, migrate: existing.migrate, restart: existing.restart,
-      health: existing.health, hooks: { ...existing.hooks, timeout_seconds: 600 }, notify: existing.notify,
+      health: existing.health, hooks: { ...existing.hooks, timeout_seconds: 600 },
       env_passthrough: [],
     })
     expect(sent.credentials).toEqual({ generate_signing_secret: false, remove_github_token: false })
     expect(sent.create_only).toBe(false)
   })
 
-  it('sends health expectations, hooks, notifications, and timeouts from the form', async () => {
+  it('sends health expectations, hooks, and timeouts from the form', async () => {
     const { call } = editor()
     fireEvent.change(screen.getByLabelText('Expected body text (optional)'), { target: { value: 'build {commit_sha}' } })
     fireEvent.change(screen.getByLabelText('Expected header (optional)'), { target: { value: 'X-Release: {commit_sha}' } })
     fireEvent.change(screen.getByLabelText('Before cutover executable'), { target: { value: '/usr/local/bin/prepare' } })
     fireEvent.change(screen.getByLabelText('Before cutover arguments (one per line)'), { target: { value: '--fast\n\nnow' } })
     fireEvent.change(screen.getByLabelText('After health executable'), { target: { value: '' } })
-    fireEvent.change(screen.getByLabelText('Webhook URL (optional)'), { target: { value: 'https://hooks.example.com/y' } })
-    fireEvent.change(screen.getByLabelText('Payload format'), { target: { value: 'discord' } })
-    fireEvent.click(screen.getByLabelText('Succeeded'))
-    fireEvent.click(screen.getByLabelText('Failed'))
+
+
     fireEvent.change(screen.getByLabelText('Restart timeout (seconds)'), { target: { value: '30' } })
     fireEvent.change(screen.getByLabelText('Migration timeout (seconds)'), { target: { value: '900' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
@@ -72,14 +69,14 @@ describe('AppEditor', () => {
     expect(spec.health).toMatchObject({ expect_body: 'build {commit_sha}', expect_header: 'X-Release: {commit_sha}' })
     expect(spec.hooks).toEqual({ before_cutover: ['/usr/local/bin/prepare', '--fast', 'now'], after_health: null, timeout_seconds: 600 })
     expect(spec.env_passthrough).toEqual([])
-    expect(spec.notify).toEqual({ url: 'https://hooks.example.com/y', events: ['succeeded'], format: 'discord' })
+    expect(spec).not.toHaveProperty('notify')
     expect(spec.restart.timeout_seconds).toBe(30)
     expect(spec.migrate).toEqual({ command: ['/usr/bin/migrate', '--apply'], timeout_seconds: 900 })
   })
 
   it('defaults new fields for apps without them', async () => {
     const { call } = editor({ ...existing, migrate: { command: null }, restart: { command: ['true'] },
-      health: { url: null }, hooks: undefined, notify: undefined, frozen: undefined })
+      health: { url: null }, hooks: undefined, frozen: undefined })
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() => expect(call).toHaveBeenCalledTimes(1))
     expect(sentSpec(call)).toMatchObject({
@@ -87,7 +84,6 @@ describe('AppEditor', () => {
       migrate: { command: null, timeout_seconds: 600 },
       restart: { timeout_seconds: 600 },
       hooks: { before_cutover: null, after_health: null, timeout_seconds: 600 },
-      notify: { url: null, events: [], format: 'generic' },
       env_passthrough: [],
     })
   })
@@ -149,6 +145,6 @@ describe('AppEditor', () => {
     editor(existing, 'es')
     expect(screen.getByLabelText('Repositorio de GitHub')).toBeInTheDocument()
     expect(screen.getByLabelText('Secreto de firma de despliegues')).toBeInTheDocument()
-    expect(screen.getByLabelText('URL del webhook (opcional)')).toBeInTheDocument()
+    expect(screen.queryByLabelText('URL del webhook (opcional)')).not.toBeInTheDocument()
   })
 })

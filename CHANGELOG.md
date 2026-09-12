@@ -6,6 +6,13 @@ Initial release.
 
 ### Hardening pass (September 2026)
 
+- Release cleanup shares the per-app deployment queue and drains safely on
+  shutdown. History is retained so old saved versions remain activatable.
+- `deployd check` only inspects configuration, paths and release metadata; it
+  never creates/migrates state or repairs directories while the service runs.
+- Keep manual refresh and explicit version selection; remove fast polling,
+  history rollback shortcuts, outbound webhook notifications and the untested
+  Windows installer/advisory CI job.
 - Migrate, restart and hook subprocesses run with a scrubbed environment; the
   admin token, GitHub tokens and pinned signing secrets loaded from `.env` no
   longer reach code shipped in an artifact.
@@ -29,11 +36,10 @@ Initial release.
 - New: a newer queued push supersedes older queued ones (`superseded`),
   queued deploys can be cancelled (`cancelled`), apps can be frozen (`423`),
   optional `before_cutover` and `after_health` hooks, health assertions on
-  body or header with a `{commit_sha}` placeholder, per-app webhook
-  notifications (generic, Slack, Discord), per-command timeouts, an audit log
+  body or header with a `{commit_sha}` placeholder, per-command timeouts, an audit log
   of admin actions with the proxy user, `GET /admin/apps/{name}/status`,
   history filtering and pagination, `deployd check`, hourly maintenance
-  (nonce and history retention), `.incoming` sweep at startup, `/healthz`
+  (nonce expiry), `.incoming` sweep at startup, `/healthz`
   reporting database and worker state, and systemd watchdog support.
 - `requires-python` is now `>=3.11.4` (tar data filter).
 

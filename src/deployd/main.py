@@ -48,14 +48,10 @@ async def _watchdog() -> None:
 
 
 async def _maintenance(store: Store) -> None:
-    keep_days = get_settings().history_keep_days
     while True:
         await asyncio.sleep(MAINTENANCE_INTERVAL_SECONDS)
         try:
             store.purge_old_nonces()
-            purged = store.purge_history(keep_days)
-            if purged:
-                log.info("purged %s finished deployment(s) older than %s days", purged, keep_days)
         except Exception:
             log.exception("maintenance run failed")
 

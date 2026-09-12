@@ -146,7 +146,7 @@ function Console({ language, setLanguage }) {
                 </div>
                 {view === 'deploys' && (
                   <>
-                    <span className="text-[11px] text-muted">{t(registry.hasActive ? 'activity.live' : 'activity.manual')}</span>
+                    <span className="text-[11px] text-muted">{t('activity.manual')}</span>
                     <Button size="small" disabled={refreshing} onClick={doRefresh}>
                       <RefreshCw size={14} className={refreshing ? 'animate-spin' : undefined} /> {t('activity.refresh')}
                     </Button>

@@ -9,7 +9,6 @@ import httpx
 import pytest
 from test_runner import SHA_V1, make_artifact, new_deploy, wire
 
-from deployd import notify
 from deployd.config import AppSpec
 from deployd.store.db import Store
 from deployd.worker import runner
@@ -317,25 +316,6 @@ async def test_cutover_phase_survives_cancellation(tmp_path, store, monkeypatch)
     assert (spec.current_link / "app.txt").read_text() == "v1"
 
 
-async def test_failed_deploy_sends_notification(tmp_path, store, monkeypatch):
-    spec = _spec(
-        tmp_path,
-        notify={"url": "https://hooks.example.com/x", "events": ["failed"], "format": "generic"},
-    )
-    posted = []
-
-    async def fake_send(spec_, deploy, status, failed_step=None):
-        posted.append((status, failed_step))
-
-    monkeypatch.setattr(notify, "send", fake_send)
-    artifact, _ = make_artifact(tmp_path, "v1.zip", "v1")
-    wire(monkeypatch, spec, artifact)
-    did = new_deploy(store, SHA_V1, "0" * 64)
-    await runner.run_deploy(store, "app-x", did)
-    assert store.get_deploy(did)["status"] == "failed"
-    assert posted == [("failed", "verify")]
-
-
 async def test_activation_never_deletes_the_release_it_uses(tmp_path, store, monkeypatch):
     spec = _spec(tmp_path)
     artifact, digest = make_artifact(tmp_path, "v1.zip", "v1")
@@ -398,18 +378,3 @@ async def test_directory_layout_rollback_to_previous(tmp_path, store, monkeypatc
     assert (spec.current_link / "app.txt").read_text() == "v1"
     with pytest.raises(ValueError, match="protected"):
         runner.remove_release(spec, "previous")
-
-
-async def test_notification_failures_never_change_the_result(tmp_path, store, monkeypatch):
-    spec = _spec(tmp_path, notify={"url": "https://hooks.example.com/x", "events": ["succeeded"]})
-    monkeypatch.setattr(notify, "BACKOFF_SECONDS", 0)
-    original = notify.httpx.AsyncClient
-    notify.httpx.AsyncClient = lambda **kw: (_ for _ in ()).throw(RuntimeError("client broke"))
-    artifact, digest = make_artifact(tmp_path, "v1.zip", "v1")
-    wire(monkeypatch, spec, artifact)
-    did = new_deploy(store, SHA_V1, digest)
-    try:
-        await runner.run_deploy(store, "app-x", did)
-    finally:
-        notify.httpx.AsyncClient = original
-    assert store.get_deploy(did)["status"] == "succeeded"

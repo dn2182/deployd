@@ -10,7 +10,7 @@ from .website import run_connection, run_removal
 
 log = logging.getLogger("deployd.worker")
 
-LOCAL_KINDS = ("activate", "connect", "remove")
+LOCAL_KINDS = ("activate", "connect", "remove", "cleanup")
 
 
 @dataclass(frozen=True)
@@ -45,6 +45,9 @@ class DeployQueue:
 
     def enqueue_activation(self, app: str, deploy_id: str, release: str) -> None:
         self.enqueue(app, deploy_id, Job("activate", release))
+
+    def enqueue_cleanup(self, app: str, deploy_id: str, release: str) -> None:
+        self.enqueue(app, deploy_id, Job("cleanup", release))
 
     def enqueue(self, app: str, deploy_id: str, job: Job | None = None) -> None:
         if deploy_id in self._jobs:
@@ -112,6 +115,8 @@ class DeployQueue:
                     await run_connection(self._store, app, deploy_id)
                 elif job.kind == "activate":
                     await runner.run_activation(self._store, app, deploy_id, job.release)
+                elif job.kind == "cleanup":
+                    await runner.run_cleanup(self._store, app, deploy_id, job.release)
                 else:
                     await runner.run_deploy(self._store, app, deploy_id)
             except asyncio.CancelledError:

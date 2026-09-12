@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Ban, Check, ChevronDown, ChevronRight, ExternalLink, GitCompare, RotateCcw, Undo2, X } from 'lucide-react'
+import { Ban, Check, ChevronDown, ChevronRight, ExternalLink, GitCompare, RotateCcw, X } from 'lucide-react'
 import { useT } from '../i18n/index.js'
 import { deployKind } from '../lib/deploys.js'
 import { formatDuration } from '../lib/time.js'
@@ -57,11 +57,9 @@ export default function DeployRow({ deploy, repository, previousSha, api, onChan
   }
   const redeploy = () => run(() => api.redeploy(deploy.deploy_id), t('deploy.redeploy_toast', { name: deploy.app }))
   const cancel = () => run(() => api.cancelDeploy(deploy.deploy_id), t('deploy.cancel_toast', { name: deploy.app }))
-  const rollback = () => run(() => api.activateRelease(deploy.app, 'previous'), t('deploy.rollback_toast', { name: deploy.app }))
 
   const commitUrl = repository && kind === 'artifact' ? `https://github.com/${repository}/commit/${deploy.commit_sha}` : null
   const compareUrl = repository && previousSha ? `https://github.com/${repository}/compare/${previousSha}...${deploy.commit_sha}` : null
-  const canRollBack = kind === 'artifact' && ['failed', 'rolled_back'].includes(deploy.status)
 
   return (
     <li className={`flex flex-col gap-3 px-3 py-3 sm:px-4 ${expanded ? 'bg-surface-soft' : ''}`}>
@@ -111,16 +109,6 @@ export default function DeployRow({ deploy, repository, previousSha, api, onChan
                 description={t('deploy.redeploy_description', { commit: sha })}
                 confirmLabel={t('deploy.redeploy_confirm')}
                 onConfirm={redeploy}
-              />
-            )}
-            {canRollBack && (
-              <ConfirmDialog
-                trigger={<IconButton label={t('deploy.rollback', { name: deploy.app })}><Undo2 size={15} /></IconButton>}
-                title={t('deploy.rollback_title', { name: deploy.app })}
-                description={t('deploy.rollback_description')}
-                confirmLabel={t('deploy.rollback_confirm')}
-                destructive
-                onConfirm={rollback}
               />
             )}
           </span>

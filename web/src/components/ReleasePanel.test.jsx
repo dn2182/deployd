@@ -68,6 +68,8 @@ describe('ReleasePanel', () => {
     await waitFor(() => expect(call).toHaveBeenCalledWith('/admin/apps/site/releases/cleanup', {
       method: 'POST', body: JSON.stringify({ release: versions[2].name }),
     }))
+    expect(await screen.findByText(/Cleanup queued/)).toBeInTheDocument()
+    expect(screen.queryByText(/Version files deleted/)).not.toBeInTheDocument()
   })
 
   it('queues activation after confirmation', async () => {

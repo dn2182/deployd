@@ -33,7 +33,6 @@ class Settings(BaseSettings):
     max_request_bytes: int = Field(default=65_536, ge=1_024, le=1_048_576)
     # HMAC replay protection
     timestamp_window_seconds: int = Field(default=300, ge=30, le=3600)
-    history_keep_days: int = Field(default=90, ge=1, le=3650)
     # Longest wait for an in-flight cutover to finish on shutdown; systemd's stop
     # timeout must exceed it.
     drain_timeout_seconds: int = Field(default=600, ge=10, le=3600)
@@ -205,35 +204,6 @@ class HealthSpec(BaseModel):
         return f"{name.strip()}: {expected.strip()}"
 
 
-NOTIFY_EVENTS = ("succeeded", "failed", "rolled_back")
-
-
-class NotifySpec(BaseModel):
-    url: str | None = None
-    events: list[Literal["succeeded", "failed", "rolled_back"]] = Field(
-        default_factory=lambda: ["failed", "rolled_back"]
-    )
-    format: Literal["generic", "slack", "discord"] = "generic"
-
-    @field_validator("url")
-    @classmethod
-    def validate_url(cls, value: str | None) -> str | None:
-        if value is None or not value.strip():
-            return None
-        value = value.strip()
-        parsed = urlsplit(value)
-        if parsed.scheme != "https" or not parsed.hostname:
-            raise ValueError("notification URL must be an absolute HTTPS URL")
-        if parsed.username or parsed.password:
-            raise ValueError("notification URL cannot contain credentials")
-        return value
-
-    @field_validator("events")
-    @classmethod
-    def dedupe_events(cls, value: list[str]) -> list[str]:
-        return [event for event in NOTIFY_EVENTS if event in value]
-
-
 class AppSpec(BaseModel):
     github_actions: GitHubActionsSettings | None = None
     github_repository: str | None = None
@@ -251,7 +221,6 @@ class AppSpec(BaseModel):
     hooks: HooksSpec = Field(default_factory=HooksSpec)
     restart: RestartSpec
     health: HealthSpec = Field(default_factory=HealthSpec)
-    notify: NotifySpec = Field(default_factory=NotifySpec)
     # Names of service environment variables forwarded to migrate, restart and hooks
     # (for example a DSN variable); everything else stays with the service.
     env_passthrough: list[str] = Field(default_factory=list, max_length=32)

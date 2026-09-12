@@ -15,7 +15,6 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
-from .. import notify
 from ..config import AppSpec, get_app_github_token, get_app_registry
 from ..store.db import Store
 from . import directory_layout
@@ -174,7 +173,6 @@ async def _finish(
         log.warning(
             "deploy %s for %s: %s at step %s", deploy_id, deploy["app"], status, failed_step
         )
-    await notify.send(spec, deploy, status, failed_step)
 
 
 async def _run_steps(
@@ -879,10 +877,9 @@ def list_releases(spec: AppSpec) -> dict:
     }
 
 
-def remove_release(spec: AppSpec, name: str) -> None:
+def removable_release(spec: AppSpec, name: str) -> Path:
     if spec.release_layout == "directory":
-        directory_layout.remove_release(spec, name)
-        return
+        return directory_layout.removable_release(spec, name)
     if name == "previous":
         raise ValueError("the previous release is protected")
     target = local_release(spec, name)
@@ -891,9 +888,33 @@ def remove_release(spec: AppSpec, name: str) -> None:
         protected.add(_current_target(_previous_link(spec)))
     if target.resolve() in protected:
         raise ValueError("active and previous releases are protected")
+    return target
+
+
+def remove_release(spec: AppSpec, name: str) -> None:
+    target = removable_release(spec, name)
     shutil.rmtree(target)
-    if target.resolve() == _current_target(_previous_link(spec)):
+    if spec.release_layout == "symlink" and target.resolve() == _current_target(
+        _previous_link(spec)
+    ):
         _remove_link(_previous_link(spec))
+
+
+async def run_cleanup(store: Store, app: str, deploy_id: str, name: str) -> None:
+    async def cleanup():
+        store.set_status(deploy_id, "running")
+        store.add_step(deploy_id, "cleanup", "running")
+        try:
+            await asyncio.to_thread(remove_release, get_app_registry()[app], name)
+        except Exception as exc:
+            store.add_step(deploy_id, "cleanup", "failed", output=_error_text(exc))
+            store.set_status(deploy_id, "failed", finished=True)
+        else:
+            store.add_step(deploy_id, "cleanup", "succeeded", output=name)
+            store.set_status(deploy_id, "succeeded", finished=True)
+
+    # A cancelled request or service shutdown must not release the app while deletion runs.
+    await _protected(cleanup())
 
 
 async def run_activation(store: Store, app: str, deploy_id: str, name: str) -> None:

@@ -60,6 +60,7 @@ async def test_restart_does_not_replay_local_operations_as_download(tmp_path):
         store.create_deploy("app", "a" * 40, "local-release://previous", "b" * 64, "x", "activate"),
         store.create_deploy("app", "0" * 40, "local-website://connect", "0" * 64, "x", "connect"),
         store.create_deploy("app", "0" * 40, "local-website://remove", "0" * 64, "x", "remove"),
+        store.create_deploy("app", "0" * 40, "local-cleanup://release", "0" * 64, "x", "cleanup"),
     ]
     worker = queue.DeployQueue(store)
     assert worker.recover({"app"}) == 0

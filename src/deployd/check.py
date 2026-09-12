@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 
 from .config import AppSpec, get_app_github_token, get_app_registry, get_app_secret, get_settings
-from .store.db import Store
 from .worker import directory_layout
 
 
@@ -35,7 +34,7 @@ def _command_resolves(command: list[str] | None) -> bool:
         return True
     executable = command[0]
     if os.sep in executable or (os.altsep and os.altsep in executable):
-        return Path(executable).is_file()
+        return Path(executable).is_file() and os.access(executable, os.X_OK)
     return shutil.which(executable) is not None
 
 
@@ -55,8 +54,7 @@ def _check_app(name: str, spec: AppSpec, report: Report) -> None:
             report.error(f"{label}: directory layout needs Linux or macOS")
         elif spec.releases_dir.is_dir():
             try:
-                directory_layout.prepare(spec)
-                directory_layout.reconcile(spec)
+                directory_layout.records(spec)
             except (OSError, ValueError, RuntimeError) as exc:
                 report.error(f"{label}: {exc}")
     for what, command in (
@@ -70,9 +68,9 @@ def _check_app(name: str, spec: AppSpec, report: Report) -> None:
     if spec.github_repository and not get_app_github_token(name):
         report.warn(f"{label}: no GitHub token; only public release assets will download")
     if not spec.health.url:
-        report.warn(f"{label}: no health URL, failed restarts cannot trigger a rollback")
-    if spec.notify.url and not spec.notify.events:
-        report.warn(f"{label}: notification URL set but no events selected")
+        report.warn(
+            f"{label}: no health URL, HTTP availability is not checked; command-failure rollback remains enabled"
+        )
     if spec.frozen:
         report.warn(f"{label}: frozen, CI deploys are rejected")
 
@@ -88,13 +86,11 @@ def run_checks() -> Report:
         report.warn("DEPLOYD_ADMIN_TOKEN is empty; the management API is disabled")
     if not _writable_dir(settings.db_path.parent):
         report.error(f"state directory {settings.db_path.parent} is not writable")
+    if settings.db_path.exists():
+        if not settings.db_path.is_file() or not os.access(settings.db_path, os.R_OK | os.W_OK):
+            report.error(f"state database {settings.db_path} is not a readable, writable file")
     else:
-        try:
-            store = Store(settings.db_path)
-            store.init()
-            store.check_writable()
-        except Exception as exc:
-            report.error(f"state database: {exc}")
+        report.warn("state database does not exist; service startup will create it")
     if settings.secrets_file.exists():
         mode = settings.secrets_file.stat().st_mode & 0o777
         if os.name != "nt" and mode & 0o077:

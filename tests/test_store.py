@@ -149,28 +149,6 @@ def test_list_deploys_filters_and_pages(tmp_path):
     assert s.list_deploys(app="nope") == []
 
 
-def test_history_purge_removes_only_old_finished_rows(tmp_path):
-    import sqlite3
-
-    s = _store(tmp_path)
-    old = s.create_deploy("app", "a" * 40, "https://x/a.zip", "b" * 64, "ci")
-    s.set_status(old, "succeeded", finished=True)
-    s.add_step(old, "download", "succeeded")
-    fresh = s.create_deploy("app", "a" * 40, "https://x/a.zip", "b" * 64, "ci")
-    s.set_status(fresh, "failed", finished=True)
-    stale_queued = s.create_deploy("app", "a" * 40, "https://x/a.zip", "b" * 64, "ci")
-    with sqlite3.connect(tmp_path / "test.sqlite3") as conn:
-        conn.execute(
-            "UPDATE deploys SET created_at = '2020-01-01', finished_at = '2020-01-01' "
-            "WHERE deploy_id IN (?, ?)",
-            (old, stale_queued),
-        )
-    assert s.purge_history(30) == 1
-    assert s.get_deploy(old) is None
-    assert s.get_deploy(fresh) is not None
-    assert s.get_deploy(stale_queued)["status"] == "queued"
-
-
 def test_status_helpers(tmp_path):
     s = _store(tmp_path)
     first = s.create_deploy("app", "a" * 40, "https://x/a.zip", "b" * 64, "ci")

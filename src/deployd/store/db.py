@@ -449,21 +449,6 @@ class Store:
             ).fetchone()
             return row["commit_sha"] if row else None
 
-    def purge_history(self, keep_days: int) -> int:
-        """Finished deploys older than the retention window leave with their steps."""
-        with self._conn() as c:
-            rows = c.execute(
-                "SELECT deploy_id FROM deploys WHERE status IN (?, ?, ?, ?, ?) "
-                "AND coalesce(finished_at, created_at) < datetime('now', ?)",
-                (*TERMINAL_STATUSES, f"-{keep_days} days"),
-            ).fetchall()
-            ids = [row["deploy_id"] for row in rows]
-            for deploy_id in ids:
-                c.execute("DELETE FROM deploy_steps WHERE deploy_id = ?", (deploy_id,))
-                c.execute("UPDATE nonces SET deploy_id = NULL WHERE deploy_id = ?", (deploy_id,))
-                c.execute("DELETE FROM deploys WHERE deploy_id = ?", (deploy_id,))
-            return len(ids)
-
     # --- audit ----------------------------------------------------------
     def audit(self, actor: str, action: str, target: str | None, detail: str | None) -> None:
         with self._conn() as c:

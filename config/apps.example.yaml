@@ -46,8 +46,3 @@ apps:
       # {commit_sha} is replaced with the deployed SHA
       expect_body: null                            # e.g. "{commit_sha}"
       expect_header: null                          # e.g. "X-Release: {commit_sha}"
-    notify:
-      # optional HTTPS webhook; generic posts JSON, slack/discord post their text shape
-      url: null
-      events: [failed, rolled_back]
-      format: generic

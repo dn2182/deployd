@@ -249,22 +249,14 @@ def test_setup_accepts_new_spec_fields(env):
         spec = client.get("/admin/apps", headers=ADMIN).json()["app-x"]
         spec.pop("secret")
         spec.pop("github")
-        spec["notify"] = {
-            "url": "https://hooks.example.com/x",
-            "events": ["failed"],
-            "format": "slack",
-        }
         spec["hooks"] = {"before_cutover": ["true"], "after_health": None, "timeout_seconds": 30}
         spec["health"]["expect_body"] = "{commit_sha}"
         spec["health"]["expect_header"] = "X-Release: {commit_sha}"
         spec["migrate"]["timeout_seconds"] = 1200
         assert client.put("/admin/apps/app-x", headers=ADMIN, json=spec).status_code == 200
         saved = client.get("/admin/apps", headers=ADMIN).json()["app-x"]
-        assert saved["notify"]["format"] == "slack" and saved["hooks"]["before_cutover"] == ["true"]
+        assert saved["hooks"]["before_cutover"] == ["true"]
         assert saved["health"]["expect_header"] == "X-Release: {commit_sha}"
         assert saved["migrate"]["timeout_seconds"] == 1200
-        spec["notify"]["url"] = "http://plain.example.com/x"
-        assert client.put("/admin/apps/app-x", headers=ADMIN, json=spec).status_code == 422
-        spec["notify"]["url"] = None
         spec["health"]["expect_header"] = "no colon"
         assert client.put("/admin/apps/app-x", headers=ADMIN, json=spec).status_code == 422

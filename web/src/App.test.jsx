@@ -103,26 +103,21 @@ describe('App', () => {
     expect(website).toHaveFocus()
   })
 
-  it('polls every two seconds while a deploy is active, toasts the result, then slows down', async () => {
-    const routes = { ...BASE, 'GET /api/admin/deploys': [{ ...DEPLOYS[0], status: 'running', finished_at: null }] }
+  it.each(['running', 'succeeded'])('never polls automatically when a deploy is %s', async (status) => {
+    const routes = { ...BASE, 'GET /api/admin/deploys': [{ ...DEPLOYS[0], status }] }
     const fetcher = mockFetch(routes)
     global.fetch = fetcher
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
     render(<App />)
     await screen.findByText('No retained versions yet.')
-    expect(screen.getByText(/Live, updating every 2 seconds/)).toBeInTheDocument()
-    const before = calls(fetcher, '/api/admin/deploys').length
-    await act(() => vi.advanceTimersByTimeAsync(2000))
-    await waitFor(() => expect(calls(fetcher, '/api/admin/deploys')).toHaveLength(before + 1))
+    expect(screen.getByText('Refresh on demand')).toBeInTheDocument()
+    const before = fetcher.mock.calls.length
+    await act(() => vi.advanceTimersByTimeAsync(600000))
+    expect(fetcher).toHaveBeenCalledTimes(before)
     routes['GET /api/admin/deploys'] = DEPLOYS
-    await act(() => vi.advanceTimersByTimeAsync(2000))
-    await waitFor(() => expect(calls(fetcher, '/api/admin/deploys')).toHaveLength(before + 2))
-    expect(await screen.findByText('my-api: Succeeded')).toBeInTheDocument()
-    expect(await screen.findByText(/checking every 15 seconds/)).toBeInTheDocument()
-    await act(() => vi.advanceTimersByTimeAsync(6000))
-    expect(calls(fetcher, '/api/admin/deploys')).toHaveLength(before + 2)
-    await act(() => vi.advanceTimersByTimeAsync(10000))
-    await waitFor(() => expect(calls(fetcher, '/api/admin/deploys')).toHaveLength(before + 3))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Refresh' })[0])
+    await waitFor(() => expect(calls(fetcher, '/api/admin/deploys')).toHaveLength(2))
+    if (status === 'running') expect(await screen.findByText('my-api: Succeeded')).toBeInTheDocument()
   })
 
   it('refreshes health, activity, and the active panel on demand and with the r shortcut', async () => {
@@ -180,7 +175,7 @@ describe('App', () => {
     const sent = fetcher.mock.calls.find(([url, options]) => url === '/api/admin/apps/bluedatos/setup' && options.method === 'POST')
     expect(JSON.parse(sent[1].body)).toMatchObject({ create_only: true,
       credentials: { generate_signing_secret: true }, spec: { release_layout: 'directory', keep_previous: 1,
-        health: { url: null }, frozen: false, notify: { format: 'generic' },
+        health: { url: null }, frozen: false,
         site_path: '/var/www/bluedatos.com',
         github_repository: 'dn2182/BlueDatos.com', current_link: '/srv/deployd/bluedatos/releases/current' } })
     const dialog = await screen.findByRole('dialog')
@@ -234,7 +229,7 @@ describe('App', () => {
     expect(await screen.findByText('Redeploy of my-api queued.')).toBeInTheDocument()
   })
 
-  it('cancels queued deploys and rolls back failed ones from the history', async () => {
+  it('cancels queued deploys without ambiguous rollback shortcuts in history', async () => {
     const fetcher = mockFetch({ ...BASE,
       'GET /api/admin/apps': { 'my-api': { ...APPS['my-api'], github_repository: 'acme/api' } },
       'GET /api/admin/deploys': [
@@ -243,18 +238,14 @@ describe('App', () => {
         DEPLOYS[0],
       ],
       'POST /api/admin/deploys/q1/cancel': { deploy_id: 'q1', status: 'cancelled' },
-      'POST /api/admin/apps/my-api/releases/activate': { deploy_id: 'r1', status: 'queued' },
     })
     global.fetch = fetcher
     render(<App />)
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel queued deploy of my-api' }))
     fireEvent.click(screen.getByRole('button', { name: 'Cancel deploy' }))
     await waitFor(() => expect(fetcher).toHaveBeenCalledWith('/api/admin/deploys/q1/cancel', expect.objectContaining({ method: 'POST' })))
-    expect(screen.getAllByRole('button', { name: 'Roll back my-api to the previous version' })).toHaveLength(1)
-    fireEvent.click(screen.getByRole('button', { name: 'Roll back my-api to the previous version' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Roll back to previous' }))
-    await waitFor(() => expect(fetcher).toHaveBeenCalledWith('/api/admin/apps/my-api/releases/activate',
-      expect.objectContaining({ method: 'POST', body: JSON.stringify({ release: 'previous' }) })))
+    expect(screen.queryByRole('button', { name: /Roll back/ })).not.toBeInTheDocument()
+    expect(calls(fetcher, '/api/admin/apps/my-api/releases/activate')).toHaveLength(0)
     const links = screen.getAllByRole('link', { name: 'Open commit on GitHub' })
     expect(links[0]).toHaveAttribute('href', `https://github.com/acme/api/commit/${'c'.repeat(40)}`)
     const compare = screen.getAllByRole('link', { name: 'Compare with previous deploy on GitHub' })

@@ -70,6 +70,5 @@ export function createApi(call) {
     rotateSecret: (name) => call(`${app(name)}/rotate-secret`, { method: 'POST' }),
     removeApp: (name, selection) =>
       call(app(name), { method: 'DELETE', ...(selection && { body: JSON.stringify(selection) }) }),
-    activateRelease: (name, release) => call(`${app(name)}/releases/activate`, post({ release })),
   }
 }

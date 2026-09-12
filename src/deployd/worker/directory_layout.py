@@ -253,13 +253,18 @@ def restore(spec: AppSpec, ctx: dict) -> bool:
     return False
 
 
-def remove_release(spec: AppSpec, name: str) -> None:
+def removable_release(spec: AppSpec, name: str) -> Path:
     if name == "previous":
         raise ValueError("the previous release is protected")
     path = local_release(spec, name)
     row = next(row for row in records(spec)["releases"] if row["name"] == name)
     if row["protected"]:
         raise ValueError("the previous release is protected")
+    return path
+
+
+def remove_release(spec: AppSpec, name: str) -> None:
+    path = removable_release(spec, name)
     shutil.rmtree(path)
 
 

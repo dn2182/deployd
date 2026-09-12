@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { useT } from '../i18n/index.js'
-import { NOTIFY_EVENTS, NOTIFY_FORMATS } from '../lib/deploys.js'
 import { Button, Checkbox, ErrorMessage, Field, Help, inputClass } from './ui.jsx'
 
 const DEFAULT_TIMEOUT = 600
@@ -38,9 +37,6 @@ function fields(spec = {}) {
     afterHealth: commandFields(spec.hooks?.after_health),
     hooksTimeout: spec.hooks?.timeout_seconds ?? DEFAULT_TIMEOUT,
     envPassthrough: (spec.env_passthrough || []).join('\n'),
-    notifyUrl: spec.notify?.url || '',
-    notifyEvents: spec.notify?.events || [],
-    notifyFormat: spec.notify?.format || 'generic',
     keep: spec.keep_previous ?? (spec.keep_releases ? spec.keep_releases - 1 : 1),
     automatic: spec.auto_cleanup ?? true,
   }
@@ -98,8 +94,6 @@ export default function AppEditor({ name: existingName, initialSpec, call, onSav
     return () => { active = false }
   }, [call, existingName])
   const change = (key, value) => setForm((old) => ({ ...old, [key]: value }))
-  const toggleEvent = (event, checked) => change('notifyEvents',
-    NOTIFY_EVENTS.filter((item) => (item === event ? checked : form.notifyEvents.includes(item))))
   const root = base.releases_dir || `/srv/deployd/${name || 'myapp'}/releases`
   const current = base.current_link || `${root}/current`
   const needsConfirmation = Boolean(initialSpec?.secret?.configured) && signingMode !== 'keep'
@@ -145,11 +139,6 @@ export default function AppEditor({ name: existingName, initialSpec, call, onSav
         timeout_seconds: Number(form.hooksTimeout),
       },
       env_passthrough: form.envPassthrough.split('\n').map((name) => name.trim()).filter(Boolean),
-      notify: {
-        url: form.notifyUrl.trim() || null,
-        events: NOTIFY_EVENTS.filter((event) => form.notifyEvents.includes(event)),
-        format: form.notifyFormat,
-      },
     }
   }
 
@@ -261,27 +250,6 @@ export default function AppEditor({ name: existingName, initialSpec, call, onSav
           <textarea className={inputClass} rows={2} value={form.envPassthrough} placeholder="DEPLOYD_MIGRATE_DSN"
             spellCheck={false} onChange={(event) => change('envPassthrough', event.target.value)} />
         </Field>
-      </Section>
-
-      <Section title={t('setup.notify_section')} help={t('setup.notify_help')}>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_10rem]">
-          <Field label={t('setup.notify_url')}>
-            <input className={inputClass} type="url" value={form.notifyUrl} placeholder="https://hooks.example.com/deploys"
-              onChange={(event) => change('notifyUrl', event.target.value)} />
-          </Field>
-          <Field label={t('setup.notify_format')}>
-            <select className={inputClass} value={form.notifyFormat} onChange={(event) => change('notifyFormat', event.target.value)}>
-              {NOTIFY_FORMATS.map((format) => <option key={format} value={format}>{t(`setup.notify_format_${format}`)}</option>)}
-            </select>
-          </Field>
-        </div>
-        <fieldset className="m-0 flex flex-wrap gap-x-5 gap-y-2 border-0 p-0">
-          <legend className="mb-2 text-xs font-semibold text-text-strong">{t('setup.notify_events')}</legend>
-          {NOTIFY_EVENTS.map((event) => (
-            <Checkbox key={event} label={t(`status.${event}`)} checked={form.notifyEvents.includes(event)}
-              onChange={(change_) => toggleEvent(event, change_.target.checked)} />
-          ))}
-        </fieldset>
       </Section>
 
       <Section title={t('setup.credentials')} help={t('setup.secure_transport')}>

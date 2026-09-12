@@ -32,10 +32,8 @@ is the entire attack surface.
   SHA in the response body or a header, so a stale process cannot pass
 - **Admin UI** — app registry, one-click secret rotation (shown once),
   deploy history with per-step logs, redeploy, cancel, freeze, rollback,
-  per-app status, audit log, live updates while a deploy runs
-- **Notifications** — per-app HTTPS webhook (generic JSON, Slack or Discord)
-  on success, failure or rollback
-- **Bare-host native** — systemd on Linux, NSSM/IIS on Windows; a single
+  per-app status, audit log, and manual refresh
+- **Bare-host native** — systemd on Linux; a single
   Python service with a SQLite state file, a `deployd check` command, and
   systemd watchdog support
 - **Crash-aware queue** — queued deploys resume after restart; a newer push
@@ -62,7 +60,7 @@ Deploy Worker (per-app serialized queue)
       +--> cutover                            (directory exchange or legacy link swap)
       +--> restart + health check             (fail => auto-rollback)
       +--> after_health hook                  (optional, fail => auto-rollback)
-      +--> record status, notify, step log    (CI polls GET /deploys/{id})
+      +--> record status and step log         (CI polls GET /deploys/{id})
 ```
 
 Everything from `migrate` on is the commit phase: once it starts, a service
@@ -141,6 +139,12 @@ dependency sync and restart. For frontend-only changes,
 `git pull --ff-only origin main` followed by `make build` is enough; refresh
 the browser afterward.
 
+For a clean reinstall, use the normal uninstaller without `--purge`, accept the
+backup and restore connected websites to real folders first. Then clone and run
+the installer again. Uninstall removes deployd's configuration, tokens and state;
+without restoring that backup, re-register apps and update their GitHub secrets.
+Release folders alone do not restore their deployment-history records.
+
 ## Uninstall from Ubuntu
 
 ```bash
@@ -193,14 +197,13 @@ per page and only the selected application's details. **Website connection**,
 **Manage versions**, and **GitHub Actions setup** are mutually exclusive tabs.
 Internal paths are under **Application folders**. Each app card has a status
 panel with the current release, queued count, last deploy and last health
-result, plus **Freeze** / **Unfreeze**. The activity area polls every 2 seconds
-while a deploy is queued or running and every 15 seconds otherwise, shows a
-toast when a deploy reaches a terminal state, and offers **Refresh** (or the
-`r` key) for an immediate update. **Recent deploys** filters by app and status,
-searches by commit prefix, pages with **Load more**, and offers cancel,
-redeploy, roll back to previous, commit and compare links per row; **Audit
-log** lists admin actions with the acting user. GitHub Actions still polls its
-own deployment until completion.
+result, plus **Freeze** / **Unfreeze**. Use **Refresh** (or the `r` key) to
+update status; the console does not poll in the background. A refresh shows
+a toast for newly observed completion results. **Recent deploys** filters by
+app and status, searches by commit prefix, pages with **Load more**, and offers
+cancel, redeploy, commit and compare links per row. Select an exact retained
+version in **Manage versions** to roll back. **Audit log** lists admin actions
+with the acting user. GitHub Actions still polls its own deployment until completion.
 
 Choose **Add application** to configure:
 
@@ -531,8 +534,11 @@ database serialize on `sp_getapplock` (SQL Server) or `pg_advisory_xact_lock`
 - **Cancel** a queued deploy from the history (`POST /admin/deploys/{id}/cancel`).
   Running deploys cannot be cancelled; a newer push supersedes queued ones
   automatically.
-- **Roll back** from a failed history row: it activates the previous retained
-  release through the same cutover, restart and health path.
+- **Roll back** from **Manage versions**: select the exact retained version to
+  activate through the same cutover, restart and health path.
+- **Clean up** a retained version from **Manage versions**. Cleanup is queued
+  alongside deployments for that app and recorded in activity. Refresh to see
+  its result. Active/protected versions are checked again before deletion.
 - **Hooks**: `hooks.before_cutover` runs in the new release directory after
   migrations, `hooks.after_health` runs in the live release once the health
   check passed and rolls back on failure. Both are argv lists with their own
@@ -545,20 +551,19 @@ database serialize on `sp_getapplock` (SQL Server) or `pg_advisory_xact_lock`
   `health.expect_header` (`Name: value`) accept a `{commit_sha}` placeholder.
   Expose the running SHA from your app and set one of them; a restart that
   left the old process serving then fails and rolls back.
-- **Notifications**: `notify.url` (HTTPS), `notify.events` (any of
-  `succeeded`, `failed`, `rolled_back`) and `notify.format` (`generic` JSON,
-  `slack` or `discord` text). Delivery is retried on server errors and never
-  affects the deploy result.
 - **Audit log**: every admin mutation records the acting Basic Auth user (from
   `X-Remote-User`, set by the management Nginx site) under **Audit** and
   `GET /admin/audit`.
-- **Retention**: finished deploys older than `DEPLOYD_HISTORY_KEEP_DAYS`
-  (default 90) leave the history during hourly maintenance, along with stale
-  nonces. Leftover downloads under `releases/.incoming` are removed at startup.
-- **`deployd check`** validates settings, the state database, secrets and their
-  file mode, managed paths, restart/migrate/hook executables and per-app
-  warnings without starting the service. Run it after editing configuration
-  by hand.
+- **History** is preserved, including the records needed to activate retained
+  releases. Per-app release-file retention remains configurable. Hourly maintenance
+  only expires stale nonces; leftover downloads under `releases/.incoming` are
+  removed at startup.
+- **`deployd check`** is read-only: it inspects settings, state-path permissions,
+  secrets and their file mode, release metadata, command executables and per-app
+  warnings. It does not create or migrate the database, probe filesystem writes,
+  or repair release folders. It does not prove database integrity or successful
+  writes. Run it after editing configuration by hand; reported release recovery
+  requires a controlled service restart after any running work finishes.
 - **`/healthz`** returns `{"status": "ok"}` only when the state database is
   writable and every worker task is alive; otherwise `degraded` with the
   failing check named.
@@ -587,7 +592,6 @@ src/deployd/
   security.py              HMAC verification (signature, window, nonce)
   models.py                request/response schemas
   check.py                 `deployd check` configuration validator
-  notify.py                outbound webhook notifications
   api/routes.py            POST /deploys, GET /deploys/{id}, GET /healthz
   api/admin.py             /admin: registry, secrets, history, cancel, freeze, status, audit
   worker/queue.py          per-app serialized asyncio queue with supervision and drain

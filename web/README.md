@@ -5,17 +5,17 @@ deployment history, redeploys, rollbacks, cancellation, freezing, and step
 status on demand.
 
 Applications use a searchable, ten-per-page list with one detail card. The
-card shows the live app status (current release, frozen state, queue, last
+card shows the last fetched app status (current release, frozen state, queue, last
 deploy and health), and accessible tabs for website connection, retained
 versions, and GitHub Actions setup. Deploy history filters by app and status,
 searches by commit prefix, and pages with Load more. An Audit log tab reads
 `/admin/audit`.
 
-While any deploy is queued or running the console polls `/admin/deploys` and
-the expanded deploy detail every two seconds and toasts terminal results; when
-idle it polls every 15 seconds so CI-started deploys still appear, and it
-pauses while the tab is hidden. Refresh is always available (button or `r`). Other
-shortcuts: `/` focuses the application search, Esc clears it.
+The console does not poll in the background. Use Refresh (button or `r`) to
+fetch status and see completion results, including deploys started by CI.
+Version activation and cleanup live in Manage versions; cleanup is queued and
+its result appears in activity after refreshing. Other shortcuts: `/` focuses
+the application search, Esc clears it.
 
 Styling is Tailwind v4; `src/index.css` holds the design tokens and the
 `data-theme` dark variant. Dialogs use the native `<dialog>` element.

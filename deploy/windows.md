@@ -1,46 +1,32 @@
 # deployd on Windows Server (IIS / .NET apps)
 
-> Status: the Windows installer (`deploy/install-windows.ps1`) is untested on a
-> real Windows host. CI runs the Python test suite on `windows-latest` as an
-> advisory job only. Review the script before using it on a server.
+> Reference only: automated Windows installation and Windows CI are deferred.
+> The supported installer targets Ubuntu. This manual integration has not been
+> validated on a real Windows server.
 
 The API, HMAC contract, worker pipeline, and `deployd-migrate` are identical to
 Linux. Only the touch-points differ.
 
-## Install
+## Manual service setup
 
-Prerequisites: Python 3.11.4+ (or `uv`), [NSSM](https://nssm.cc) on `PATH`, and an
-elevated PowerShell session.
+After provisioning Python, the virtual environment, configuration and a dedicated
+service account, register the executable with [NSSM](https://nssm.cc):
 
 ```powershell
-git clone https://github.com/dn2182/deployd.git C:\src\deployd
-powershell -ExecutionPolicy Bypass -File C:\src\deployd\deploy\install-windows.ps1
+nssm install deployd "C:\deployd\.venv\Scripts\deployd.exe"
+nssm set deployd AppDirectory C:\deployd
 ```
 
-The script creates `C:\deployd` with:
-
-| Path | Purpose |
-| --- | --- |
-| `.venv\` | Python environment with `deployd.exe` and `deployd-migrate.exe` |
-| `.env` | settings and the generated `DEPLOYD_ADMIN_TOKEN` |
-| `config\apps.yaml` | app registry |
-| `config\secrets.env` | per-app signing secrets |
-| `state\deployd.sqlite3` | runtime state |
-| `logs\deployd.log` | service output (rotated at 10 MB) |
-
-It registers the `deployd` NSSM service under the virtual account
-`NT SERVICE\deployd`, restricts `.env`, `config\` and `state\` ACLs to SYSTEM,
-Administrators and that account, and adds a firewall rule for the bind port only
-when the bind address is not `127.0.0.1` (scoped to `LocalSubnet` by default).
-
-Parameters: `-InstallDir`, `-Source` (checkout or wheel), `-ServiceName`,
-`-ServiceAccount`, `-BindHost`, `-BindPort`, `-FirewallRemoteAddress`.
-Rerunning upgrades the environment and keeps `.env`, `apps.yaml` and
-`secrets.env` untouched.
+Configure the service identity before starting it. Restrict `.env` and secret
+files to Administrators, SYSTEM and that identity. The identity needs read access
+to code and `.env`, and modify access to the state, release and configuration
+directories: the management API replaces registry and secret files atomically.
+Set a random admin token and keep the listener on loopback behind a protected
+reverse proxy. No installer creates these files, permissions or firewall rules.
 
 ## Environment variables
 
-Set in `.env` (created by the installer) or in the service environment.
+Set in a manually provisioned `.env` or in the service environment.
 
 | Variable | Meaning |
 | --- | --- |
