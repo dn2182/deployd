@@ -1,3 +1,4 @@
+import re
 import subprocess
 from pathlib import Path
 
@@ -20,6 +21,24 @@ def run_function(script, body, stdin=""):
 @pytest.mark.parametrize("script", ["install-ubuntu.sh", "uninstall-ubuntu.sh"])
 def test_bash_syntax(script):
     assert subprocess.run(["bash", "-n", str(DEPLOY / script)], check=False).returncode == 0
+
+
+def test_nginx_poll_route_matches_actual_deployment_ids(tmp_path):
+    from deployd.store.db import Store
+
+    store = Store(tmp_path / "test.sqlite3")
+    store.init()
+    deploy_id = store.create_deploy("site", "a" * 40, "https://example.com/a.zip", "b" * 64, "test")
+    output = tmp_path / "nginx.conf"
+    result = run_function(
+        "install-ubuntu.sh",
+        f'render_nginx_config "{output}" /opt/deployd deployd.example.com 127.0.0.1 844',
+    )
+    assert result.returncode == 0, result.stderr
+    pattern = re.search(r'location ~\* "([^"]+)"', output.read_text()).group(1)
+    assert re.fullmatch(pattern, f"/deploys/{deploy_id}")
+    assert not re.fullmatch(pattern, "/admin/apps")
+    assert not re.fullmatch(pattern, "/deploys/invalid")
 
 
 @pytest.mark.parametrize(
@@ -46,6 +65,20 @@ def test_install_does_not_continue_when_service_stop_fails():
     """,
     )
     assert result.returncode != 0 and "unsafe-continuation" not in result.stdout
+
+
+@pytest.mark.parametrize("active,action", [(0, "reload"), (3, "start")])
+def test_installer_starts_nginx_when_inactive_and_reloads_when_running(active, action):
+    result = run_function(
+        "install-ubuntu.sh",
+        f"""
+      systemctl() {{ return {active}; }}
+      sudo() {{ printf '%s\\n' "$*"; }}
+      activate_nginx
+    """,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == f"systemctl {action} nginx"
 
 
 def test_uninstall_aborts_before_removal_when_stop_fails():

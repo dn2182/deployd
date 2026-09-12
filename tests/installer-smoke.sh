@@ -15,6 +15,9 @@ printf 'y\ndeployd.example.com\n127.0.0.1\n844\nsmoke-admin\nsmoke-password\nsmo
   /opt/deployd/deploy/install-ubuntu.sh >"$RUNNER_TEMP/deployd-install.log" 2>&1
 sudo systemctl is-active --quiet deployd
 curl --fail --silent http://127.0.0.1:8300/healthz
+poll=$(curl --silent --show-error --max-time 5 -H 'Host: deployd.example.com' \
+  http://127.0.0.1/deploys/00000000000000000000000000000000)
+[[ $poll == '{"detail":"unknown deploy"}' ]]
 curl --fail --silent -u smoke-admin:smoke-password http://127.0.0.1:844/ >/dev/null
 [[ $(sudo stat -c '%U:%G:%a' /opt/deployd/.env) == root:deployd:640 ]]
 [[ $(sudo stat -c '%U:%G:%a' /var/lib/deployd/secrets.env) == deployd:deployd:600 ]]

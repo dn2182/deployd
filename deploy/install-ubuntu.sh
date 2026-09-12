@@ -248,7 +248,7 @@ server {
         add_header Cache-Control "no-store" always;
     }
 
-    location ~* "^/deploys/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\$" {
+    location ~* "^/deploys/[0-9a-f]{32}\$" {
         limit_except GET { deny all; }
         proxy_pass http://127.0.0.1:8300;
         proxy_set_header Host \$host;
@@ -292,6 +292,14 @@ server {
     }
 }
 EOF
+}
+
+activate_nginx() {
+  if systemctl is-active --quiet nginx; then
+    sudo systemctl reload nginx
+  else
+    sudo systemctl start nginx
+  fi
 }
 
 write_nginx_config() {
@@ -339,7 +347,7 @@ write_nginx_config() {
     sudo nginx -t || true
     die "Nginx rejected the generated configuration; the previous configuration was restored"
   fi
-  if ! sudo systemctl reload nginx; then
+  if ! activate_nginx; then
     if [[ -n $backup ]]; then
       sudo cp -a "$backup" "$NGINX_SITE"
     else
@@ -349,8 +357,9 @@ write_nginx_config() {
       sudo unlink "$NGINX_LINK"
     fi
     sudo systemctl reload nginx || true
-    die "Nginx reload failed; the previous configuration was restored"
+    die "Nginx activation failed; the previous configuration was restored"
   fi
+  sudo systemctl enable nginx
 }
 
 install_service() {
