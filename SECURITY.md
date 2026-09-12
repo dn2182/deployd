@@ -36,6 +36,14 @@ response within a few days.
   sizes.
 - Run the service as a dedicated low-privilege user; grant restart rights per
   app (narrow sudoers rule on Linux, IIS permissions on Windows).
+- The optional website connector grants the deployd account authority over
+  existing static document roots directly under `/var/www`. Enable it only if
+  that scope is appropriate for this server. The helper is root-owned, runs the
+  system Python in isolated mode, accepts no arbitrary paths or commands, and
+  rejects symlinks and mount crossings during traversal. UI confirmation prevents
+  accidental switches; it is not a security boundary against a compromised admin
+  token or service account. Keep `/var/lib/deployd-connect` root-only and retain
+  its recovery data until any interrupted connection has been resolved.
 - Enforce request/body and rate limits at the reverse proxy as an additional
   public-edge control; deployd also limits the signed request body itself.
 
@@ -48,7 +56,8 @@ response within a few days.
 - Archive extraction rejects path traversal (zip checked per entry; tar via
   the `data` filter), links/special files, and configured size/file-count
   limits.
-- Deploys are pinned to a commit SHA, never a branch name.
+- Artifact deploys are pinned to a commit SHA, never a branch name. Imported
+  `b4deployd` files are a local recovery snapshot, not a Git-verified artifact.
 
 ## Threat-model boundary
 

@@ -408,7 +408,7 @@ stop_for_upgrade() {
 
 install_website_helper() {
   local repo_root=$1 answer path rule
-  if [[ ! -f /etc/sudoers.d/deployd-connect ]]; then
+  if ! sudo test -f /etc/sudoers.d/deployd-connect; then
     printf '%s\n' \
       'Optional: allow the management UI to connect existing static websites.' \
       'This grants deployd a restricted root helper for direct children of /var/www.' \
