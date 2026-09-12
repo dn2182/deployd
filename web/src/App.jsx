@@ -27,6 +27,7 @@ import ReleasePanel from './components/ReleasePanel.jsx'
 import AppEditor from './components/AppEditor.jsx'
 import SetupSummary from './components/SetupSummary.jsx'
 import AppPaths from './components/AppPaths.jsx'
+import GitHubSetup from './components/GitHubSetup.jsx'
 
 const STEP_ICON = {
   succeeded: <Check size={13} />,
@@ -92,6 +93,7 @@ function ErrorMessage({ children, compact = false }) {
 function AppCard({ name, spec, call, onChanged, t }) {
   const [editing, setEditing] = useState(false)
   const [showReleases, setShowReleases] = useState(false)
+  const [showGitHub, setShowGitHub] = useState(false)
   const [freshSecret, setFreshSecret] = useState(null)
   const [copied, setCopied] = useState(false)
   const [error, setError] = useState(null)
@@ -197,6 +199,10 @@ function AppCard({ name, spec, call, onChanged, t }) {
         {t('releases.manage')}
       </Button>
       {showReleases && <ReleasePanel name={name} spec={spec} call={call} onChanged={onChanged} t={t} />}
+      <Button onClick={() => setShowGitHub(!showGitHub)} aria-expanded={showGitHub}>
+        {t('github.title')}
+      </Button>
+      {showGitHub && <GitHubSetup name={name} spec={spec} call={call} onChanged={onChanged} t={t} />}
 
       {freshSecret && (
         <div className="secret-reveal">
@@ -237,7 +243,7 @@ function AppCard({ name, spec, call, onChanged, t }) {
 function NewAppCard({ call, onChanged, t }) {
   const [open, setOpen] = useState(false)
   const [setup, setSetup] = useState(null)
-  if (setup) return <SetupSummary {...setup} t={t} onDismiss={() => setSetup(null)} />
+  if (setup) return <SetupSummary {...setup} call={call} onChanged={onChanged} t={t} onDismiss={() => setSetup(null)} />
   if (!open) return (
     <button className="add-app-card" type="button" onClick={() => setOpen(true)}>
       <span><Plus size={19} /></span>

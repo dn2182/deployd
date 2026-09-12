@@ -1,4 +1,7 @@
+import base64
+import io
 import time
+import zipfile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -45,6 +48,52 @@ def test_admin_requires_token(env):
     with TestClient(create_app()) as client:
         assert client.get("/admin/apps").status_code == 401
         assert client.get("/admin/apps", headers={"X-Admin-Token": "wrong"}).status_code == 401
+
+
+def test_github_setup_requires_admin_and_configured_repository(env):
+    with TestClient(create_app()) as client:
+        endpoint = "/admin/apps/app-x/github-actions"
+        assert client.post(endpoint, json={}).status_code == 401
+        assert client.post(endpoint, json={}, headers=ADMIN).status_code == 422
+        assert (
+            client.post("/admin/apps/missing/github-actions", json={}, headers=ADMIN).status_code
+            == 404
+        )
+
+
+def test_github_setup_saves_only_build_metadata_and_downloads_no_secrets(env):
+    with TestClient(create_app()) as client:
+        spec = client.get("/admin/apps", headers=ADMIN).json()["app-x"]
+        spec.update(github_repository="acme/site", deploy_url="https://deployd.example.com")
+        spec["artifact"]["allowed_url_prefix"] = (
+            "https://api.github.com/repos/acme/site/releases/assets/"
+        )
+        assert client.put("/admin/apps/app-x", headers=ADMIN, json=spec).status_code == 200
+        config.set_app_secret("app-x", "signing-secret-" + "s" * 32)
+        endpoint = "/admin/apps/app-x/github-actions"
+        response = client.post(endpoint, json={"project_dir": "frontend"}, headers=ADMIN)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["filename"] == "app-x-github-actions.zip"
+        archive = zipfile.ZipFile(io.BytesIO(base64.b64decode(data["content_base64"])))
+        for path in archive.namelist():
+            assert ADMIN_TOKEN.encode() not in archive.read(path)
+            assert b"signing-secret-" not in archive.read(path)
+        saved = client.get("/admin/apps", headers=ADMIN).json()["app-x"]
+        assert saved["github_actions"]["project_dir"] == "frontend"
+        assert saved["github_actions"]["automatic"] is False
+        for key in ("restart", "health", "artifact", "current_link", "releases_dir"):
+            assert saved[key] == spec[key]
+        assert config.get_app_secret("app-x") == "signing-secret-" + "s" * 32
+        assert client.get("/admin/deploys", headers=ADMIN).json() == []
+        assert (
+            client.post(endpoint, json={"output_dir": "../../etc"}, headers=ADMIN).status_code
+            == 422
+        )
+        assert (
+            client.get("/admin/apps", headers=ADMIN).json()["app-x"]["github_actions"]
+            == saved["github_actions"]
+        )
 
 
 def test_real_directory_app_can_be_configured_and_activated_through_api(env, monkeypatch):

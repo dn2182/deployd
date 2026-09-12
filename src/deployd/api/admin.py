@@ -27,6 +27,7 @@ from ..config import (
     set_app_secret,
     upsert_app,
 )
+from ..github_actions import GitHubActionsSettings, setup_bundle
 from ..worker import runner
 
 
@@ -212,6 +213,40 @@ def _validate_app_update(request: Request, name: str, spec: AppSpec):
 @router.get("/setup")
 async def setup_defaults():
     return {"github_server_token_configured": bool(get_settings().github_token)}
+
+
+@router.post("/apps/{name}/github-actions")
+async def github_actions_setup(request: Request, name: AppName, settings: GitHubActionsSettings):
+    with config_lock():
+        spec = _release_app(request, name)
+        if not spec.github_repository or not spec.deploy_url:
+            raise HTTPException(
+                status_code=422, detail="set the GitHub repository and public deployd URL first"
+            )
+        if not spec.deploy_url.startswith("https://"):
+            raise HTTPException(
+                status_code=422, detail="GitHub Actions requires a public HTTPS deployd URL"
+            )
+        expected_prefix = f"https://api.github.com/repos/{spec.github_repository}/releases/assets/"
+        if spec.artifact.allowed_url_prefix != expected_prefix:
+            raise HTTPException(
+                status_code=422,
+                detail="update the app's GitHub artifact source before generating its workflow",
+            )
+        static_site = spec.restart.command == [
+            "/usr/bin/test",
+            "-s",
+            f"{spec.current_link}/index.html",
+        ]
+        bundle = setup_bundle(name, spec.github_repository, settings, static_site=static_site)
+        updated = spec.model_copy(update={"github_actions": settings})
+        try:
+            upsert_app(name, updated)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(
+                status_code=409, detail="could not save GitHub Actions settings"
+            ) from exc
+    return {**bundle, "settings": settings.model_dump()}
 
 
 @router.post("/apps/{name}/setup")

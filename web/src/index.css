@@ -1477,6 +1477,23 @@ footer {
   color: var(--muted);
 }
 
+.github-setup {
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 1rem;
+  padding-top: 1rem;
+  min-width: 0;
+}
+
+.github-instructions {
+  list-style: decimal;
+  padding-left: 1.3rem;
+  font-size: 0.85rem;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.github-instructions li + li { margin-top: 0.5rem; }
+
 .app-editor fieldset,
 .setup-credentials {
   display: grid;

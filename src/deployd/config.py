@@ -13,6 +13,8 @@ import yaml
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .github_actions import GitHubActionsSettings
+
 APP_NAME_PATTERN = r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$"
 _APP_NAME_RE = re.compile(APP_NAME_PATTERN)
 _CONFIG_LOCK = threading.RLock()
@@ -145,6 +147,7 @@ class HealthSpec(BaseModel):
 
 
 class AppSpec(BaseModel):
+    github_actions: GitHubActionsSettings | None = None
     github_repository: str | None = None
     deploy_url: str | None = None
     site_path: Path | None = None

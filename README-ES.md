@@ -197,17 +197,34 @@ La API nunca devuelve los tokens de GitHub. Las variables de entorno por app
 desde la UI. En estas claves, los guiones del nombre se sustituyen por guiones
 bajos y el nombre se convierte a mayúsculas.
 
-Al guardar se muestran el enlace a los ajustes de GitHub y las instrucciones de
-CI. Guardar configura deployd; **no** agrega secretos ni workflows a GitHub,
+La pantalla de confirmación y cada tarjeta ofrecen **Configuración de GitHub Actions**.
+Elige pnpm/npm, HTML simple (sin compilación) o un comando personalizado; indica
+la carpeta del repositorio, el comando, la carpeta de salida y la rama de despliegue.
+Los presets de Node instalan dependencias desde el lockfile; los comandos
+personalizados deben instalar sus propias herramientas.
+**Guardar ajustes y descargar ZIP** guarda estos datos y genera
+`.github/workflows/deploy.yml`, `scripts/notify_deploy.py` e instrucciones.
+El ZIP no contiene valores secretos. Copia los archivos a la raíz del repositorio
+y revisa los workflows existentes para evitar ejecuciones duplicadas.
+
+Por defecto, el workflow es manual. Súbelo a la rama predeterminada y usa
+**Actions → Deploy APP → Run workflow**, seleccionando la rama de despliegue.
+Después de una prueba exitosa puedes habilitar despliegues al hacer push,
+descargar otra vez y subir el workflow actualizado. Guardar aquí no modifica GitHub.
+Solo se empaqueta la carpeta seleccionada, con permisos de lectura para Nginx.
+Se excluyen metadatos de Git y se rechazan archivos ocultos, enlaces, dependencias
+y archivos comunes de claves privadas. Revisa si hay otro contenido privado.
+
+Guardar configura deployd; **no** agrega secretos ni workflows a GitHub,
 prueba el token, modifica Nginx ni despliega la aplicación. Copia el secreto de
 firma a `DEPLOYD_SECRET`, define la variable `DEPLOYD_URL` en Actions y agrega el
-workflow indicado abajo. Configura la raíz de Nginx o el enlace fijo por
+workflow generado. Configura la raíz de Nginx o el enlace fijo por
 separado. La comprobación HTTP confirma disponibilidad, no la versión activa;
 verifica el primer despliegue antes de cambiar la ruta de un sitio existente.
 
 ## Integración con CI
 
-Copia [`examples/github-actions-deploy.yml`](examples/github-actions-deploy.yml)
+Usa el ZIP generado o adapta [`examples/github-actions-deploy.yml`](examples/github-actions-deploy.yml)
 al repo de tu aplicación e incorpora
 [`examples/notify_deploy.py`](examples/notify_deploy.py) como
 `scripts/notify_deploy.py`. El repo necesita un secreto (`DEPLOYD_SECRET`) y

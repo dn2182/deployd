@@ -185,17 +185,33 @@ GitHub tokens are never returned by the API. Per-app environment values
 `DEPLOYD_GITHUB_TOKEN_<APP_NAME_UPPER_SNAKE>`) take precedence and cannot be changed
 from the UI. App names use hyphens, replaced with underscores in these keys.
 
-The completion screen provides the GitHub settings link and CI instructions.
+The completion screen and each app card provide **GitHub Actions setup**.
+Choose pnpm/npm, plain HTML (no build), or a custom build; specify the repository
+folder, build command, output folder, and deployment branch. Node presets install
+locked dependencies before building. Custom commands must install their own tools.
+**Save settings and download ZIP** remembers these settings and generates
+`.github/workflows/deploy.yml`, `scripts/notify_deploy.py`, and setup instructions.
+No secret values are included. Copy the files to the repository root, reviewing
+any existing deployment workflow to avoid duplicate runs.
+
+Generated workflows are manual by default. Commit them to the repository's default
+branch, then select **Actions → Deploy APP → Run workflow** and the deployment
+branch. After a successful test, you can enable deployment on pushes, download
+again, and commit the updated workflow. Saving here does not update GitHub.
+Only the selected output folder is packaged, with readable modes for Nginx.
+Git metadata is excluded; hidden files, symlinks, dependencies, and common private
+keys are rejected. Review the output for other private content before deploying.
+
 Saving configures deployd; it does **not** add GitHub secrets/workflows, test the
 GitHub credential, alter Nginx, or deploy the app. Copy the signing secret into
 the repository's `DEPLOYD_SECRET`, set the `DEPLOYD_URL` Actions variable, and add
-the workflow below. Configure Nginx's document root or fixed web-root symlink
+the generated workflow. Configure Nginx's document root or fixed web-root symlink
 separately. An HTTP health check confirms availability, not the live version;
 check the first release before switching an existing site to its new path.
 
 ## CI integration
 
-Copy [`examples/github-actions-deploy.yml`](examples/github-actions-deploy.yml)
+Use the generated ZIP above, or adapt [`examples/github-actions-deploy.yml`](examples/github-actions-deploy.yml)
 into your app repo and vendor
 [`examples/notify_deploy.py`](examples/notify_deploy.py) as
 `scripts/notify_deploy.py`. The repo needs one secret (`DEPLOYD_SECRET`) and
