@@ -301,11 +301,15 @@ installations upgrading without rerunning the installer need this once:
 sudo install -d -o deployd -g deployd -m 0755 /srv/deployd
 ```
 
-Custom roots must also be writable by the service. Web-server access to release
-contents is separate: for static sites, use a tar artifact containing `.` with
-directories mode `0755` and files `0644`, and verify Nginx-user readability.
-ZIP extraction under the service's restrictive umask does not grant that access.
-Never package secrets in a publicly served release.
+Custom roots must also be writable by the service. On POSIX systems, newly
+extracted release directories (including the release root) are set to `0755`
+before publication. The service's `UMask=0077`, private staging parent, and file
+permissions are not relaxed. For static sites, use a tar artifact with files
+mode `0644` and verify Nginx-user readability; ZIP file extraction still follows
+the service umask. Never package secrets in a publicly served release.
+This applies to new extractions, not existing or retained releases. Previously
+deployed directories with restrictive permissions need a scoped repair before
+activation; restarting deployd does not rewrite their permissions.
 
 This mode requires same-filesystem atomic directory exchange (Linux
 [renameat2(RENAME_EXCHANGE)](https://man7.org/linux/man-pages/man2/rename.2.html),

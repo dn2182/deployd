@@ -226,6 +226,14 @@ def _extract(archive: Path, dest: Path, spec: AppSpec) -> None:
     else:
         raise RuntimeError("unsupported artifact format (zip or tar expected)")
 
+    if os.name == "posix":
+        # Tar's data filter ignores directory modes; keep the service umask private
+        # while making release directories traversable by the web server.
+        dest.chmod(0o755)
+        for path in dest.rglob("*"):
+            if path.is_dir() and not path.is_symlink():
+                path.chmod(0o755)
+
 
 def _validate_archive_limits(file_count: int, total_bytes: int, spec: AppSpec) -> None:
     if file_count > spec.artifact.max_extract_files:

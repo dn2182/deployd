@@ -315,11 +315,15 @@ instalaciones existentes actualizadas sin ejecutar el instalador, corre una vez:
 sudo install -d -o deployd -g deployd -m 0755 /srv/deployd
 ```
 
-Las rutas personalizadas también deben permitir escritura al servicio. Los
-permisos de lectura para Nginx son independientes: para sitios estáticos usa un
-tar que incluya `.` con directorios `0755` y archivos `0644`, y verifica la
-lectura como usuario de Nginx. Un ZIP extraído con la umask restrictiva del
-servicio no concede esos permisos. No incluyas secretos en archivos públicos.
+Las rutas personalizadas también deben permitir escritura al servicio. En POSIX,
+los directorios de nuevas extracciones, incluida la raíz de la versión, reciben
+permisos `0755` antes de publicarse. Se conservan `UMask=0077`, el directorio padre
+privado de preparación y los permisos de archivos. Para sitios estáticos usa tar
+con archivos `0644` y verifica su lectura como usuario de Nginx; los archivos ZIP
+siguen la umask del servicio. No incluyas secretos en archivos públicos.
+Esto no modifica versiones existentes ni retenidas. Sus directorios con permisos
+restrictivos requieren una corrección limitada a esa versión antes de activarla;
+reiniciar deployd no cambia esos permisos.
 
 Se requiere intercambio atómico en el mismo sistema de archivos: Linux
 `renameat2(RENAME_EXCHANGE)` o macOS `renamex_np(RENAME_SWAP)`. No hay alternativa

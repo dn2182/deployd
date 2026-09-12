@@ -1,8 +1,11 @@
 import asyncio
 import hashlib
 import io
+import os
 import shutil
+import subprocess
 import sys
+import tarfile
 import zipfile
 from pathlib import Path
 
@@ -279,6 +282,91 @@ def test_archive_extraction_limits_are_enforced(tmp_path, spec):
     spec.artifact.max_extract_bytes = 32
     with pytest.raises(RuntimeError, match="extracted-size"):
         runner._extract(archive, tmp_path / "out", spec)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory permissions")
+@pytest.mark.parametrize("archive_format", ["tar", "zip"])
+@pytest.mark.parametrize("explicit_directories", [False, True])
+@pytest.mark.parametrize("layout", ["directory", "symlink"])
+def test_release_directories_remain_readable_under_private_umask(
+    tmp_path, spec, archive_format, explicit_directories, layout
+):
+    archive = tmp_path / f"site.{archive_format}"
+    files = {
+        "index.html": (b"site", 0o644),
+        "assets/nested/app.js": (b"app", 0o644),
+        "private.conf": (b"private", 0o600),
+        "bin/start": (b"executable", 0o755),
+    }
+    directories = [".", "assets", "assets/nested", "bin"] if explicit_directories else []
+    if archive_format == "tar":
+        with tarfile.open(archive, "w") as output:
+            for name in directories:
+                entry = tarfile.TarInfo(name)
+                entry.type = tarfile.DIRTYPE
+                entry.mode = 0o755
+                output.addfile(entry)
+            for name, (content, mode) in files.items():
+                entry = tarfile.TarInfo(name)
+                entry.size = len(content)
+                entry.mode = mode
+                output.addfile(entry, io.BytesIO(content))
+    else:
+        with zipfile.ZipFile(archive, "w") as output:
+            for name in directories:
+                output.writestr(name + "/", b"")
+            for name, (content, _) in files.items():
+                output.writestr(name, content)
+    spec.release_layout = layout
+    if layout == "directory":
+        spec.current_link = spec.releases_dir / "current"
+    # Isolate the process-wide umask from the test runner and its async tasks.
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import asyncio
+import os
+import stat
+import sys
+from pathlib import Path
+from deployd.config import AppSpec
+from deployd.worker import runner, directory_layout
+
+archive = Path(sys.argv[1])
+spec = AppSpec.model_validate_json(sys.argv[2])
+os.umask(0o077)
+outside_secret = archive.parent / 'secrets.env'
+outside_secret.write_text('private')
+spec.releases_dir.mkdir()
+spec.releases_dir.chmod(0o755)
+for char in 'ab':
+    deploy = {'commit_sha': char * 40, 'deploy_id': char * 32}
+    ctx = {'artifact_path': archive}
+    asyncio.run(runner._step_unpack(spec, deploy, ctx))
+    asyncio.run(runner._step_cutover(spec, deploy, ctx))
+    current = spec.current_link.resolve()
+    for path in (current, current / 'assets', current / 'assets/nested', current / 'bin'):
+        assert stat.S_IMODE(path.stat().st_mode) == 0o755, str(path)
+    assert stat.S_IMODE((current / 'private.conf').stat().st_mode) == 0o600
+    if archive.suffix == '.tar':
+        assert stat.S_IMODE((current / 'index.html').stat().st_mode) == 0o644
+        assert stat.S_IMODE((current / 'bin/start').stat().st_mode) == 0o755
+    if spec.release_layout == 'directory':
+        assert stat.S_IMODE((current / directory_layout.MANIFEST).stat().st_mode) == 0o600
+assert stat.S_IMODE((spec.releases_dir / '.incoming').stat().st_mode) == 0o700
+assert stat.S_IMODE(outside_secret.stat().st_mode) == 0o600
+assert os.umask(0o077) == 0o077
+""",
+            str(archive),
+            spec.model_dump_json(),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 async def test_download_limit_removes_partial_artifact(spec, monkeypatch):

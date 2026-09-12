@@ -4,6 +4,10 @@
 
 Initial release.
 
+- Normalize newly extracted POSIX release directories to `0755` before cutover,
+  including implicit archive directories, without relaxing file permissions,
+  private staging, release metadata, or the service umask.
+
 - Deploy API: HMAC-authenticated `POST /deploys` (timestamp + signed nonce +
   body, atomic replay protection), `GET /deploys/{id}` status with per-step log.
 - Worker: per-app serialized pipeline — download, SHA256 verify, unpack
