@@ -6,6 +6,8 @@ Initial release.
 
 ### Hardening pass (September 2026)
 
+- The last-deploy summary excludes cleanup and other local operations. History
+  pagination ignores stale responses after filter, session or refresh changes.
 - Release cleanup shares the per-app deployment queue and drains safely on
   shutdown. History is retained so old saved versions remain activatable.
 - `deployd check` only inspects configuration, paths and release metadata; it

@@ -275,7 +275,7 @@ async def app_status(request: Request, name: AppName):
         "busy": store.has_active_deploys(name),
         "queued": store.count_queued(name),
         "current_release": current_name,
-        "last_deploy": store.last_deploy(name),
+        "last_deploy": store.last_deploy(name, kind="artifact"),
         "last_health": store.last_step(name, "health"),
     }
 

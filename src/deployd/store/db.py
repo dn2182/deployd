@@ -64,7 +64,6 @@ CREATE INDEX IF NOT EXISTS ix_audit_at ON audit_log(at DESC);
 SCHEMA_VERSION = _MIGRATIONS[-1][0]
 
 MAX_STEP_OUTPUT_CHARS = 200_000
-TERMINAL_STATUSES = ("succeeded", "failed", "rolled_back", "superseded", "cancelled")
 KIND_PREFIXES = {"activate:": "activate", "connect:": "connect", "remove:": "remove"}
 
 

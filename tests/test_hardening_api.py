@@ -194,6 +194,33 @@ def test_status_endpoint_summarizes_app(env):
         assert client.get("/admin/apps/nope/status", headers=ADMIN).status_code == 404
 
 
+@pytest.mark.parametrize("kind", ["cleanup", "connect", "remove", "activate"])
+@pytest.mark.parametrize("deployment_status", [None, "failed", "succeeded"])
+def test_status_keeps_local_operations_separate_from_last_deployment(env, kind, deployment_status):
+    with TestClient(create_app()) as client:
+        store = client.app.state.store
+        deployment = None
+        if deployment_status:
+            deployment = store.create_deploy(
+                "app-x", "a" * 40, "https://example.com/a.zip", "b" * 64, "ci"
+            )
+            store.set_status(deployment, deployment_status, finished=True)
+        operation = store.create_deploy(
+            "app-x", "0" * 40, "local-operation://test", "0" * 64, "test", kind=kind
+        )
+        for operation_status in ("queued", "running", "succeeded"):
+            store.set_status(operation, operation_status, finished=operation_status == "succeeded")
+            status = client.get("/admin/apps/app-x/status", headers=ADMIN).json()
+            assert status["busy"] == (operation_status != "succeeded")
+            if deployment is None:
+                assert status["last_deploy"] is None
+            else:
+                assert status["last_deploy"]["deploy_id"] == deployment
+                assert status["last_deploy"]["status"] == deployment_status
+        history = client.get("/admin/deploys?app=app-x", headers=ADMIN).json()
+        assert history[0]["deploy_id"] == operation and history[0]["kind"] == kind
+
+
 def test_history_filters_and_pagination(env):
     with TestClient(create_app()) as client:
         store = client.app.state.store

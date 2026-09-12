@@ -207,7 +207,9 @@ por página y solo los detalles de la seleccionada. **Conexión del sitio**,
 **Administrar versiones** y **Configuración de GitHub Actions** son pestañas: solo
 una está activa. Las rutas están en **Carpetas de la aplicación**. Cada tarjeta
 tiene un panel de estado con el release actual, la cantidad en cola, el último
-deploy y el último health check, más **Congelar** / **Descongelar**. La zona de
+deploy y el último health check, más **Congelar** / **Descongelar**. El último
+deploy corresponde a un despliegue de artefacto; la limpieza y otras operaciones
+locales quedan en actividad sin reemplazar ese resultado. La zona de
 actividad se actualiza con **Actualizar** (o la tecla `r`), sin consultas
 periódicas en segundo plano. Al actualizar, muestra avisos de resultados recién
 detectados. **Deploys recientes** filtra por app y estado, busca por prefijo de

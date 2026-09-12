@@ -1,5 +1,4 @@
 VENV := .venv
-PY   := $(VENV)/bin/python
 UV   ?= uv
 export UV_PYTHON_INSTALL_DIR := $(CURDIR)/.python
 ifneq ($(wildcard $(CURDIR)/.node/bin/node),)
