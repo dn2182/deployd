@@ -7,7 +7,6 @@ import {
   ChevronRight,
   CircleAlert,
   CloudCog,
-  Code2,
   Copy,
   KeyRound,
   LoaderCircle,
@@ -25,24 +24,14 @@ import {
 import { Button, ConfirmDialog, TooltipButton } from './components/ui.jsx'
 import { detectLanguage, translate } from './i18n.js'
 import ReleasePanel from './components/ReleasePanel.jsx'
+import AppEditor from './components/AppEditor.jsx'
+import SetupSummary from './components/SetupSummary.jsx'
 
 const STEP_ICON = {
   succeeded: <Check size={13} />,
   failed: <X size={13} />,
   running: <LoaderCircle className="spin" size={13} />,
   skipped: <span>–</span>,
-}
-
-const APP_TEMPLATE = {
-  release_layout: 'directory',
-  releases_dir: '/srv/deployd/myapp/releases',
-  current_link: '/srv/deployd/myapp/releases/current',
-  keep_previous: 1,
-  auto_cleanup: true,
-  artifact: { allowed_url_prefix: 'https://github.com/your-org/' },
-  migrate: { command: null },
-  restart: { command: ['sudo', 'systemctl', 'restart', 'myapp'] },
-  health: { url: 'http://127.0.0.1:8000/healthz', retries: 10, interval_seconds: 3 },
 }
 
 const api = async (token, path, opts = {}) => {
@@ -62,7 +51,12 @@ const api = async (token, path, opts = {}) => {
     const message = body.trim().slice(0, 200)
     throw new Error(message || `HTTP ${resp.status}: invalid server response`)
   }
-  if (!resp.ok) throw new Error(payload?.detail ?? `HTTP ${resp.status}`)
+  if (!resp.ok) {
+    const detail = payload?.detail
+    throw new Error(Array.isArray(detail)
+      ? detail.map((item) => `${item.loc?.filter((part) => part !== 'body').join('.')}: ${item.msg}`).join('; ')
+      : detail ?? `HTTP ${resp.status}`)
+  }
   return payload
 }
 
@@ -97,26 +91,13 @@ function ErrorMessage({ children, compact = false }) {
 function AppCard({ name, spec, call, onChanged, t }) {
   const [editing, setEditing] = useState(false)
   const [showReleases, setShowReleases] = useState(false)
-  const [draft, setDraft] = useState('')
   const [freshSecret, setFreshSecret] = useState(null)
   const [copied, setCopied] = useState(false)
   const [error, setError] = useState(null)
 
   const startEdit = () => {
-    const { secret: _secret, ...rest } = spec
-    setDraft(JSON.stringify(rest, null, 2))
     setEditing(true)
     setError(null)
-  }
-
-  const save = async () => {
-    try {
-      await call(`/admin/apps/${name}`, { method: 'PUT', body: draft })
-      setEditing(false)
-      onChanged()
-    } catch (requestError) {
-      setError(requestError.message)
-    }
   }
 
   const rotate = async () => {
@@ -242,21 +223,12 @@ function AppCard({ name, spec, call, onChanged, t }) {
 
       {editing && (
         <div className="editor-panel">
-          <div className="editor-title">
-            <Code2 size={15} />
-            {t('app.configuration')}
-          </div>
-          <textarea
-            className="code-editor"
-            aria-label={t('app.configuration_label', { name })}
-            value={draft}
-            spellCheck="false"
-            onChange={(event) => setDraft(event.target.value)}
-          />
-          <div className="form-actions">
-            <Button variant="primary" onClick={save}>{t('app.save_changes')}</Button>
-            <Button onClick={() => setEditing(false)}>{t('common.cancel')}</Button>
-          </div>
+          <AppEditor name={name} initialSpec={spec} call={call} t={t}
+            onCancel={() => setEditing(false)} onSaved={(result) => {
+              setEditing(false)
+              if (result.secret) setFreshSecret(result)
+              onChanged()
+            }} />
         </div>
       )}
       {error && <ErrorMessage compact>{error}</ErrorMessage>}
@@ -266,110 +238,24 @@ function AppCard({ name, spec, call, onChanged, t }) {
 
 function NewAppCard({ call, onChanged, t }) {
   const [open, setOpen] = useState(false)
-  const [name, setName] = useState('')
-  const [draft, setDraft] = useState(JSON.stringify(APP_TEMPLATE, null, 2))
-  const [error, setError] = useState(null)
-  let configuration = null
-  try { configuration = JSON.parse(draft) } catch { /* Keep invalid JSON editable. */ }
-
-  const changeName = (value) => {
-    setName(value)
-    const oldBase = `/srv/deployd/${name || 'myapp'}`
-    if (configuration?.releases_dir === `${oldBase}/releases`) {
-      const next = { ...configuration, releases_dir: `/srv/deployd/${value || 'myapp'}/releases` }
-      if (configuration.current_link === `${oldBase}/releases/current`) next.current_link = `${next.releases_dir}/current`
-      else if (configuration.current_link === `${oldBase}/current`) next.current_link = `/srv/deployd/${value || 'myapp'}/current`
-      setDraft(JSON.stringify(next, null, 2))
-    }
-  }
-
-  const changeLayout = (value) => {
-    if (!configuration) return
-    const root = configuration.releases_dir.replace(/\/+$/, '')
-    setDraft(JSON.stringify({ ...configuration, release_layout: value,
-      current_link: value === 'directory' ? `${root}/current` : `${root.slice(0, root.lastIndexOf('/'))}/current`,
-    }, null, 2))
-  }
-
-  const close = () => {
-    setOpen(false)
-    setError(null)
-  }
-
-  const save = async () => {
-    if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(name)) {
-      setError(t('new.validation'))
-      return
-    }
-    try {
-      await call(`/admin/apps/${name}`, { method: 'PUT', body: draft })
-      setOpen(false)
-      setName('')
-      setDraft(JSON.stringify(APP_TEMPLATE, null, 2))
-      setError(null)
-      onChanged()
-    } catch (requestError) {
-      setError(requestError.message)
-    }
-  }
-
-  if (!open) {
-    return (
-      <button className="add-app-card" type="button" onClick={() => setOpen(true)}>
-        <span><Plus size={19} /></span>
-        <strong>{t('new.add')}</strong>
-        <small>{t('new.add_description')}</small>
-      </button>
-    )
-  }
-
-  return (
-    <article className="glass-panel app-card new-app-card">
-      <div className="app-card-header">
-        <div className="app-identity">
-          <div className="app-icon app-icon-new" aria-hidden="true"><Plus size={19} /></div>
-          <div>
-            <h3>{t('new.title')}</h3>
-            <span>{t('new.description')}</span>
-          </div>
-        </div>
-      </div>
-      <label className="field-label">
-        {t('new.name')}
-        <input
-          className="text-input"
-          placeholder={t('new.placeholder')}
-          value={name}
-          autoComplete="off"
-          onChange={(event) => changeName(event.target.value)}
-        />
-      </label>
-      <label className="field-label">
-        {t('releases.layout')}
-        <select className="text-input" value={configuration?.release_layout || 'symlink'}
-          disabled={!configuration} onChange={(event) => changeLayout(event.target.value)}>
-          <option value="directory">{t('releases.directory_layout')}</option>
-          <option value="symlink">{t('releases.symlink_layout')}</option>
-        </select>
-      </label>
-      <p className="release-help">{t('releases.layout_help')}</p>
-      <label className="field-label">
-        {t('app.configuration')}
-        <textarea
-          className="code-editor"
-          aria-label={t('new.configuration_label')}
-          value={draft}
-          spellCheck="false"
-          onChange={(event) => setDraft(event.target.value)}
-        />
-      </label>
-      <div className="form-actions">
-        <Button variant="primary" onClick={save}>{t('new.create')}</Button>
-        <Button onClick={close}>{t('common.cancel')}</Button>
-      </div>
-      {error && <ErrorMessage compact>{error}</ErrorMessage>}
-    </article>
+  const [setup, setSetup] = useState(null)
+  if (setup) return <SetupSummary {...setup} t={t} onDismiss={() => setSetup(null)} />
+  if (!open) return (
+    <button className="add-app-card" type="button" onClick={() => setOpen(true)}>
+      <span><Plus size={19} /></span>
+      <strong>{t('new.add')}</strong>
+      <small>{t('new.add_description')}</small>
+    </button>
   )
+  return <article className="glass-panel app-card new-app-card">
+    <h3>{t('new.title')}</h3>
+    <AppEditor call={call} t={t} onCancel={() => setOpen(false)}
+      onSaved={(result, spec) => {
+        setSetup({ result, spec })
+        setOpen(false)
+        onChanged()
+      }} />
+  </article>
 }
 
 function DeployRow({ deploy, call, onChanged, t }) {

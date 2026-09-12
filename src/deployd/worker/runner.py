@@ -15,7 +15,7 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
-from ..config import AppSpec, get_app_registry, get_settings
+from ..config import AppSpec, get_app_github_token, get_app_registry
 from ..store.db import Store
 from . import directory_layout
 
@@ -33,7 +33,7 @@ _GITHUB_ASSET_PATH_RE = re.compile(
 )
 
 
-def _github_asset_headers(url: str) -> dict[str, str]:
+def _github_asset_headers(url: str, app_name: str | None = None) -> dict[str, str]:
     parsed = urlsplit(url)
     if (
         parsed.scheme != "https"
@@ -47,9 +47,9 @@ def _github_asset_headers(url: str) -> dict[str, str]:
     ):
         return {}
     headers = {"Accept": "application/octet-stream", "X-GitHub-Api-Version": "2022-11-28"}
-    token = get_settings().github_token
-    if token and token.get_secret_value():
-        headers["Authorization"] = f"Bearer {token.get_secret_value()}"
+    token = get_app_github_token(app_name)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     return headers
 
 
@@ -91,7 +91,7 @@ async def _step_download(spec: AppSpec, deploy: dict, ctx: dict) -> str:
     url = deploy["artifact_url"]
     if not spec.artifact.allows_initial_url(url):
         raise RuntimeError("artifact URL is not allowlisted")
-    headers = _github_asset_headers(url)
+    headers = _github_asset_headers(url, deploy.get("app"))
     incoming = spec.releases_dir / ".incoming"
     incoming.mkdir(parents=True, exist_ok=True)
     dest = incoming / f"{deploy['deploy_id']}.artifact"
@@ -120,7 +120,7 @@ async def _step_download(spec: AppSpec, deploy: dict, ctx: dict) -> str:
                     if "Authorization" in headers and resp.status_code in (401, 403, 404):
                         raise RuntimeError(
                             f"GitHub release download returned HTTP {resp.status_code}; check "
-                            "DEPLOYD_GITHUB_TOKEN expiry and Contents read access to the repository"
+                            "the app GitHub token (or DEPLOYD_GITHUB_TOKEN fallback), expiry and Contents read access to the repository"
                         )
                     resp.raise_for_status()
                     declared = resp.headers.get("content-length")

@@ -248,17 +248,22 @@ async def test_unlisted_redirect_target_is_rejected(spec, monkeypatch):
     "redirect",
     [None, "https://release-assets.githubusercontent.com/file.zip", GITHUB_ASSET_URL + "4"],
 )
-async def test_private_asset_download_drops_auth_on_every_redirect(spec, monkeypatch, redirect):
+@pytest.mark.parametrize("app_name", [None, "site"])
+async def test_private_asset_download_drops_auth_on_every_redirect(
+    spec, monkeypatch, redirect, app_name
+):
     spec.artifact.allowed_url_prefix = "https://api.github.com/repos/acme/site/releases/assets/"
     spec.artifact.allowed_redirect_hosts = ["release-assets.githubusercontent.com"]
     spec.artifact.allow_private_networks = True
     monkeypatch.setenv("DEPLOYD_GITHUB_TOKEN", "github_pat_test_secret")
+    monkeypatch.setenv("DEPLOYD_GITHUB_TOKEN_SITE", "github_pat_app_secret")
+    expected_token = "github_pat_app_secret" if app_name else "github_pat_test_secret"
     requests = []
 
     def serve(request):
         requests.append(request)
         if len(requests) == 1:
-            assert request.headers["authorization"] == "Bearer github_pat_test_secret"
+            assert request.headers["authorization"] == f"Bearer {expected_token}"
             assert request.headers["accept"] == "application/octet-stream"
             if redirect:
                 return httpx.Response(302, headers={"location": redirect})
@@ -274,7 +279,7 @@ async def test_private_asset_download_drops_auth_on_every_redirect(spec, monkeyp
     )
     ctx = {}
     await runner._step_download(
-        spec, {"deploy_id": "f" * 32, "artifact_url": GITHUB_ASSET_URL}, ctx
+        spec, {"app": app_name, "deploy_id": "f" * 32, "artifact_url": GITHUB_ASSET_URL}, ctx
     )
     assert ctx["artifact_path"].read_bytes() == b"artifact"
     assert len(requests) == (2 if redirect else 1)

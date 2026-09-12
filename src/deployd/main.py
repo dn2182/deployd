@@ -2,6 +2,8 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 from .api.admin import router as admin_router
 from .api.routes import router
@@ -48,6 +50,20 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="deployd", docs_url=None, redoc_url=None, lifespan=lifespan)
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request, exc):
+        # Validation errors must not reflect credentials from setup request bodies.
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": [
+                    {"loc": error["loc"], "msg": error["msg"], "type": error["type"]}
+                    for error in exc.errors()
+                ]
+            },
+        )
+
     app.include_router(router)
     app.include_router(admin_router)
     return app

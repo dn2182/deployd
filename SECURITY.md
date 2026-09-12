@@ -20,6 +20,13 @@ response within a few days.
 - The testing installer serves management on a separate Basic Auth port. Its
   default all-interface bind is safe only when the host firewall restricts that
   port; choose `127.0.0.1` when access through an SSH tunnel is sufficient.
+- Use HTTPS or an SSH tunnel when entering credentials in management. A firewall
+  allowlist or HTTP Basic Auth alone does not encrypt the connection.
+- Prefer per-app GitHub tokens limited to **Contents: read** on the specific
+  repository. The UI stores them in `DEPLOYD_SECRETS_FILE` (0600), not app YAML;
+  API responses and validation errors do not include their values. The global
+  `DEPLOYD_GITHUB_TOKEN` remains a fallback if no app token exists. Tokens are sent
+  only to the initial HTTPS GitHub release-asset API URL, never to redirects.
 - One HMAC secret per app; rotate via the admin API. Secrets live in env vars
   or `config/secrets.env` (0600) — never in git. Admin and app secrets must
   contain at least 32 bytes.

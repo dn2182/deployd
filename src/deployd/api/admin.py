@@ -9,17 +9,20 @@ import secrets as pysecrets
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 
 from ..config import (
     APP_NAME_PATTERN,
     AppSpec,
     _secret_key,
     config_lock,
+    configure_app,
     delete_app_config,
     get_app_registry,
     get_app_secret,
     get_settings,
+    github_secret_key,
+    github_token_info,
     set_app_secret,
     upsert_app,
 )
@@ -40,6 +43,42 @@ AppName = Annotated[str, Path(pattern=APP_NAME_PATTERN)]
 
 class ReleaseSelection(BaseModel):
     release: str = Field(pattern=r"^(?:[0-9a-f]{40}-[0-9a-f]{32}|previous)$")
+
+
+class AppCredentials(BaseModel):
+    signing_secret: SecretStr | None = None
+    generate_signing_secret: bool = False
+    github_token: SecretStr | None = None
+    remove_github_token: bool = False
+
+    @field_validator("signing_secret", "github_token")
+    @classmethod
+    def validate_credential(cls, value):
+        if value is not None:
+            secret = value.get_secret_value()
+            if (
+                not 32 <= len(secret.encode()) <= 4096
+                or secret != secret.strip()
+                or any(ord(c) < 32 or ord(c) == 127 for c in secret)
+            ):
+                raise ValueError(
+                    "credential must contain 32-4096 bytes without surrounding whitespace or control characters"
+                )
+        return value
+
+    @model_validator(mode="after")
+    def exclusive_actions(self):
+        if self.signing_secret is not None and self.generate_signing_secret:
+            raise ValueError("choose either a supplied or generated signing secret")
+        if self.github_token is not None and self.remove_github_token:
+            raise ValueError("choose either saving or removing a GitHub token")
+        return self
+
+
+class AppSetup(BaseModel):
+    spec: AppSpec
+    credentials: AppCredentials = Field(default_factory=AppCredentials)
+    create_only: bool = False
 
 
 def _release_app(request: Request, name: str, *, idle: bool = False) -> AppSpec:
@@ -132,36 +171,96 @@ def _secret_info(app_name: str) -> dict:
 @router.get("/apps")
 async def list_apps():
     return {
-        name: {**spec.model_dump(mode="json"), "secret": _secret_info(name)}
+        name: {
+            **spec.model_dump(mode="json"),
+            "secret": _secret_info(name),
+            "github": github_token_info(name),
+        }
         for name, spec in get_app_registry().items()
+    }
+
+
+def _validate_app_update(request: Request, name: str, spec: AppSpec):
+    if request.app.state.store.has_active_deploys(name):
+        raise HTTPException(status_code=409, detail="app has queued or running deployments")
+    existing = get_app_registry().get(name)
+    if (
+        existing
+        and (existing.release_layout, existing.releases_dir, existing.current_link)
+        != (spec.release_layout, spec.releases_dir, spec.current_link)
+        and (
+            os.path.lexists(existing.current_link)
+            or (existing.releases_dir.exists() and any(existing.releases_dir.iterdir()))
+        )
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="layout and paths cannot change while releases exist; use a new application or migrate offline",
+        )
+    if spec.release_layout == "directory":
+        try:
+            runner.directory_layout.prepare(spec)
+            runner.directory_layout.reconcile(spec)
+        except (OSError, ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/setup")
+async def setup_defaults():
+    return {"github_server_token_configured": bool(get_settings().github_token)}
+
+
+@router.post("/apps/{name}/setup")
+async def setup_app(request: Request, name: AppName, setup: AppSetup):
+    with config_lock():
+        if setup.create_only and name in get_app_registry():
+            raise HTTPException(
+                status_code=409, detail="application already exists; edit it instead"
+            )
+        credentials = setup.credentials
+        changes = {}
+        generated = None
+        if credentials.generate_signing_secret or credentials.signing_secret is not None:
+            if _secret_key(name) in os.environ:
+                raise HTTPException(
+                    status_code=409, detail="signing secret is managed by the service environment"
+                )
+            generated = pysecrets.token_hex(32) if credentials.generate_signing_secret else None
+            changes[_secret_key(name)] = generated or credentials.signing_secret.get_secret_value()
+        if credentials.github_token is not None or credentials.remove_github_token:
+            if github_secret_key(name) in os.environ:
+                raise HTTPException(
+                    status_code=409, detail="GitHub token is managed by the service environment"
+                )
+            if credentials.github_token is not None and not setup.spec.github_repository:
+                raise HTTPException(
+                    status_code=422, detail="configure a GitHub repository before storing its token"
+                )
+            changes[github_secret_key(name)] = (
+                credentials.github_token.get_secret_value() if credentials.github_token else None
+            )
+        if not setup.create_only and name not in get_app_registry():
+            raise HTTPException(status_code=404, detail="unknown app")
+        _validate_app_update(request, name, setup.spec)
+        try:
+            configure_app(name, setup.spec, changes)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="could not save application; check service permissions and runtime configuration",
+            ) from exc
+    return {
+        "status": "saved",
+        "app": name,
+        "secret": generated,
+        "fingerprint": _secret_info(name)["fingerprint"],
     }
 
 
 @router.put("/apps/{name}")
 async def upsert_app_route(request: Request, name: AppName, spec: AppSpec):
     with config_lock():
-        if request.app.state.store.has_active_deploys(name):
-            raise HTTPException(status_code=409, detail="app has queued or running deployments")
-        existing = get_app_registry().get(name)
-        if (
-            existing
-            and (existing.release_layout, existing.releases_dir, existing.current_link)
-            != (spec.release_layout, spec.releases_dir, spec.current_link)
-            and (
-                os.path.lexists(existing.current_link)
-                or (existing.releases_dir.exists() and any(existing.releases_dir.iterdir()))
-            )
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail="layout and paths cannot change while releases exist; use a new application or migrate offline",
-            )
-        if spec.release_layout == "directory":
-            try:
-                runner.directory_layout.prepare(spec)
-                runner.directory_layout.reconcile(spec)
-            except (OSError, ValueError, RuntimeError) as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        _validate_app_update(request, name, spec)
         upsert_app(name, spec)
     return {"status": "saved", "app": name}
 
@@ -175,6 +274,11 @@ async def delete_app(request: Request, name: AppName):
             raise HTTPException(
                 status_code=409,
                 detail=f"unset {_secret_key(name)} from the service environment before deletion",
+            )
+        if github_secret_key(name) in os.environ:
+            raise HTTPException(
+                status_code=409,
+                detail="unset the app GitHub token from the service environment before deletion",
             )
         if not delete_app_config(name):
             raise HTTPException(status_code=404, detail="unknown app")

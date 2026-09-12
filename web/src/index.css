@@ -1476,3 +1476,36 @@ footer {
   font-size: 12px;
   color: var(--muted);
 }
+
+.app-editor fieldset,
+.setup-credentials {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.setup-credentials {
+  padding-top: 16px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.setup-credentials h4 {
+  margin: 0;
+}
+
+.setup-summary code,
+.setup-summary dd {
+  overflow-wrap: anywhere;
+}
+
+.setup-summary dd {
+  margin: 4px 0 16px;
+}
+
+.setup-summary .secret-reveal {
+  display: grid;
+  gap: 10px;
+}

@@ -143,8 +143,41 @@ Antes de `make dev`, define `DEPLOYD_DB_PATH=deployd.sqlite3`,
 `DEPLOYD_SECRETS_FILE=config/secrets.env` en `.env`. El ejemplo usa las rutas
 del servicio Ubuntu bajo `/var/lib/deployd`.
 
-Abre la interfaz, ingresa el token de administración y rota el secreto de tu
-aplicación. Ese valor será el `DEPLOYD_SECRET` del CI de ese repositorio.
+## Configuración guiada de aplicaciones
+
+Abre la interfaz por HTTPS o un túnel SSH e ingresa el token de administración.
+En **Agregar aplicación** puedes configurar:
+
+- Nombre, repositorio de GitHub (`PROPIETARIO/REPO` o su URL) y URL pública de
+  la API de deployd, distinta de la URL del sitio que se despliega.
+- Sitio estático o servicio, rutas, URL de salud y retención. Por defecto, los
+  archivos activos están en `/srv/deployd/<app>/releases/current` y se conserva
+  una versión anterior. El modo estático verifica `index.html`; Nginx sigue
+  siendo el servidor web.
+- Un secreto de firma aleatorio (se muestra una sola vez), o uno propio de al
+  menos 32 bytes.
+- Un token de GitHub opcional por aplicación, de solo lectura, para artefactos
+  de repositorios privados.
+
+**Editar** usa el mismo formulario. Los campos de credenciales vacíos conservan
+los valores existentes; reemplazar el secreto de firma requiere confirmación.
+**JSON avanzado** permite configurar migraciones y otros ajustes. No se pueden
+cambiar rutas ni diseño de carpetas si ya hay versiones en el servidor.
+
+Las credenciales se guardan separadas en `DEPLOYD_SECRETS_FILE`, con modo `0600`.
+La API nunca devuelve los tokens de GitHub. Las variables de entorno por app
+(`DEPLOYD_SECRET_<APP_NAME_UPPER_SNAKE>` y
+`DEPLOYD_GITHUB_TOKEN_<APP_NAME_UPPER_SNAKE>`) tienen prioridad y no se modifican
+desde la UI. En estas claves, los guiones del nombre se sustituyen por guiones
+bajos y el nombre se convierte a mayúsculas.
+
+Al guardar se muestran el enlace a los ajustes de GitHub y las instrucciones de
+CI. Guardar configura deployd; **no** agrega secretos ni workflows a GitHub,
+prueba el token, modifica Nginx ni despliega la aplicación. Copia el secreto de
+firma a `DEPLOYD_SECRET`, define la variable `DEPLOYD_URL` en Actions y agrega el
+workflow indicado abajo. Configura la raíz de Nginx o el enlace fijo por
+separado. La comprobación HTTP confirma disponibilidad, no la versión activa;
+verifica el primer despliegue antes de cambiar la ruta de un sitio existente.
 
 ## Integración con CI
 
@@ -155,14 +188,17 @@ al repo de tu aplicación e incorpora
 una variable (`DEPLOYD_URL`). Las descargas públicas no necesitan una credencial
 de GitHub en el servidor.
 
-Para un repositorio privado, configura `DEPLOYD_GITHUB_TOKEN` en el `.env`
-protegido del servidor con un token granular que tenga **Contents: read** solo
-para ese repositorio y reinicia deployd. Es distinto del token de administración
-y del secreto HMAC de la aplicación. El workflow publica con su `github.token`.
+Para un repositorio privado, agrega en el formulario un token granular con
+**Contents: read** para ese repositorio; no requiere reiniciar el servicio.
+`DEPLOYD_GITHUB_TOKEN` en el `.env` protegido sigue siendo el respaldo global
+cuando no hay token por app (reinicia después de cambiar `.env`). Eliminar el
+token de una app vuelve a usar ese respaldo. Estos tokens son distintos del
+token de administración y del secreto HMAC. El workflow publica con su
+`github.token` incorporado.
 
 El workflow de referencia envía la URL de API del artefacto:
 `https://api.github.com/repos/OWNER/REPO/releases/assets/ASSET_ID`.
-Configura `artifact.allowed_url_prefix` con el prefijo de ese repositorio,
+El formulario configura `artifact.allowed_url_prefix` con el prefijo del repo,
 `https://api.github.com/repos/OWNER/REPO/releases/assets/`, y agrega
 `release-assets.githubusercontent.com` a `artifact.allowed_redirect_hosts`.
 Deployd solicita el archivo binario y envía el token solo en la solicitud HTTPS

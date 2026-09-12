@@ -66,25 +66,31 @@ describe('App', () => {
       'GET /api/healthz': { status: 'ok' },
       'GET /api/admin/apps': {},
       'GET /api/admin/deploys': [],
-      'PUT /api/admin/apps/bluedatos': { status: 'saved' },
+      'GET /api/admin/setup': { github_server_token_configured: true },
+      'POST /api/admin/apps/bluedatos/setup': { status: 'saved', app: 'bluedatos', secret: 's'.repeat(64) },
     })
     global.fetch = fetcher
     render(<App />)
     fireEvent.click(await screen.findByRole('button', { name: /Add application/ }))
     expect(screen.getByLabelText('Release layout')).toHaveValue('directory')
     fireEvent.change(screen.getByPlaceholderText(/app name/), { target: { value: 'bluedatos' } })
-    let spec = JSON.parse(screen.getByLabelText('New application configuration').value)
-    expect(spec.releases_dir).toBe('/srv/deployd/bluedatos/releases')
-    expect(spec.current_link).toBe('/srv/deployd/bluedatos/releases/current')
+    fireEvent.change(screen.getByLabelText('GitHub repository'), { target: { value: 'https://github.com/dn2182/BlueDatos.com.git' } })
+    fireEvent.change(screen.getByLabelText('Public deployd URL'), { target: { value: 'https://deployd.example.com' } })
+    fireEvent.change(screen.getByLabelText('Application health URL'), { target: { value: 'https://example.com' } })
+    expect(screen.getByLabelText('Release directory')).toHaveValue('/srv/deployd/bluedatos/releases')
+    expect(screen.getByLabelText('Active path')).toHaveValue('/srv/deployd/bluedatos/releases/current')
     fireEvent.change(screen.getByLabelText('Release layout'), { target: { value: 'symlink' } })
-    spec = JSON.parse(screen.getByLabelText('New application configuration').value)
-    expect(spec.current_link).toBe('/srv/deployd/bluedatos/current')
+    expect(screen.getByLabelText('Active path')).toHaveValue('/srv/deployd/bluedatos/current')
     fireEvent.change(screen.getByLabelText('Release layout'), { target: { value: 'directory' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create application' }))
-    await waitFor(() => expect(fetcher).toHaveBeenCalledWith('/api/admin/apps/bluedatos', expect.objectContaining({ method: 'PUT' })))
-    const sent = fetcher.mock.calls.find(([url, options]) => url === '/api/admin/apps/bluedatos' && options.method === 'PUT')
-    expect(JSON.parse(sent[1].body)).toMatchObject({ release_layout: 'directory', keep_previous: 1,
-      current_link: '/srv/deployd/bluedatos/releases/current' })
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith('/api/admin/apps/bluedatos/setup', expect.objectContaining({ method: 'POST' })))
+    const sent = fetcher.mock.calls.find(([url, options]) => url === '/api/admin/apps/bluedatos/setup' && options.method === 'POST')
+    expect(JSON.parse(sent[1].body)).toMatchObject({ create_only: true,
+      credentials: { generate_signing_secret: true }, spec: { release_layout: 'directory', keep_previous: 1,
+        github_repository: 'dn2182/BlueDatos.com', current_link: '/srv/deployd/bluedatos/releases/current' } })
+    expect(await screen.findByText('s'.repeat(64))).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+    expect(screen.queryByText('s'.repeat(64))).not.toBeInTheDocument()
   })
 
   it('renders apps with secret fingerprint and deploys with status', async () => {
@@ -190,7 +196,7 @@ describe('App', () => {
     render(<App />)
     fireEvent.click(await screen.findByRole('button', { name: /Add application/ }))
     fireEvent.change(screen.getByPlaceholderText(/app name/), { target: { value: 'BAD NAME' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Create application' }))
+    fireEvent.submit(screen.getByRole('button', { name: 'Create application' }).closest('form'))
     expect(await screen.findByText(/lowercase/)).toBeInTheDocument()
   })
 
@@ -205,6 +211,25 @@ describe('App', () => {
     render(<App />)
 
     expect(await screen.findByText('Bad Gateway')).toBeInTheDocument()
+  })
+
+  it('formats structured validation errors from application setup', async () => {
+    const fallback = mockFetch({
+      'GET /api/healthz': { status: 'ok' },
+      'GET /api/admin/apps': APPS,
+      'GET /api/admin/deploys': [],
+    })
+    global.fetch = vi.fn(async (url, opts) => {
+      if (url === '/api/admin/apps/my-api/setup') return {
+        ok: false, status: 422,
+        text: async () => JSON.stringify({ detail: [{ loc: ['body', 'credentials', 'github_token'], msg: 'credential is invalid', type: 'value_error' }] }),
+      }
+      return fallback(url, opts)
+    })
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit my-api' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('credentials.github_token: credential is invalid')
   })
 
   it('persists the selected color theme', async () => {

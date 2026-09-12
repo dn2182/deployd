@@ -142,6 +142,8 @@ class HealthSpec(BaseModel):
 
 
 class AppSpec(BaseModel):
+    github_repository: str | None = None
+    deploy_url: str | None = None
     releases_dir: Path
     current_link: Path
     release_layout: Literal["symlink", "directory"] = "symlink"
@@ -151,6 +153,34 @@ class AppSpec(BaseModel):
     migrate: MigrateSpec = Field(default_factory=MigrateSpec)
     restart: RestartSpec
     health: HealthSpec
+
+    @field_validator("github_repository")
+    @classmethod
+    def validate_repository(cls, value):
+        if value is not None and not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}", value
+        ):
+            raise ValueError("GitHub repository must be OWNER/REPO")
+        return value
+
+    @field_validator("deploy_url")
+    @classmethod
+    def validate_deploy_url(cls, value):
+        if value is None:
+            return None
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "deploy URL must be an HTTP(S) URL without credentials, query, or fragment"
+            )
+        return value.rstrip("/")
 
     @model_validator(mode="before")
     @classmethod
@@ -188,6 +218,12 @@ class AppSpec(BaseModel):
                 raise ValueError("directory layout requires current_link = releases_dir/current")
         elif current == releases or current.is_relative_to(releases):
             raise ValueError("current_link must be outside releases_dir")
+        if (
+            self.github_repository
+            and self.artifact.allowed_url_prefix
+            != f"https://api.github.com/repos/{self.github_repository}/releases/assets/"
+        ):
+            raise ValueError("artifact prefix must match the configured GitHub repository")
         return self
 
 
@@ -232,11 +268,35 @@ def _secret_key(app_name: str) -> str:
 
 def get_app_secret(app_name: str) -> str | None:
     """Env var wins over the secrets file, so ops can pin a secret."""
-    key = _secret_key(app_name)
+    return _get_secret_value(_secret_key(app_name))
+
+
+def github_secret_key(app_name: str) -> str:
+    validate_app_name(app_name)
+    return "DEPLOYD_GITHUB_TOKEN_" + app_name.upper().replace("-", "_")
+
+
+def get_app_github_token(app_name: str | None) -> str | None:
+    token = _get_secret_value(github_secret_key(app_name)) if app_name else None
+    fallback = get_settings().github_token
+    return token if token is not None else fallback.get_secret_value() if fallback else None
+
+
+def github_token_info(app_name: str) -> dict:
+    key = github_secret_key(app_name)
+    own = _get_secret_value(key)
+    token = get_app_github_token(app_name)
+    source = "environment" if key in os.environ else "app" if own else "server" if token else None
+    return {"configured": bool(token), "source": source, "env_override": key in os.environ}
+
+
+def _get_secret_value(key: str) -> str | None:
     if key in os.environ:
         return os.environ[key]
     path = get_settings().secrets_file
     with _CONFIG_LOCK:
+        if path.is_symlink():
+            raise ValueError("secrets file must not be a symbolic link")
         if path.exists():
             for line in path.read_text().splitlines():
                 k, sep, v = line.strip().partition("=")
@@ -249,25 +309,45 @@ def set_app_secret(app_name: str, secret: str) -> None:
     validate_app_name(app_name)
     if len(secret.encode()) < 32 or "\n" in secret or "\r" in secret:
         raise ValueError("secret must be a single-line value containing at least 32 bytes")
-    key = _secret_key(app_name)
+    _update_secret_values({_secret_key(app_name): secret})
+
+
+def _update_secret_values(changes: dict[str, str | None]) -> None:
     path = get_settings().secrets_file
     with _CONFIG_LOCK:
+        if path.is_symlink():
+            raise ValueError("secrets file must not be a symbolic link")
         lines = []
         if path.exists():
-            lines = [ln for ln in path.read_text().splitlines() if not ln.startswith(f"{key}=")]
-        lines.append(f"{key}={secret}")
+            lines = [
+                ln
+                for ln in path.read_text().splitlines()
+                if ln.partition("=")[0].strip() not in changes
+            ]
+        lines.extend(f"{key}={value}" for key, value in changes.items() if value is not None)
         _atomic_write_text(path, "\n".join(lines) + "\n", mode=0o600)
 
 
 def remove_app_secret(app_name: str) -> None:
     validate_app_name(app_name)
-    key = _secret_key(app_name)
-    path = get_settings().secrets_file
+    if get_settings().secrets_file.exists():
+        _update_secret_values({_secret_key(app_name): None, github_secret_key(app_name): None})
+
+
+def configure_app(name: str, spec: AppSpec, changes: dict[str, str | None]) -> None:
     with _CONFIG_LOCK:
-        if not path.exists():
-            return
-        lines = [ln for ln in path.read_text().splitlines() if not ln.startswith(f"{key}=")]
-        _atomic_write_text(path, "\n".join(lines) + "\n" if lines else "", mode=0o600)
+        path = get_settings().secrets_file
+        if path.is_symlink():
+            raise ValueError("secrets file must not be a symbolic link")
+        original = path.read_text() if path.exists() else ""
+        if changes:
+            _update_secret_values(changes)
+        try:
+            upsert_app(name, spec)
+        except Exception:
+            if changes:
+                _atomic_write_text(path, original, mode=0o600)
+            raise
 
 
 def save_app_registry(registry: dict[str, AppSpec]) -> None:

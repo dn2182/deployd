@@ -136,8 +136,37 @@ Before `make dev`, set `DEPLOYD_DB_PATH=deployd.sqlite3`,
 `DEPLOYD_SECRETS_FILE=config/secrets.env` in `.env`. The example defaults to
 Ubuntu service paths under `/var/lib/deployd`.
 
-Open the UI, enter the admin token, and rotate your application's secret. That
-value becomes the `DEPLOYD_SECRET` in the application repository's CI.
+## Guided application setup
+
+Open the management UI over HTTPS or an SSH tunnel and enter the admin token.
+Choose **Add application** to configure:
+
+- The app name, GitHub repository (`OWNER/REPO` or its URL), and public deployd
+  API URL. This API URL is separate from the website being deployed.
+- Static website or service, release paths, health URL, and retention. Defaults
+  keep live files in `/srv/deployd/<app>/releases/current` and retain one previous
+  version. Static mode checks `index.html`; Nginx remains the web server.
+- A random signing secret (shown once), or your own secret of at least 32 bytes.
+- An optional per-app, read-only GitHub token for private release assets.
+
+**Edit** uses the same form. Blank credential fields preserve existing values;
+replacing a configured signing secret requires confirmation. **Advanced JSON**
+remains available for migrations and other settings. Apps with existing releases
+cannot change their release paths or layout through this form.
+
+Credentials are stored separately in `DEPLOYD_SECRETS_FILE` with mode `0600`.
+GitHub tokens are never returned by the API. Per-app environment values
+(`DEPLOYD_SECRET_<APP_NAME_UPPER_SNAKE>` and
+`DEPLOYD_GITHUB_TOKEN_<APP_NAME_UPPER_SNAKE>`) take precedence and cannot be changed
+from the UI. App names use hyphens, replaced with underscores in these keys.
+
+The completion screen provides the GitHub settings link and CI instructions.
+Saving configures deployd; it does **not** add GitHub secrets/workflows, test the
+GitHub credential, alter Nginx, or deploy the app. Copy the signing secret into
+the repository's `DEPLOYD_SECRET`, set the `DEPLOYD_URL` Actions variable, and add
+the workflow below. Configure Nginx's document root or fixed web-root symlink
+separately. An HTTP health check confirms availability, not the live version;
+check the first release before switching an existing site to its new path.
 
 ## CI integration
 
@@ -148,15 +177,17 @@ into your app repo and vendor
 one variable (`DEPLOYD_URL`). Public release downloads need no GitHub credential
 on the server.
 
-For a private repository, set `DEPLOYD_GITHUB_TOKEN` in the server's protected
-`.env` to a fine-grained token with **Contents: read** for that repository, then
-restart deployd. Keep this token separate from the admin token and app HMAC secret.
-The workflow uses its built-in `github.token` to publish the release.
+For a private repository, add a fine-grained token with **Contents: read** for
+that repository in the app form; no service restart is needed. The server-wide
+`DEPLOYD_GITHUB_TOKEN` in the protected `.env` remains a fallback when no per-app
+token exists (restart after changing `.env`). Removing an app token re-enables
+that fallback. Keep these tokens separate from the admin token and app HMAC
+secret. The workflow uses its built-in `github.token` to publish the release.
 
 The reference workflow sends the asset's API URL:
 `https://api.github.com/repos/OWNER/REPO/releases/assets/ASSET_ID`.
-Set the app's `artifact.allowed_url_prefix` to that repository's
-`https://api.github.com/repos/OWNER/REPO/releases/assets/` prefix and include
+The guided form sets `artifact.allowed_url_prefix` to that repository's
+`https://api.github.com/repos/OWNER/REPO/releases/assets/` prefix and includes
 `release-assets.githubusercontent.com` in `artifact.allowed_redirect_hosts`.
 Deployd requests binary content and sends the read-only token only on the initial
 HTTPS GitHub asset API request; redirects never receive it. Public repositories
