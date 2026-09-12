@@ -103,7 +103,7 @@ describe('App', () => {
     expect(website).toHaveFocus()
   })
 
-  it('polls every two seconds while a deploy is active, toasts the result, then stops', async () => {
+  it('polls every two seconds while a deploy is active, toasts the result, then slows down', async () => {
     const routes = { ...BASE, 'GET /api/admin/deploys': [{ ...DEPLOYS[0], status: 'running', finished_at: null }] }
     const fetcher = mockFetch(routes)
     global.fetch = fetcher
@@ -118,9 +118,11 @@ describe('App', () => {
     await act(() => vi.advanceTimersByTimeAsync(2000))
     await waitFor(() => expect(calls(fetcher, '/api/admin/deploys')).toHaveLength(before + 2))
     expect(await screen.findByText('my-api: Succeeded')).toBeInTheDocument()
-    expect(await screen.findByText(/Updates on refresh/)).toBeInTheDocument()
+    expect(await screen.findByText(/checking every 15 seconds/)).toBeInTheDocument()
     await act(() => vi.advanceTimersByTimeAsync(6000))
     expect(calls(fetcher, '/api/admin/deploys')).toHaveLength(before + 2)
+    await act(() => vi.advanceTimersByTimeAsync(10000))
+    await waitFor(() => expect(calls(fetcher, '/api/admin/deploys')).toHaveLength(before + 3))
   })
 
   it('refreshes health, activity, and the active panel on demand and with the r shortcut', async () => {

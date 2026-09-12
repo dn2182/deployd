@@ -246,7 +246,7 @@ export default {
   'activity.kicker': 'Actividad',
   'activity.title': 'Despliegues recientes',
   'activity.views': 'Vistas de actividad',
-  'activity.manual': 'Se actualiza al solicitarlo, pulsa r',
+  'activity.manual': 'En vivo, revisa cada 15 segundos',
   'activity.live': 'En vivo, se actualiza cada 2 segundos',
   'activity.pending': 'Operación en curso. Este panel se actualiza automáticamente.',
   'activity.refresh': 'Actualizar',

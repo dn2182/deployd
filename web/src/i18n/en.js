@@ -246,7 +246,7 @@ export default {
   'activity.kicker': 'Activity',
   'activity.title': 'Recent deploys',
   'activity.views': 'Activity views',
-  'activity.manual': 'Updates on refresh, press r',
+  'activity.manual': 'Live, checking every 15 seconds',
   'activity.live': 'Live, updating every 2 seconds',
   'activity.pending': 'Work in progress. This panel updates automatically.',
   'activity.refresh': 'Refresh',
