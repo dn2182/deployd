@@ -406,6 +406,37 @@ stop_for_upgrade() {
   fi
 }
 
+install_website_helper() {
+  local repo_root=$1 answer path rule
+  if [[ ! -f /etc/sudoers.d/deployd-connect ]]; then
+    printf '%s\n' \
+      'Optional: allow the management UI to connect existing static websites.' \
+      'This grants deployd a restricted root helper for direct children of /var/www.' \
+      'Each live switch requires UI confirmation and preserves the original as b4deployd.'
+    read -r -p 'Enable website connection? [y/N]: ' answer
+    [[ ${answer,,} == y || ${answer,,} == yes ]] || return 0
+  fi
+  for path in /usr/local /usr/local/libexec /usr/local/libexec/deployd /var/lib/deployd-connect; do
+    sudo test ! -L "$path" || die "helper path must not be a symlink: $path"
+    if sudo test -e "$path"; then
+      [[ $(sudo stat -c '%U' "$path") == root ]] || die "helper path must be root-owned: $path"
+      [[ $(sudo find "$path" -maxdepth 0 -perm /022 -print) == '' ]] || die "helper path must not be writable by other users: $path"
+    fi
+  done
+  sudo install -d -o root -g root -m 0755 /usr/local/libexec /usr/local/libexec/deployd
+  sudo install -d -o root -g root -m 0700 /var/lib/deployd-connect
+  sudo test ! -L /usr/local/libexec/deployd/connect-website || die "helper executable must not be a symlink"
+  sudo install -o root -g root -m 0755 "$repo_root/deploy/connect_website.py" /usr/local/libexec/deployd/connect-website
+  rule=$(sudo mktemp /etc/sudoers.d/deployd-connect.XXXXXX)
+  printf 'deployd ALL=(root) NOPASSWD: NOSETENV: /usr/local/libexec/deployd/connect-website\n' | sudo tee "$rule" >/dev/null
+  sudo chmod 0440 "$rule"
+  if ! sudo visudo -cf "$rule"; then
+    sudo rm -f -- "$rule"
+    die "website helper sudo policy did not validate"
+  fi
+  sudo mv -T -- "$rule" /etc/sudoers.d/deployd-connect
+}
+
 main() {
   require_install_user
   export PATH="$HOME/.local/bin:$PATH"
@@ -433,6 +464,7 @@ main() {
   install_application "$repo_root"
   generated_token=$(configure_runtime "$repo_root") || die "runtime setup failed"
   configure_basic_auth "$admin_username"
+  install_website_helper "$repo_root"
   install_service "$repo_root"
   write_nginx_config "$repo_root" "$domain" "$admin_bind" "$admin_port"
   verify_installation "$domain" "$admin_port"

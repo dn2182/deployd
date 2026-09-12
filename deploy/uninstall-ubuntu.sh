@@ -46,9 +46,11 @@ show_scope() {
     "  $STATE_DIR (database, app registry, and signing secrets)" \
     "  system user and group: deployd (only when no app data is retained)" \
     "  $REPO_ROOT (source, .env, dependencies, and built frontend)" \
+    "  website connection helper and its installer-owned sudo rule" \
     "" \
     "Shared packages, deployed application releases, firewall rules, DNS, and" \
     "user-created sudoers rules are not removed." \
+    "Website symlinks, b4deployd versions and /var/lib/deployd-connect recovery data are preserved." \
     "Custom runtime paths outside /opt/deployd and /var/lib/deployd are not backed up or removed."
 }
 
@@ -71,6 +73,9 @@ create_backup() {
   for item in \
     "opt/deployd" \
     "var/lib/deployd" \
+    "var/lib/deployd-connect" \
+    "etc/sudoers.d/deployd-connect" \
+    "usr/local/libexec/deployd/connect-website" \
     "etc/systemd/system/deployd.service" \
     "etc/systemd/system/deployd.service.d" \
     "etc/nginx/sites-available/deployd" \
@@ -160,7 +165,7 @@ remove_nginx_config() {
 }
 
 remove_service_identity() {
-  if [[ $preserve_identity == "true" ]] || sudo test -d /srv/deployd; then
+  if [[ $preserve_identity == "true" ]] || sudo test -d /srv/deployd || sudo test -d /var/lib/deployd-connect; then
     printf 'Keeping the deployd account to preserve ownership of retained app data.\n'
     return
   fi
@@ -245,6 +250,9 @@ main() {
 
   remove_nginx_config
   remove_service
+  remove_file /etc/sudoers.d/deployd-connect
+  remove_file /usr/local/libexec/deployd/connect-website
+  sudo rmdir /usr/local/libexec/deployd 2>/dev/null || true
   remove_tree "$STATE_DIR" "/var/lib/deployd"
   sudo rmdir /srv/deployd 2>/dev/null || true
   remove_service_identity

@@ -52,8 +52,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
       - run: uv sync --extra dev --frozen
-      - run: uv run ruff check src tests deploy/runtime_config.py
-      - run: uv run ruff format --check src tests deploy/runtime_config.py
+      - run: uv run ruff check src tests deploy/runtime_config.py deploy/connect_website.py
+      - run: uv run ruff format --check src tests deploy/runtime_config.py deploy/connect_website.py
       - run: uv run pytest -q
 
   web:

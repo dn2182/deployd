@@ -4,6 +4,11 @@
 
 Initial release.
 
+- Confirmed website connection in the management UI, backed by an optional,
+  root-owned installer helper restricted to direct `/var/www` children. Preserve
+  the original site as `b4deployd`, support local activation, and exclude it from
+  automatic retention. Connection journals and live sites survive uninstall.
+
 - Normalize newly extracted POSIX release directories to `0755` before cutover,
   including implicit archive directories, without relaxing file permissions,
   private staging, release metadata, or the service umask.

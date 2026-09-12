@@ -304,9 +304,46 @@ de salud; **Eliminar archivos** solo borra versiones anteriores permitidas.
 Se siguen guardando por defecto la activa y una anterior.
 
 Nginx puede servir `releases/current` directamente o mediante un enlace fijo
-como `/var/www/bluedatos.com`. Ese enlace nunca cambia y se configura por
-separado cuando la primera versión esté lista. No reemplaces el sitio existente
-por un enlace cuyo destino aún no existe.
+como `/var/www/bluedatos.com`. Ese enlace nunca cambia y se puede configurar desde
+**Conexión del sitio → Conectar sitio** cuando la primera versión esté lista.
+Guardar una app nunca cambia el sitio en producción.
+
+### Conectar un sitio existente
+
+Ejecuta de nuevo `bash deploy/install-ubuntu.sh` como usuario normal y habilita
+el asistente de conexión. Se instala un programa Python aislado, propiedad de root,
+y una regla sudo limitada. Autoriza a deployd a conectar sitios directamente bajo
+`/var/www`, no rutas arbitrarias ni comandos de shell. Las actualizaciones conservan
+esta autorización.
+
+Tras un despliegue exitoso, abre **Conexión del sitio**, comprueba las rutas y escribe
+el nombre de la app para confirmar el cambio en producción. La carpeta original
+se intercambia atómicamente con un enlace fijo a `releases/current`. Los archivos
+originales quedan en `releases/b4deployd`, disponible para **Activar** desde la gestión
+de versiones. No se modifica Nginx, incluidas sus rutas proxy de API. Si la raíz
+configurada en Nginx no cambia, no hace falta recargarlo.
+
+`b4deployd` queda excluido de la limpieza automática y no cuenta dentro del límite
+normal de versiones. Puedes eliminarlo explícitamente cuando no esté activo ni sea
+la versión anterior protegida. Los enlaces ya conectados se conservan; el asistente
+no puede reconstruir un sitio original movido manualmente.
+
+La conexión automática requiere Linux, carpetas de versiones administradas, un sitio
+estático existente directamente bajo `/var/www` y el mismo sistema de archivos para
+sitio, versiones y almacenamiento del asistente. Solo admite archivos normales y
+directorios: sin enlaces simbólicos, enlaces duros ni archivos especiales. Los
+archivos deben ser legibles públicamente y las carpetas accesibles. Límite: 2 GiB y
+100.000 entradas. Las carpetas respaldadas pasan a ser de deployd con modo `0755`;
+los archivos conservan propietario y permisos. Detén cualquier proceso que escriba
+en el sitio original antes de conectarlo. Es para archivos estáticos publicados,
+no para uploads, secretos ni datos de una aplicación en ejecución.
+
+Si el proceso se interrumpe, el original permanece en `releases/b4deployd` o en
+`/var/lib/deployd-connect/<app>/original`, accesible solo por root. Reintenta
+**Conectar sitio** para continuar; cambios inesperados de rutas o metadatos dañados
+requieren revisión del administrador. No borres esos datos durante la recuperación.
+Desinstalar elimina el asistente y su regla sudo, pero conserva los enlaces del sitio,
+las versiones y los datos de recuperación para mantener disponible la web.
 
 El instalador de Ubuntu crea `/srv/deployd` con propietario `deployd`. Para
 instalaciones existentes actualizadas sin ejecutar el instalador, corre una vez:

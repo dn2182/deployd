@@ -291,8 +291,43 @@ retained version. The default remains current plus one rollback version.
 
 Nginx may serve `releases/current` directly, or use a fixed symlink such as
 `/var/www/bluedatos.com` pointing to it. That external link never changes and
-must be set up separately, after the first release is ready. Do not replace an
-existing live document root with a dangling link.
+can be connected from **Website connection → Connect website** after the first
+release is ready. Saving an app never switches its live website.
+
+### Connect an existing website
+
+Rerun `bash deploy/install-ubuntu.sh` as your normal user and opt into the
+website connection helper. It installs a root-owned, isolated Python helper
+and one restricted sudo rule. This authorizes deployd to connect direct children
+of `/var/www`, not arbitrary paths or shell commands. Upgrades preserve this opt-in.
+
+After a successful deployment, open the app's **Website connection**, check
+the paths, and type its name to confirm the live switch. The existing directory
+is exchanged atomically with a fixed symlink to `releases/current`. Its original
+files become `releases/b4deployd`, available through **Manage versions → Activate**.
+Nginx configuration, including API proxy locations, is unchanged. No reload is needed
+for an unchanged Nginx document-root path.
+
+`b4deployd` is excluded from automatic cleanup and does not count against the
+normal version limit. You can delete it explicitly when it is neither active nor
+a protected previous version. Already-connected symlinks are left alone; the
+helper cannot reconstruct an original site that was moved manually.
+
+Automatic connection requires Linux, managed directory layout, an existing static
+site directly under `/var/www`, and website/releases/helper storage on the same
+filesystem. The original must contain only ordinary files and directories (no
+symlinks, hardlinks, or special files), with public-read files and traversable
+directories. The limit is 2 GiB and 100,000 entries. Connection makes backup
+directories deployd-owned and `0755`; regular-file ownership and modes are preserved.
+Pause any process writing to the old site before connecting it. This is for static
+deployment output, not uploads, secrets, or a running application data directory.
+
+Interrupted switches preserve the original either in `releases/b4deployd` or in
+root-only `/var/lib/deployd-connect/<app>/original`. Retry **Connect website** to
+resume; unexpected path changes or damaged metadata require operator inspection.
+Never delete helper recovery storage while recovering. Uninstall removes the
+helper and its sudo rule but preserves website symlinks, releases, and recovery
+data, so the live website remains available.
 
 The Ubuntu installer creates `/srv/deployd` owned by `deployd`. Existing
 installations upgrading without rerunning the installer need this once:

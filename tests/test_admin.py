@@ -9,10 +9,57 @@ from fastapi.testclient import TestClient
 from deployd import config
 from deployd.config import get_app_secret
 from deployd.main import create_app
-from deployd.worker import directory_layout, runner
+from deployd.worker import directory_layout, runner, website
 
 ADMIN_TOKEN = "a" * 32
 ADMIN = {"X-Admin-Token": ADMIN_TOKEN}
+
+
+def test_website_connection_requires_confirmation_and_idle_app(env, monkeypatch):
+    monkeypatch.setattr(website, "arguments", lambda *args: ["unused"])
+    with TestClient(create_app()) as client:
+        base = "/admin/apps/app-x/website"
+        assert client.get(base).status_code == 401
+        assert client.post(f"{base}/connect", json={"confirm": "app-x"}).status_code == 401
+        assert (
+            client.post(f"{base}/connect", headers=ADMIN, json={"confirm": "wrong"}).status_code
+            == 422
+        )
+        queued = []
+        monkeypatch.setattr(
+            client.app.state.queue, "enqueue_connection", lambda *args: queued.append(args)
+        )
+        response = client.post(f"{base}/connect", headers=ADMIN, json={"confirm": "app-x"})
+        assert response.status_code == 202
+        did = response.json()["deploy_id"]
+        assert queued == [("app-x", did)]
+        assert client.app.state.store.get_deploy(did)["triggered_by"] == "connect:app-x"
+        assert client.get(base, headers=ADMIN).json() == {"status": "busy"}
+        assert (
+            client.post(f"{base}/connect", headers=ADMIN, json={"confirm": "app-x"}).status_code
+            == 409
+        )
+        assert client.post(f"/admin/deploys/{did}/redeploy", headers=ADMIN).status_code == 409
+
+
+def test_baseline_can_activate_without_a_git_deployment(env, monkeypatch):
+    with TestClient(create_app()) as client:
+        spec = client.get("/admin/apps", headers=ADMIN).json()["app-x"]
+        spec.update(release_layout="directory", current_link=str(env / "releases/current"))
+        assert client.put("/admin/apps/app-x", headers=ADMIN, json=spec).status_code == 200
+        baseline = env / "releases/b4deployd"
+        baseline.mkdir()
+        directory_layout.initialize(baseline)
+        base = "/admin/apps/app-x/releases"
+        row = client.get(base, headers=ADMIN).json()["releases"][0]
+        assert row["release_id"] == "b4deployd" and row["can_activate"]
+        queued = []
+        monkeypatch.setattr(
+            client.app.state.queue, "enqueue_activation", lambda *args: queued.append(args)
+        )
+        response = client.post(f"{base}/activate", headers=ADMIN, json={"release": "b4deployd"})
+        assert response.status_code == 202
+        assert queued[0][2] == "b4deployd"
 
 
 @pytest.fixture

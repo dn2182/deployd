@@ -18,6 +18,31 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def test_baseline_activation_retention_and_manual_cleanup(spec):
+    spec.keep_previous = 0
+    layout.prepare(spec)
+    first = spec.releases_dir / ("a" * 40 + "-" + "b" * 32)
+    first.mkdir()
+    (first / "index.html").write_text("deployed")
+    layout.initialize(first)
+    layout.cutover(spec, first, {})
+    baseline = spec.releases_dir / "b4deployd"
+    baseline.mkdir()
+    (baseline / "index.html").write_text("original")
+    layout.initialize(baseline)
+    layout.prune(spec)
+    assert baseline.is_dir()
+    layout.cutover(spec, baseline, {})
+    assert (spec.current_link / "index.html").read_text() == "original"
+    row = layout.records(spec)["releases"][0]
+    assert row["release_id"] == "b4deployd" and row["commit_sha"] is None
+    layout.cutover(spec, first, {})
+    layout.prune(spec)
+    assert baseline.exists()
+    layout.remove_release(spec, "b4deployd")
+    assert not baseline.exists()
+
+
 @pytest.fixture
 def spec(tmp_path):
     return AppSpec.model_validate(

@@ -19,16 +19,21 @@ async def test_activation_and_deployment_share_app_queue(tmp_path, monkeypatch):
     async def activate(*args):
         calls.append("activate")
 
+    async def connect(*args):
+        calls.append("connect")
+
     monkeypatch.setattr(queue, "run_deploy", deploy)
     monkeypatch.setattr(queue, "run_activation", activate)
+    monkeypatch.setattr(queue, "run_connection", connect)
     try:
         worker.enqueue("app", "one")
         worker.enqueue_activation("app", "two", "previous")
+        worker.enqueue_connection("app", "three")
         await asyncio.wait_for(started.wait(), 1)
         assert calls == ["deploy"]
         finish.set()
         await asyncio.wait_for(worker._queues["app"].join(), 1)
-        assert calls == ["deploy", "activate"]
+        assert calls == ["deploy", "activate", "connect"]
     finally:
         await worker.shutdown()
 
@@ -39,6 +44,16 @@ async def test_restart_does_not_replay_local_activation_as_download(tmp_path):
     did = store.create_deploy(
         "app", "a" * 40, "local-release://previous", "b" * 64, "activate:previous"
     )
+    worker = queue.DeployQueue(store)
+    assert worker.recover({"app"}) == 0
+    assert store.get_deploy(did)["status"] == "failed"
+    assert not worker._pending_ids
+
+
+async def test_restart_does_not_replay_connection_as_download(tmp_path):
+    store = Store(tmp_path / "state.sqlite3")
+    store.init()
+    did = store.create_deploy("app", "0" * 40, "local-website://connect", "0" * 64, "connect:app")
     worker = queue.DeployQueue(store)
     assert worker.recover({"app"}) == 0
     assert store.get_deploy(did)["status"] == "failed"

@@ -23,8 +23,8 @@ test:
 	cd web && pnpm test
 
 lint:
-	$(VENV)/bin/ruff check src tests deploy/runtime_config.py
-	$(VENV)/bin/ruff format --check src tests deploy/runtime_config.py
+	$(VENV)/bin/ruff check src tests deploy/runtime_config.py deploy/connect_website.py
+	$(VENV)/bin/ruff format --check src tests deploy/runtime_config.py deploy/connect_website.py
 	cd web && pnpm lint
 
 audit:

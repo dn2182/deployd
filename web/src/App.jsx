@@ -27,6 +27,7 @@ import ReleasePanel from './components/ReleasePanel.jsx'
 import AppEditor from './components/AppEditor.jsx'
 import SetupSummary from './components/SetupSummary.jsx'
 import AppPaths from './components/AppPaths.jsx'
+import WebsiteConnection from './components/WebsiteConnection.jsx'
 import GitHubSetup from './components/GitHubSetup.jsx'
 
 const STEP_ICON = {
@@ -94,6 +95,7 @@ function AppCard({ name, spec, call, onChanged, t }) {
   const [editing, setEditing] = useState(false)
   const [showReleases, setShowReleases] = useState(false)
   const [showGitHub, setShowGitHub] = useState(false)
+  const [showWebsite, setShowWebsite] = useState(false)
   const [freshSecret, setFreshSecret] = useState(null)
   const [copied, setCopied] = useState(false)
   const [error, setError] = useState(null)
@@ -194,6 +196,12 @@ function AppCard({ name, spec, call, onChanged, t }) {
         </div>
       </div>
       <AppPaths spec={spec} t={t} />
+      {spec.site_path && <>
+        <Button onClick={() => setShowWebsite(!showWebsite)} aria-expanded={showWebsite}>
+          {t('website.title')}
+        </Button>
+        {showWebsite && <WebsiteConnection name={name} call={call} onChanged={onChanged} t={t} />}
+      </>}
 
       <Button onClick={() => setShowReleases(!showReleases)} aria-expanded={showReleases}>
         {t('releases.manage')}

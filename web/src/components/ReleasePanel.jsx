@@ -78,7 +78,8 @@ export default function ReleasePanel({ name, spec, call, onChanged, t }) {
         {data.busy && <p role="status">{t('releases.busy')}</p>}
         <ul className="release-list">
           {data.releases.map((release) => {
-            const commit = release.commit_sha?.slice(0, 12) || t('releases.imported')
+            const commit = release.release_id === 'b4deployd' ? 'b4deployd'
+              : release.commit_sha?.slice(0, 12) || t('releases.imported')
             return <li key={release.name} className="release-item">
               <div className="release-identity">
                 <code title={release.name}>{commit}</code>

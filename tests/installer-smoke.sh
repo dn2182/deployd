@@ -11,7 +11,7 @@ checkout=$PWD
 sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0755 /opt/deployd
 git clone --no-hardlinks "$checkout" /opt/deployd
 
-printf 'y\ndeployd.example.com\n127.0.0.1\n844\nsmoke-admin\nsmoke-password\nsmoke-password\n' |
+printf 'y\ndeployd.example.com\n127.0.0.1\n844\nsmoke-admin\nsmoke-password\nsmoke-password\ny\n' |
   /opt/deployd/deploy/install-ubuntu.sh >"$RUNNER_TEMP/deployd-install.log" 2>&1
 sudo systemctl is-active --quiet deployd
 curl --fail --silent http://127.0.0.1:8300/healthz
@@ -22,6 +22,9 @@ curl --fail --silent -u smoke-admin:smoke-password http://127.0.0.1:844/ >/dev/n
 [[ $(sudo stat -c '%U:%G:%a' /opt/deployd/.env) == root:deployd:640 ]]
 [[ $(sudo stat -c '%U:%G:%a' /var/lib/deployd/secrets.env) == deployd:deployd:600 ]]
 [[ $(stat -c '%u' /opt/deployd/web/node_modules) == "$(id -u)" ]]
+[[ $(sudo stat -c '%U:%G:%a' /usr/local/libexec/deployd/connect-website) == root:root:755 ]]
+[[ $(sudo stat -c '%U:%G:%a' /etc/sudoers.d/deployd-connect) == root:root:440 ]]
+sudo env GITHUB_ACTIONS=true python3 "$checkout/tests/website-smoke.py"
 
 sudo -u deployd touch /srv/deployd/retained-app-data
 owner=$(id -u deployd)
@@ -36,6 +39,9 @@ printf 'y\nREMOVE deployd\n' | /opt/deployd/deploy/uninstall-ubuntu.sh
 [[ ! -e /opt/deployd && ! -e /var/lib/deployd ]]
 [[ ! -e /etc/nginx/sites-enabled/deployd && ! -e /etc/systemd/system/deployd.service ]]
 [[ $(id -u deployd) == "$owner" && -f /srv/deployd/retained-app-data ]]
+[[ ! -e /etc/sudoers.d/deployd-connect && ! -e /usr/local/libexec/deployd/connect-website ]]
+[[ -L /var/www/deployd-smoke.example && -f /srv/deployd/website-smoke/releases/b4deployd/index.html ]]
+sudo test -f /var/lib/deployd-connect/website-smoke/complete.json
 sudo nginx -t
 backup=$(find "$HOME" -maxdepth 1 -name 'deployd-uninstall-*.tar.gz' -print -quit)
 [[ -n $backup && $(stat -c '%a' "$backup") == 600 ]]

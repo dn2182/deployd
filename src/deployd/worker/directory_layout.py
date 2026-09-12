@@ -15,7 +15,8 @@ from pathlib import Path
 from ..config import AppSpec
 
 MANIFEST = ".deployd-release.json"
-RELEASE_NAME = re.compile(r"^[0-9a-f]{40}-[0-9a-f]{32}$")
+BASELINE = "b4deployd"
+RELEASE_NAME = re.compile(r"^(?:[0-9a-f]{40}-[0-9a-f]{32}|b4deployd)$")
 
 
 def is_link(path: Path) -> bool:
@@ -164,7 +165,7 @@ def records(spec: AppSpec) -> dict:
             {
                 "name": path.name,
                 "release_id": data["name"],
-                "commit_sha": data["name"][:40],
+                "commit_sha": None if data["name"] == BASELINE else data["name"][:40],
                 "created_at": data["created_at"],
                 "active": False,
                 "previous": path.name == previous,
@@ -178,7 +179,7 @@ def records(spec: AppSpec) -> dict:
             {
                 "name": "current",
                 "release_id": current["name"],
-                "commit_sha": current["name"][:40],
+                "commit_sha": None if current["name"] == BASELINE else current["name"][:40],
                 "created_at": current["created_at"],
                 "active": True,
                 "previous": False,
@@ -259,7 +260,10 @@ def prune(spec: AppSpec) -> None:
     data = records(spec)
     if not data["active_path"]:
         return
-    retained = [row for row in data["releases"] if not row["active"]]
+    # The pre-deployd site is an explicit recovery point, outside normal retention.
+    retained = [
+        row for row in data["releases"] if not row["active"] and row["release_id"] != BASELINE
+    ]
     keep = {row["name"] for row in retained if row["protected"]}
     for row in retained:
         if len(keep) >= spec.keep_previous:

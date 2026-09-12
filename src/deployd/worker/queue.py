@@ -5,6 +5,7 @@ import logging
 
 from ..store.db import Store
 from .runner import run_activation, run_deploy
+from .website import run_connection
 
 log = logging.getLogger("deployd.worker")
 
@@ -16,6 +17,11 @@ class DeployQueue:
         self._tasks: dict[str, asyncio.Task] = {}
         self._pending_ids: set[str] = set()
         self._activations: dict[str, str] = {}
+        self._connections: set[str] = set()
+
+    def enqueue_connection(self, app: str, deploy_id: str) -> None:
+        self._connections.add(deploy_id)
+        self.enqueue(app, deploy_id)
 
     def enqueue_activation(self, app: str, deploy_id: str, release: str) -> None:
         self._activations[deploy_id] = release
@@ -33,12 +39,14 @@ class DeployQueue:
     def recover(self, registered_apps: set[str]) -> int:
         recovered = 0
         for app, deploy_id in self._store.recover_after_restart():
-            if self._store.get_deploy(deploy_id)["triggered_by"].startswith("activate:"):
+            if self._store.get_deploy(deploy_id)["triggered_by"].startswith(
+                ("activate:", "connect:")
+            ):
                 self._store.add_step(
                     deploy_id,
                     "recovery",
                     "failed",
-                    output="activation interrupted; inspect current release before retrying",
+                    output="local operation interrupted; inspect website and current release before retrying",
                 )
                 self._store.set_status(deploy_id, "failed", finished=True)
                 continue
@@ -61,7 +69,10 @@ class DeployQueue:
             deploy_id = await q.get()
             try:
                 release = self._activations.pop(deploy_id, None)
-                if release is None:
+                if deploy_id in self._connections:
+                    self._connections.remove(deploy_id)
+                    await run_connection(self._store, app, deploy_id)
+                elif release is None:
                     await run_deploy(self._store, app, deploy_id)
                 else:
                     await run_activation(self._store, app, deploy_id, release)

@@ -28,7 +28,7 @@ from ..config import (
     upsert_app,
 )
 from ..github_actions import GitHubActionsSettings, setup_bundle
-from ..worker import runner
+from ..worker import runner, website
 
 
 def require_admin(x_admin_token: str | None = Header(default=None)):
@@ -45,7 +45,11 @@ MANAGED_ROOT = FilePath("/srv/deployd")
 
 
 class ReleaseSelection(BaseModel):
-    release: str = Field(pattern=r"^(?:[0-9a-f]{40}-[0-9a-f]{32}|previous)$")
+    release: str = Field(pattern=r"^(?:[0-9a-f]{40}-[0-9a-f]{32}|previous|b4deployd)$")
+
+
+class WebsiteConfirmation(BaseModel):
+    confirm: str
 
 
 class AppCredentials(BaseModel):
@@ -105,7 +109,7 @@ async def list_app_releases(request: Request, name: AppName):
         identity = release.get("release_id", release["name"])
         original = store.get_deploy(identity[41:]) if identity != "previous" else None
         release["can_activate"] = not release["active"] and (
-            release["name"] == "previous"
+            release["name"] in {"previous", "b4deployd"}
             or (
                 original is not None
                 and original["app"] == name
@@ -131,7 +135,7 @@ async def activate_app_release(request: Request, name: AppName, selection: Relea
         original = (
             store.get_deploy(selection.release[41:]) if selection.release != "previous" else None
         )
-        if selection.release != "previous" and (
+        if selection.release not in {"previous", "b4deployd"} and (
             original is None
             or original["app"] != name
             or original["commit_sha"] != selection.release[:40]
@@ -143,7 +147,7 @@ async def activate_app_release(request: Request, name: AppName, selection: Relea
         deploy_id = store.create_deploy(
             name,
             original["commit_sha"] if original else "0" * 40,
-            original["artifact_url"] if original else "local-release://previous",
+            original["artifact_url"] if original else f"local-release://{selection.release}",
             original["artifact_sha256"] if original else "0" * 64,
             f"activate:{selection.release}",
         )
@@ -160,6 +164,36 @@ async def cleanup_app_release(request: Request, name: AppName, selection: Releas
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"removed": selection.release}
+
+
+@router.get("/apps/{name}/website")
+async def inspect_website(request: Request, name: AppName):
+    spec = _release_app(request, name)
+    if request.app.state.store.has_active_deploys(name):
+        return {"status": "busy"}
+    try:
+        return await website.inspect(name, spec)
+    except (ValueError, OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/apps/{name}/website/connect", status_code=202)
+async def connect_website(request: Request, name: AppName, confirmation: WebsiteConfirmation):
+    if confirmation.confirm != name:
+        raise HTTPException(
+            status_code=422, detail="type the app name to confirm the live website switch"
+        )
+    with config_lock():
+        spec = _release_app(request, name, idle=True)
+        try:
+            website.arguments(name, spec, "connect")
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        deploy_id = request.app.state.store.create_deploy(
+            name, "0" * 40, "local-website://connect", "0" * 64, f"connect:{name}"
+        )
+        request.app.state.queue.enqueue_connection(name, deploy_id)
+    return {"deploy_id": deploy_id, "status": "queued"}
 
 
 def _secret_info(app_name: str) -> dict:
