@@ -163,6 +163,7 @@ def test_retry_recovers_after_interrupted_connection(site, monkeypatch, crash_at
     monkeypatch.setattr(helper, "write_json", interrupted_write)
     with pytest.raises(SystemExit):
         run("connect")
+    assert run("check")["status"] == "recovery"
     assert original.resolve() == current
     candidates = [state / "site/original/index.html", current.parent / "b4deployd/index.html"]
     assert any(p.exists() and p.read_text() == "original website" for p in candidates)

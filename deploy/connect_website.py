@@ -244,8 +244,9 @@ def connect(operation, app, site, owner):
         staged = info(transaction, "original")
         archived = info(releases, "b4deployd")
         if linked and not staged and identity(archived) == original_id:
-            if operation == "connect":
-                write_json(transaction, "complete.json", {"connected": True})
+            if operation == "check":
+                return {"status": "recovery", "backup": True}
+            write_json(transaction, "complete.json", {"connected": True})
             return {"status": "connected", "backup": True}
         if operation == "check":
             return {"status": "recovery", "backup": False}
