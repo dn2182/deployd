@@ -24,8 +24,9 @@ is the entire attack surface.
   attempts plus a `current` symlink (atomic on Linux) or guarded junction swap
   (Windows); failed health checks roll back automatically
 - **Migrations that gate the release** — forward-only, checksummed SQL
-  migrations (`deployd-migrate`, SQL Server via pyodbc) run before cutover
-  and halt the deploy hard on failure
+  migrations (`deployd-migrate`, SQL Server via pyodbc or PostgreSQL via
+  psycopg) run before cutover under a database-wide lock and halt the deploy
+  hard on failure
 - **Hooks and health assertions** — optional `before_cutover` and
   `after_health` commands, and health checks that can require the deployed
   SHA in the response body or a header, so a stale process cannot pass
@@ -86,7 +87,10 @@ resumes after restart.
 
 Git is the only bootstrap dependency. The guided installer installs the
 remaining system and project requirements, runs validation, and configures the
-service, Nginx, runtime state, and management UI.
+service, Nginx, runtime state, and management UI. Node 22 and `uv` are
+downloaded as official release tarballs, verified against their published
+checksums, and kept under the checkout (`.node`) and `~/.local/bin`; nothing
+is piped from the network into a shell.
 
 ```bash
 sudo apt update
@@ -101,8 +105,17 @@ Run [`deploy/install-ubuntu.sh`](deploy/install-ubuntu.sh) as the normal
 repository owner, not with `sudo`. It elevates only operations that require
 system access. Cloudflare Flexible mode is provided for testing only; keep the
 management port firewall-restricted and move to Full (strict) before production.
-The installer prompts for the public domain, management bind/port, and Basic
-Auth username, then generates the admin token when needed.
+The installer prompts for the public domain, management bind/port (default
+`127.0.0.1:844`), and Basic Auth username, then generates the admin token when
+needed. The token is never printed; the installer tells you where it lives.
+Every prompt reads an environment override for unattended runs:
+`DEPLOYD_INSTALL_DOMAIN`, `DEPLOYD_INSTALL_ADMIN_BIND`,
+`DEPLOYD_INSTALL_ADMIN_PORT`, `DEPLOYD_INSTALL_ADMIN_USER`,
+`DEPLOYD_INSTALL_ADMIN_PASSWORD`, and `DEPLOYD_INSTALL_YES=1` for the
+confirmations. Ports 80 and the management port are checked before Nginx is
+touched. The generated management site forwards the Basic Auth user to deployd
+as `X-Remote-User` for the audit log, applies the security headers to `/api/`
+too, and rate-limits `POST /deploys` on the public site.
 It repairs missing or unused development paths in an existing `.env`, keeps
 existing tokens and absolute paths, and backs up `.env` before changes. If a
 development path contains state, it stops with migration instructions rather
@@ -114,19 +127,26 @@ checked as the service user before startup.
 ```bash
 cd /opt/deployd
 git pull --ff-only origin main
-make install
-make build
-sudo systemctl restart deployd
+./deploy/install-ubuntu.sh
 ```
 
-For frontend-only changes, `git pull --ff-only origin main` followed by
-`make build` is enough; refresh the browser afterward.
+Rerunning the installer is the supported upgrade path: it refreshes the
+systemd unit, Nginx sites, the root website helper and file ownership, which
+`make install` alone does not. The upgrade runs lint, tests, the dependency
+audit and the web build **before** stopping the service, refuses to stop while
+any deploy is queued or running (it waits up to `DEPLOYD_INSTALL_WAIT_SECONDS`,
+default 600), writes an online backup of the state database to
+`/var/lib/deployd/backups/` (newest five kept), and stops only for the
+dependency sync and restart. For frontend-only changes,
+`git pull --ff-only origin main` followed by `make build` is enough; refresh
+the browser afterward.
 
 ## Uninstall from Ubuntu
 
 ```bash
 cd /opt/deployd
-./deploy/uninstall-ubuntu.sh
+./deploy/uninstall-ubuntu.sh            # add --purge to also drop /srv/deployd,
+                                        # /var/lib/deployd-connect, tooling and logs
 ```
 
 [`deploy/uninstall-ubuntu.sh`](deploy/uninstall-ubuntu.sh) offers a
@@ -138,8 +158,8 @@ Custom runtime paths outside the checkout and `/var/lib/deployd` are not include
 in the backup or removed; back them up separately. Removal aborts if the service
 cannot stop; rejected Nginx changes are restored before continuing.
 
-The installer stops deployd before rebuilding dependencies, repairs ownership
-of standard runtime files, and validates service-user access before restarting.
+The installer repairs ownership of standard runtime files and validates
+service-user access before restarting.
 Managed Python downloads live under `.python` in the checkout so systemd's
 `ProtectHome` does not hide them. Existing virtual environments pointing into a
 home directory must be recreated before installation can complete. If an upgrade
@@ -224,8 +244,11 @@ branch, then select **Actions → Deploy APP → Run workflow** and the deployme
 branch. After a successful test, you can enable deployment on pushes, download
 again, and commit the updated workflow. Saving here does not update GitHub.
 Only the selected output folder is packaged, with readable modes for Nginx.
-Git metadata is excluded; hidden files, symlinks, dependencies, and common private
-keys are rejected. Review the output for other private content before deploying.
+Git metadata is excluded; symlinks, dependency folders, common private keys and
+credential dotfiles (`.env*`, `.ssh`, `.npmrc`, `.netrc` and similar) are
+rejected, while dotfiles a site needs such as `.well-known`, `.htaccess` and
+`.nojekyll` are allowed. Review the output for other private content before
+deploying.
 
 Saving configures deployd; it does **not** add GitHub secrets/workflows, test the
 GitHub credential, alter Nginx, or deploy the app. Copy the signing secret into
@@ -242,6 +265,16 @@ into your app repo and vendor
 `scripts/notify_deploy.py`. The repo needs one secret (`DEPLOYD_SECRET`) and
 one variable (`DEPLOYD_URL`). Public release downloads need no GitHub credential
 on the server.
+
+The workflow has two jobs: a read-only `build` job that packages and uploads
+the artifact, and a `publish` job with `contents: write` that re-verifies the
+checksum, creates the `deploy-<app>-<sha>` release, notifies deployd, and
+prunes older deploy releases and tags beyond the newest ten. A
+`workflow_dispatch` input `dry_run` builds and packages without publishing.
+Uncomment the `environment:` line to require reviewers before production
+pushes. The notifier retries transient HTTP errors (429, 502 to 504, 520 to
+524) with backoff and treats `superseded` and `cancelled` as failures with a
+clear message.
 
 For a private repository, add a fine-grained token with **Contents: read** for
 that repository in the app form; no service restart is needed. The server-wide
@@ -458,6 +491,28 @@ Existing `keep_releases` configurations remain supported: their total count is
 converted to `keep_previous = keep_releases - 1`, preserving the existing policy.
 For example, the old `keep_releases: 5` becomes `keep_previous: 4`.
 An earlier `keep_previous: null` now uses the default of one previous version.
+
+## Database migrations
+
+`deployd-migrate` applies `NNN_name.sql` files from a directory in numeric
+order, records each file's SHA256 in `deploy_migrations`, and refuses to run
+when an applied file changed. Use it as the app's `migrate.command` so a failed
+migration halts the deploy before cutover.
+
+```bash
+deployd-migrate --dir migrations --dialect mssql --dsn-env DEPLOYD_MIGRATE_DSN
+deployd-migrate --dir migrations --dialect postgres --dsn-file /etc/app/dsn --dry-run
+deployd-migrate --dir migrations status
+```
+
+Pass the DSN through `--dsn-env` (default `DEPLOYD_MIGRATE_DSN`) or
+`--dsn-file`; `--dsn` works but is visible to other users in `ps`. On SQL
+Server each file runs with `SET XACT_ABORT ON` inside one transaction, every
+result set is drained so errors after a `PRINT` still fail the file, and a
+file that manages its own transactions is rejected. Runners sharing one
+database serialize on `sp_getapplock` (SQL Server) or `pg_advisory_xact_lock`
+(PostgreSQL). Install the driver with `pip install 'deployd[mssql]'` or
+`'deployd[postgres]'`.
 
 ## Operations
 

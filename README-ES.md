@@ -27,8 +27,9 @@ fijo firmado por HMAC es toda la superficie de ataque.
   un cambio controlado de junction (Windows); si el health check falla, el
   rollback es automático
 - **Migraciones que condicionan el release** — migraciones SQL forward-only
-  con checksum (`deployd-migrate`, SQL Server vía pyodbc) corren antes del
-  cutover y detienen el despliegue en seco si fallan
+  con checksum (`deployd-migrate`, SQL Server vía pyodbc o PostgreSQL vía
+  psycopg) corren antes del cutover bajo un lock a nivel de base de datos y
+  detienen el despliegue en seco si fallan
 - **Hooks y aserciones de salud** — comandos opcionales `before_cutover` y
   `after_health`, y health checks que pueden exigir el SHA desplegado en el
   cuerpo o en un header de la respuesta, para que un proceso viejo no pase
@@ -94,7 +95,10 @@ desempaquetado devuelve el deploy a la cola y se reanuda al reiniciar.
 
 Git es la única dependencia inicial. El instalador guiado instala los demás
 requisitos del sistema y del proyecto, ejecuta las validaciones y configura el
-servicio, Nginx, el estado y la interfaz de administración.
+servicio, Nginx, el estado y la interfaz de administración. Node 22 y `uv` se
+descargan como tarballs oficiales, se verifican contra sus checksums publicados
+y quedan bajo el checkout (`.node`) y `~/.local/bin`; nada se canaliza desde la
+red a un shell.
 
 ```bash
 sudo apt update
@@ -110,8 +114,18 @@ normal propietario del repositorio, no con `sudo`. El script eleva únicamente
 las operaciones que necesitan acceso al sistema. El modo Flexible de
 Cloudflare es solo para pruebas; restringe el puerto de administración con el
 firewall y usa Full (strict) antes de producción.
-El instalador solicita el dominio público, bind/puerto de administración y
-usuario de Basic Auth, y genera el token de administración cuando hace falta.
+El instalador solicita el dominio público, bind/puerto de administración (por
+defecto `127.0.0.1:844`) y usuario de Basic Auth, y genera el token de
+administración cuando hace falta. El token nunca se imprime; el instalador
+indica dónde quedó. Cada pregunta acepta una variable de entorno para
+ejecuciones desatendidas: `DEPLOYD_INSTALL_DOMAIN`,
+`DEPLOYD_INSTALL_ADMIN_BIND`, `DEPLOYD_INSTALL_ADMIN_PORT`,
+`DEPLOYD_INSTALL_ADMIN_USER`, `DEPLOYD_INSTALL_ADMIN_PASSWORD` y
+`DEPLOYD_INSTALL_YES=1` para las confirmaciones. Los puertos 80 y el de
+administración se verifican antes de tocar Nginx. El sitio de administración
+generado reenvía el usuario de Basic Auth a deployd como `X-Remote-User` para
+la bitácora de auditoría, aplica los headers de seguridad también a `/api/` y
+limita la tasa de `POST /deploys` en el sitio público.
 Repara rutas de desarrollo ausentes o sin datos en un `.env` existente,
 conserva tokens y rutas absolutas, y respalda `.env` antes de modificarlo.
 Si una ruta de desarrollo contiene datos, se detiene con instrucciones de
@@ -123,19 +137,26 @@ del servicio antes de iniciarlo.
 ```bash
 cd /opt/deployd
 git pull --ff-only origin main
-make install
-make build
-sudo systemctl restart deployd
+./deploy/install-ubuntu.sh
 ```
 
-Para cambios únicamente del frontend basta con ejecutar
+Volver a ejecutar el instalador es la ruta de actualización soportada: refresca
+la unidad de systemd, los sitios de Nginx, el helper root de sitios y los
+permisos, cosas que `make install` por sí solo no hace. La actualización corre
+lint, pruebas, auditoría de dependencias y el build web **antes** de detener el
+servicio, se niega a detenerlo mientras haya deploys en cola o en ejecución
+(espera hasta `DEPLOYD_INSTALL_WAIT_SECONDS`, 600 por defecto), escribe un
+respaldo en línea de la base de estado en `/var/lib/deployd/backups/` (conserva
+los cinco más recientes) y se detiene solo para sincronizar dependencias y
+reiniciar. Para cambios únicamente del frontend basta con ejecutar
 `git pull --ff-only origin main` y `make build`; después refresca el navegador.
 
 ## Desinstalación en Ubuntu
 
 ```bash
 cd /opt/deployd
-./deploy/uninstall-ubuntu.sh
+./deploy/uninstall-ubuntu.sh            # agrega --purge para eliminar también /srv/deployd,
+                                        # /var/lib/deployd-connect, herramientas y logs
 ```
 
 [`deploy/uninstall-ubuntu.sh`](deploy/uninstall-ubuntu.sh) ofrece un respaldo
@@ -148,8 +169,8 @@ mantener su propietario. Las rutas de estado personalizadas fuera del checkout y
 La desinstalación se detiene si no puede parar el servicio y restaura los cambios
 de Nginx si su validación o recarga falla.
 
-El instalador detiene deployd antes de reconstruir dependencias, repara permisos
-del estado estándar y verifica el acceso del usuario de servicio. Python
+El instalador repara permisos del estado estándar y verifica el acceso del
+usuario de servicio antes de reiniciar. Python
 administrado se instala en `.python` dentro del checkout para que `ProtectHome`
 no lo oculte. Si una `.venv` existente apunta al directorio personal, debe
 recrearse. Si falla una actualización tras detener el servicio, corrige el error
@@ -240,8 +261,10 @@ Por defecto, el workflow es manual. Súbelo a la rama predeterminada y usa
 Después de una prueba exitosa puedes habilitar despliegues al hacer push,
 descargar otra vez y subir el workflow actualizado. Guardar aquí no modifica GitHub.
 Solo se empaqueta la carpeta seleccionada, con permisos de lectura para Nginx.
-Se excluyen metadatos de Git y se rechazan archivos ocultos, enlaces, dependencias
-y archivos comunes de claves privadas. Revisa si hay otro contenido privado.
+Se excluyen metadatos de Git y se rechazan enlaces, carpetas de dependencias,
+claves privadas comunes y dotfiles de credenciales (`.env*`, `.ssh`, `.npmrc`,
+`.netrc` y similares); los dotfiles que un sitio necesita, como `.well-known`,
+`.htaccess` y `.nojekyll`, sí se permiten. Revisa si hay otro contenido privado.
 
 Guardar configura deployd; **no** agrega secretos ni workflows a GitHub,
 prueba el token, modifica Nginx ni despliega la aplicación. Copia el secreto de
@@ -258,6 +281,16 @@ al repo de tu aplicación e incorpora
 `scripts/notify_deploy.py`. El repo necesita un secreto (`DEPLOYD_SECRET`) y
 una variable (`DEPLOYD_URL`). Las descargas públicas no necesitan una credencial
 de GitHub en el servidor.
+
+El workflow tiene dos jobs: un `build` de solo lectura que empaqueta y sube el
+artefacto, y un `publish` con `contents: write` que vuelve a verificar el
+checksum, crea el release `deploy-<app>-<sha>`, notifica a deployd y elimina los
+releases y tags de deploy anteriores más allá de los diez más recientes. La
+entrada `dry_run` de `workflow_dispatch` compila y empaqueta sin publicar.
+Descomenta la línea `environment:` para exigir revisores antes de los pushes a
+producción. El notificador reintenta errores HTTP transitorios (429, 502 a 504,
+520 a 524) con espera creciente y trata `superseded` y `cancelled` como fallos
+con un mensaje claro.
 
 Para un repositorio privado, agrega en el formulario un token granular con
 **Contents: read** para ese repositorio; no requiere reiniciar el servicio.
@@ -475,6 +508,28 @@ Las configuraciones existentes con `keep_releases` siguen funcionando: el total
 se convierte a `keep_previous = keep_releases - 1`, conservando su política.
 Por ejemplo, `keep_releases: 5` equivale a `keep_previous: 4`.
 Un valor anterior `keep_previous: null` ahora usa el valor predeterminado de una versión anterior.
+
+## Migraciones de base de datos
+
+`deployd-migrate` aplica archivos `NNN_nombre.sql` de un directorio en orden
+numérico, registra el SHA256 de cada archivo en `deploy_migrations` y se niega a
+correr cuando un archivo ya aplicado cambió. Úsalo como `migrate.command` de la
+app para que una migración fallida detenga el deploy antes del cutover.
+
+```bash
+deployd-migrate --dir migrations --dialect mssql --dsn-env DEPLOYD_MIGRATE_DSN
+deployd-migrate --dir migrations --dialect postgres --dsn-file /etc/app/dsn --dry-run
+deployd-migrate --dir migrations status
+```
+
+Pasa el DSN con `--dsn-env` (por defecto `DEPLOYD_MIGRATE_DSN`) o `--dsn-file`;
+`--dsn` funciona pero es visible para otros usuarios en `ps`. En SQL Server cada
+archivo corre con `SET XACT_ABORT ON` dentro de una transacción, se drenan todos
+los result sets para que un error después de un `PRINT` siga fallando el
+archivo, y un archivo que maneja sus propias transacciones se rechaza. Los
+runners que comparten una base se serializan con `sp_getapplock` (SQL Server) o
+`pg_advisory_xact_lock` (PostgreSQL). Instala el driver con
+`pip install 'deployd[mssql]'` o `'deployd[postgres]'`.
 
 ## Operación
 
