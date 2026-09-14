@@ -12,6 +12,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request, Response
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 
+from .. import account
 from ..config import (
     APP_NAME_PATTERN,
     AppSpec,
@@ -61,6 +62,55 @@ def _audit(request: Request, action: str, target: str | None, detail: str | None
 
 class ReleaseSelection(BaseModel):
     release: str = Field(pattern=r"^(?:[0-9a-f]{40}-[0-9a-f]{32}|previous|b4deployd)$")
+
+
+class PasswordChange(BaseModel):
+    current_password: SecretStr
+    new_password: SecretStr
+
+    @model_validator(mode="after")
+    def validate_passwords(self):
+        current = self.current_password.get_secret_value()
+        new = self.new_password.get_secret_value()
+        if not current or len(current.encode()) > 4096:
+            raise ValueError("invalid current password length")
+        if len(new) < 12 or len(new.encode()) > 72:
+            raise ValueError(
+                "new password must be at least 12 characters and at most 72 UTF-8 bytes"
+            )
+        if any(ord(char) < 32 or ord(char) == 127 for char in current + new):
+            raise ValueError("passwords cannot contain control characters")
+        if current == new:
+            raise ValueError("new password must be different")
+        return self
+
+
+def management_user(request: Request) -> str:
+    username = request.headers.get("x-remote-user", "")
+    if not _ACTOR_RE.fullmatch(username):
+        raise HTTPException(403, "Sign in through the management web interface first.")
+    return username
+
+
+@router.get("/account")
+def get_account(request: Request):
+    return {
+        "username": management_user(request),
+        "password_change_available": account.HELPER.is_file(),
+    }
+
+
+@router.post("/account/password")
+def change_management_password(body: PasswordChange, request: Request):
+    username = management_user(request)
+    try:
+        account.change_password(
+            username, body.current_password.get_secret_value(), body.new_password.get_secret_value()
+        )
+    except account.PasswordError as exc:
+        raise HTTPException(exc.status, str(exc)) from None
+    _audit(request, "account.password.change", username)
+    return {"changed": True}
 
 
 class WebsiteConfirmation(BaseModel):

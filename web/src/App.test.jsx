@@ -55,6 +55,17 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers())
 
 describe('App', () => {
+  it('opens management password settings only on request', async () => {
+    global.fetch = mockFetch({ ...BASE, 'GET /api/admin/account': { username: 'dan', password_change_available: true } })
+    render(<App />)
+    const button = await screen.findByRole('button', { name: 'Change management password' })
+    expect(calls(global.fetch, '/api/admin/account')).toHaveLength(0)
+    fireEvent.click(button)
+    expect(await screen.findByLabelText('Current password')).toBeInTheDocument()
+    expect(screen.getByLabelText('Username')).toHaveValue('dan')
+    expect(calls(global.fetch, '/api/admin/account')).toHaveLength(1)
+  })
+
   it('labels website operations and does not offer artifact redeploy for them', async () => {
     global.fetch = mockFetch({ ...BASE,
       'GET /api/admin/deploys': [{ ...DEPLOYS[0], kind: undefined, commit_sha: '0'.repeat(40), artifact_url: 'local-website://remove' }] })

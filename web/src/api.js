@@ -58,6 +58,8 @@ const app = (name) => `/admin/apps/${encodeURIComponent(name)}`
 
 export function createApi(call) {
   return {
+    account: () => call('/admin/account'),
+    changePassword: (credentials) => call('/admin/account/password', post(credentials)),
     apps: () => call('/admin/apps'),
     deploys: ({ limit = 50, offset = 0, app: appName, status } = {}) =>
       call(`/admin/deploys${query({ limit, offset, app: appName, status })}`),

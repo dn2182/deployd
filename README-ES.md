@@ -130,6 +130,22 @@ Si una ruta de desarrollo contiene datos, se detiene con instrucciones de
 migración. Valida las rutas y la configuración de aplicaciones con el usuario
 del servicio antes de iniciarlo.
 
+### Cambiar la contraseña de administración
+
+Usa el botón de llave del encabezado, **Cambiar contraseña de administración**.
+Ingresa tu contraseña actual y confirma la nueva. Solo cambia el acceso Basic Auth
+de Nginx; el token de administración y los secretos de las aplicaciones no cambian.
+El navegador puede pedirte que ingreses de nuevo con la nueva contraseña. Usa
+HTTPS o un túnel SSH para administrar, nunca HTTP público.
+
+En instalaciones existentes, ejecuta primero el instalador actualizado. Conserva
+el acceso y traslada los hashes de `/etc/nginx/deployd.htpasswd` a
+`/var/lib/deployd-auth/htpasswd`, propiedad de root. Un helper con permisos sudo
+limitados verifica la contraseña actual y reemplaza el hash de forma atómica;
+deployd no puede leer ni escribir ese archivo directamente. No agrega servicios ni
+puertos. La desinstalación incluye las credenciales y el helper en el respaldo
+opcional y los elimina junto con la configuración de administración.
+
 ## Actualización en Ubuntu
 
 ```bash

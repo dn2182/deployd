@@ -15,6 +15,61 @@ ADMIN_TOKEN = "a" * 32
 ADMIN = {"X-Admin-Token": ADMIN_TOKEN}
 
 
+def test_management_password_requires_token_and_proxy_user(env, monkeypatch):
+    from deployd import account
+
+    calls = []
+    monkeypatch.setattr(account, "change_password", lambda *args: calls.append(args))
+    body = {"current_password": "old-password", "new_password": "new-password-123"}
+    with TestClient(create_app()) as client:
+        url = "/admin/account/password"
+        assert client.post(url, json=body).status_code == 401
+        assert client.post(url, headers=ADMIN, json=body).status_code == 403
+        headers = {**ADMIN, "X-Remote-User": "dan"}
+        assert client.get("/admin/account", headers=headers).json()["username"] == "dan"
+        assert client.post(url, headers=headers, json=body).json() == {"changed": True}
+        assert calls == [("dan", "old-password", "new-password-123")]
+        audit = client.get("/admin/audit", headers=ADMIN).text
+        assert "account.password.change" in audit
+        assert "old-password" not in audit and "new-password-123" not in audit
+
+
+def test_management_password_validation_does_not_echo_secrets(env, monkeypatch):
+    from deployd import account
+
+    calls = []
+    monkeypatch.setattr(account, "change_password", lambda *args: calls.append(args))
+    headers = {**ADMIN, "X-Remote-User": "dan"}
+    with TestClient(create_app()) as client:
+        for password in ("short", "é" * 37, "bad\npassword-long", "original-password"):
+            response = client.post(
+                "/admin/account/password",
+                headers=headers,
+                json={"current_password": "original-password", "new_password": password},
+            )
+            assert response.status_code == 422
+            assert "original-password" not in response.text
+            assert '"input"' not in response.text
+        assert calls == []
+
+
+def test_management_wrong_password_does_not_reject_admin_token(env, monkeypatch):
+    from deployd import account
+
+    def fail(*args):
+        raise account.PasswordError(400, "Current password is incorrect.")
+
+    monkeypatch.setattr(account, "change_password", fail)
+    with TestClient(create_app()) as client:
+        response = client.post(
+            "/admin/account/password",
+            headers={**ADMIN, "X-Remote-User": "dan"},
+            json={"current_password": "incorrect", "new_password": "new-password-123"},
+        )
+        assert response.status_code == 400
+        assert client.get("/admin/apps", headers=ADMIN).status_code == 200
+
+
 def test_website_connection_requires_confirmation_and_idle_app(env, monkeypatch):
     monkeypatch.setattr(website, "arguments", lambda *args: ["unused"])
     with TestClient(create_app()) as client:

@@ -27,6 +27,16 @@ curl --fail --silent -u smoke-admin:smoke-password http://127.0.0.1:844/ >/dev/n
 [[ $(sudo stat -c '%U:%G:%a' /usr/local/libexec/deployd/connect-website) == root:root:755 ]]
 [[ $(sudo stat -c '%U:%G:%a' /etc/sudoers.d/deployd-connect) == root:root:440 ]]
 sudo env GITHUB_ACTIONS=true python3 "$checkout/tests/website-smoke.py"
+sudo env GITHUB_ACTIONS=true python3 "$checkout/tests/password-smoke.py"
+[[ $(sudo stat -c '%U:%G:%a' /var/lib/deployd-auth/htpasswd) == root:www-data:640 ]]
+[[ $(sudo stat -c '%U:%G:%a' /usr/local/libexec/deployd/change-password) == root:root:755 ]]
+[[ $(sudo stat -c '%U:%G:%a' /etc/sudoers.d/deployd-password) == root:root:440 ]]
+sudo -u deployd test ! -r /var/lib/deployd-auth/htpasswd
+
+# Simulate the old credential location to exercise upgrade migration.
+auth_before=$(sudo sha256sum /var/lib/deployd-auth/htpasswd | cut -d' ' -f1)
+sudo cp -p /var/lib/deployd-auth/htpasswd /etc/nginx/deployd.htpasswd
+sudo rm /var/lib/deployd-auth/htpasswd
 
 sudo -u deployd touch /srv/deployd/retained-app-data
 owner=$(id -u deployd)
@@ -34,6 +44,8 @@ before=$(sudo sha256sum /opt/deployd/.env /var/lib/deployd/apps.yaml /var/lib/de
 /opt/deployd/deploy/install-ubuntu.sh </dev/null >"$RUNNER_TEMP/deployd-upgrade.log" 2>&1
 after=$(sudo sha256sum /opt/deployd/.env /var/lib/deployd/apps.yaml /var/lib/deployd/secrets.env)
 [[ $before == "$after" ]]
+[[ $(sudo sha256sum /var/lib/deployd-auth/htpasswd | cut -d' ' -f1) == "$auth_before" ]]
+[[ ! -e /etc/nginx/deployd.htpasswd ]]
 sudo systemctl is-active --quiet deployd
 grep -q 'Management Basic Auth user (existing): smoke-admin' "$RUNNER_TEMP/deployd-upgrade.log"
 grep -qE '[0-9a-f]{64}' "$RUNNER_TEMP/deployd-install.log" && exit 1
@@ -49,6 +61,8 @@ printf 'y\nREMOVE deployd\nr\n' | /opt/deployd/deploy/uninstall-ubuntu.sh
 [[ ! -e /etc/nginx/sites-enabled/deployd && ! -e /etc/systemd/system/deployd.service ]]
 [[ $(id -u deployd) == "$owner" && -f /srv/deployd/retained-app-data ]]
 [[ ! -e /etc/sudoers.d/deployd-connect && ! -e /usr/local/libexec/deployd/connect-website ]]
+[[ ! -e /etc/sudoers.d/deployd-password && ! -e /usr/local/libexec/deployd/change-password ]]
+[[ ! -e /var/lib/deployd-auth && ! -e /etc/nginx/deployd.htpasswd ]]
 [[ -d /var/www/deployd-smoke.example && ! -L /var/www/deployd-smoke.example ]]
 [[ -f /srv/deployd/website-smoke/releases/b4deployd/index.html ]]
 [[ $(< /var/www/deployd-smoke.example/index.html) == 'deployed site' ]]

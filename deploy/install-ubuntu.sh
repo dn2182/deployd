@@ -385,13 +385,28 @@ configure_runtime() {
 }
 
 existing_basic_auth_user() {
-  sudo test -f "$HTPASSWD_FILE" || return 1
-  sudo cut -d: -f1 "$HTPASSWD_FILE" | head -n 1
+  local file=$HTPASSWD_FILE
+  sudo test -f "$file" || file=$LEGACY_HTPASSWD_FILE
+  sudo test -f "$file" || return 1
+  sudo cut -d: -f1 "$file" | head -n 1
 }
 
 configure_basic_auth() {
   local username=$1
+  local path
+  for path in /var /var/lib "$AUTH_DIR"; do
+    sudo test ! -L "$path" || die "credential directories must not be symbolic links"
+    if sudo test -e "$path"; then
+      [[ $(sudo stat -c '%U' "$path") == root ]] || die "credential directories must be root-owned"
+      [[ $(sudo find "$path" -maxdepth 0 -perm /022 -print) == '' ]] || die "credential directories must be protected"
+    fi
+  done
+  sudo install -d -o root -g www-data -m 0750 "$AUTH_DIR"
   sudo test ! -L "$HTPASSWD_FILE" || die "Basic Auth file must not be a symbolic link"
+  sudo test ! -L "$LEGACY_HTPASSWD_FILE" || die "legacy Basic Auth file must not be a symbolic link"
+  if ! sudo test -e "$HTPASSWD_FILE" && sudo test -f "$LEGACY_HTPASSWD_FILE"; then
+    sudo install -o root -g www-data -m 0640 "$LEGACY_HTPASSWD_FILE" "$HTPASSWD_FILE"
+  fi
   if sudo test -f "$HTPASSWD_FILE"; then
     printf 'Keeping existing management Basic Auth file: %s\n' "$HTPASSWD_FILE"
   else
@@ -411,6 +426,28 @@ configure_basic_auth() {
   fi
   sudo chown root:www-data "$HTPASSWD_FILE"
   sudo chmod 0640 "$HTPASSWD_FILE"
+}
+
+install_password_helper() {
+  local repo_root=$1 path rule
+  for path in /usr/local /usr/local/libexec /usr/local/libexec/deployd; do
+    sudo test ! -L "$path" || die "helper directory must not be a symlink"
+    if sudo test -e "$path"; then
+      [[ $(sudo stat -c '%U' "$path") == root ]] || die "helper directory must be root-owned"
+      [[ $(sudo find "$path" -maxdepth 0 -perm /022 -print) == '' ]] || die "helper directory must be protected"
+    fi
+  done
+  sudo install -d -o root -g root -m 0755 /usr/local/libexec /usr/local/libexec/deployd
+  sudo test ! -L "$PASSWORD_HELPER" || die "password helper must not be a symlink"
+  sudo install -o root -g root -m 0755 "$repo_root/deploy/change_password.py" "$PASSWORD_HELPER"
+  rule=$(sudo mktemp "${PASSWORD_SUDOERS}.XXXXXX")
+  printf 'deployd ALL=(root) NOPASSWD: NOSETENV: %s ""\n' "$PASSWORD_HELPER" | sudo tee "$rule" >/dev/null
+  sudo chmod 0440 "$rule"
+  if ! sudo visudo -cf "$rule"; then
+    sudo rm -f -- "$rule"
+    die "invalid password helper sudoers rule"
+  fi
+  sudo mv -T -- "$rule" "$PASSWORD_SUDOERS"
 }
 
 render_security_headers() {
@@ -698,10 +735,12 @@ main() {
   install_application "$repo_root"
   token_state=$(configure_runtime "$repo_root") || die "runtime setup failed"
   configure_basic_auth "$admin_username"
+  install_password_helper "$repo_root"
   install_website_helper "$repo_root"
   install_service "$repo_root"
   write_nginx_config "$repo_root" "$domain" "$admin_bind" "$admin_port"
   verify_installation "$domain" "$admin_port"
+  sudo rm -f -- "$LEGACY_HTPASSWD_FILE"
 
   printf '\nInstallation complete.\n'
   printf 'Public API: https://%s (Cloudflare proxy to origin port 80)\n' "$domain"

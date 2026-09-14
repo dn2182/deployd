@@ -7,7 +7,7 @@ endif
 
 # Runs project tooling in a throwaway environment so a live .venv is never modified.
 UVRUN := $(UV) run --extra dev --frozen --isolated
-PY_SOURCES := src tests deploy/runtime_config.py deploy/connect_website.py
+PY_SOURCES := src tests deploy/runtime_config.py deploy/connect_website.py deploy/change_password.py
 
 .PHONY: install install-web build clean dev dev-web update test lint audit check
 

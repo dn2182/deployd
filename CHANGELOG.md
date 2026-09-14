@@ -6,6 +6,10 @@ Initial release.
 
 ### Hardening pass (September 2026)
 
+- Change the management login password from the English/Spanish admin UI,
+  requiring the current password without rotating API or app secrets. The Ubuntu
+  installer preserves existing logins and installs a narrowly scoped password
+  helper; uninstall includes its credentials in the optional backup and removes it.
 - The last-deploy summary excludes cleanup and other local operations. History
   pagination ignores stale responses after filter, session or refresh changes.
 - Release cleanup shares the per-app deployment queue and drains safely on

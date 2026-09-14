@@ -51,11 +51,11 @@ show_scope() {
     "This permanently removes deployd and all installer-owned data:" \
     "  $SERVICE_FILE and $SERVICE_DROPIN" \
     "  $NGINX_SITE, $NGINX_LINK, and deployd Nginx backups" \
-    "  $HTPASSWD_FILE" \
+    "  $AUTH_DIR (management password hashes) and $LEGACY_HTPASSWD_FILE" \
     "  $STATE_DIR (database, backups, app registry, and signing secrets)" \
     "  system user and group: deployd (only when no app data is retained)" \
     "  $REPO_ROOT (source, .env, dependencies, tooling, and built frontend)" \
-    "  website connection helper and its installer-owned sudo rule" \
+    "  website connection and password helpers with their installer-owned sudo rules" \
     "" \
     "Shared packages, deployed application releases, firewall rules, DNS, and" \
     "user-created sudoers rules are not removed." \
@@ -97,11 +97,14 @@ create_backup() {
     "${CONNECT_STATE_DIR#/}" \
     "${HELPER_SUDOERS#/}" \
     "${HELPER_BIN#/}" \
+    "${PASSWORD_HELPER#/}" \
+    "${PASSWORD_SUDOERS#/}" \
+    "${AUTH_DIR#/}" \
+    "${LEGACY_HTPASSWD_FILE#/}" \
     "${SERVICE_FILE#/}" \
     "${SERVICE_DROPIN#/}" \
     "${NGINX_SITE#/}" \
-    "${NGINX_LINK#/}" \
-    "${HTPASSWD_FILE#/}"; do
+    "${NGINX_LINK#/}"; do
     if sudo test -e "/$item" || sudo test -L "/$item"; then
       items+=("$item")
     fi
@@ -230,7 +233,7 @@ stop_service_safely() {
 
 check_removal_targets() {
   local path mounts target
-  local -a targets=("$REPO_ROOT" "$STATE_DIR" "$SERVICE_FILE" "$SERVICE_DROPIN" "$NGINX_SITE" "$HTPASSWD_FILE")
+  local -a targets=("$REPO_ROOT" "$STATE_DIR" "$AUTH_DIR" "$SERVICE_FILE" "$SERVICE_DROPIN" "$NGINX_SITE" "$HTPASSWD_FILE" "$LEGACY_HTPASSWD_FILE")
   if [[ $purge == "true" ]]; then
     targets+=("$RELEASE_ROOT" "$CONNECT_STATE_DIR")
   fi
@@ -351,6 +354,10 @@ main() {
   remove_service
   remove_file "$HELPER_SUDOERS"
   remove_file "$HELPER_BIN"
+  remove_file "$PASSWORD_SUDOERS"
+  remove_file "$PASSWORD_HELPER"
+  remove_file "$LEGACY_HTPASSWD_FILE"
+  remove_tree "$AUTH_DIR" "/var/lib/deployd-auth"
   sudo rmdir "$(dirname -- "$HELPER_BIN")" 2>/dev/null || true
   remove_tree "$STATE_DIR" "/var/lib/deployd"
   sudo rmdir "$RELEASE_ROOT" 2>/dev/null || true

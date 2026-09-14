@@ -120,6 +120,22 @@ development path contains state, it stops with migration instructions rather
 than switching to an empty database. Runtime paths and app configuration are
 checked as the service user before startup.
 
+### Change your management password
+
+Use the key button in the admin header, **Change management password**. Enter
+your current password and confirm a new one. This changes Nginx Basic Auth only;
+the API admin token and application signing secrets are unchanged. Your browser
+may prompt you to sign in again with the new password. Use HTTPS or an SSH tunnel,
+not public HTTP, for management access.
+
+Existing installations must rerun the updated installer first. It preserves
+the existing login while moving password hashes from `/etc/nginx/deployd.htpasswd`
+to the root-owned `/var/lib/deployd-auth/htpasswd`. A narrowly scoped sudo helper
+verifies the old password and atomically replaces the hash; deployd cannot read or
+write that file directly. No new service or port is added. Uninstall includes
+these credentials and the helper in its optional backup, then removes them along
+with the management configuration.
+
 ## Update on Ubuntu
 
 ```bash
