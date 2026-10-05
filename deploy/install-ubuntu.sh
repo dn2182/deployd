@@ -155,18 +155,23 @@ corepack_pnpm() {
     corepack prepare "pnpm@${PNPM_VERSION}" --activate
 }
 
+# A pnpm on PATH is only usable if it runs: distribution corepack shims can exist and still crash.
+pnpm_works() {
+  command -v pnpm >/dev/null 2>&1 && pnpm --version >/dev/null 2>&1
+}
+
 ensure_pnpm() {
-  if ! command -v pnpm >/dev/null 2>&1; then
-    if ! corepack_pnpm; then
-      # Distribution Node packages (Ubuntu's nodejs 22) ship a corepack that fails to
-      # activate pnpm. Fall back to the verified Node tarball, which carries a working one.
-      install_node
-      export PATH="$NODE_DIR/bin:$PATH"
-      hash -r
-      corepack_pnpm || die "pnpm installation failed"
-    fi
+  pnpm_works && return 0
+  if ! corepack_pnpm || ! pnpm_works; then
+    # Distribution Node packages (Ubuntu's nodejs 22) ship a corepack that cannot run pnpm.
+    # Drop its shims and fall back to the verified Node tarball, which carries a working one.
+    rm -f -- "$TOOL_BIN_DIR/pnpm" "$TOOL_BIN_DIR/pnpx"
+    install_node
+    export PATH="$NODE_DIR/bin:$PATH"
+    hash -r
+    corepack_pnpm || die "pnpm installation failed"
   fi
-  command -v pnpm >/dev/null 2>&1 || die "pnpm installation failed"
+  pnpm_works || die "pnpm installation failed"
 }
 
 install_prerequisites() {
