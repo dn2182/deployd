@@ -149,11 +149,22 @@ ensure_uv() {
   command -v uv >/dev/null 2>&1 || die "uv installation failed"
 }
 
+corepack_pnpm() {
+  command -v corepack >/dev/null 2>&1 || return 1
+  corepack enable --install-directory "$TOOL_BIN_DIR" &&
+    corepack prepare "pnpm@${PNPM_VERSION}" --activate
+}
+
 ensure_pnpm() {
   if ! command -v pnpm >/dev/null 2>&1; then
-    command -v corepack >/dev/null 2>&1 || die "corepack is missing from the Node.js installation"
-    corepack enable --install-directory "$TOOL_BIN_DIR"
-    corepack prepare "pnpm@${PNPM_VERSION}" --activate
+    if ! corepack_pnpm; then
+      # Distribution Node packages (Ubuntu's nodejs 22) ship a corepack that fails to
+      # activate pnpm. Fall back to the verified Node tarball, which carries a working one.
+      install_node
+      export PATH="$NODE_DIR/bin:$PATH"
+      hash -r
+      corepack_pnpm || die "pnpm installation failed"
+    fi
   fi
   command -v pnpm >/dev/null 2>&1 || die "pnpm installation failed"
 }
