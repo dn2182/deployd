@@ -7,7 +7,7 @@ license = "Apache-2.0"
 authors = [{name = "Daniel (dn2182)"}]
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi>=0.115",
+    "fastapi>=0.142.2",
     "uvicorn[standard]>=0.30",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
