@@ -109,9 +109,30 @@ def test_automatic_is_explicit_and_scoped_to_literal_branch():
     assert workflow["concurrency"] == {"group": "deploy-bluedatos", "cancel-in-progress": False}
 
 
+def test_tag_trigger_deploys_only_tagged_commits():
+    _, workflow = bundle(automatic=True, trigger="tag", tag_pattern="web-v*")
+    assert workflow["on"]["push"] == {"tags": ["web-v*"]}
+    assert workflow["jobs"]["build"]["if"] == "startsWith(github.ref, 'refs/tags/')"
+    archive, _ = bundle(automatic=True, trigger="tag", tag_pattern="web-v*")
+    instructions = archive.read("DEPLOYD-SETUP.md").decode()
+    assert "pushed tags matching web-v*" in instructions
+    assert "git tag v1.2.0" in instructions
+
+
+def test_tag_trigger_without_automatic_stays_manual_but_tag_scoped():
+    _, workflow = bundle(trigger="tag")
+    assert "push" not in workflow["on"]
+    assert workflow["jobs"]["build"]["if"] == "startsWith(github.ref, 'refs/tags/')"
+
+
 @pytest.mark.parametrize(
     "settings",
     [
+        {"trigger": "tag", "tag_pattern": "v*' || true || '"},
+        {"trigger": "tag", "tag_pattern": "../v1"},
+        {"trigger": "tag", "tag_pattern": "v1/"},
+        {"trigger": "tag", "tag_pattern": "${{ github.ref }}"},
+        {"trigger": "schedule"},
         {"project_dir": "../outside"},
         {"project_dir": "/etc"},
         {"project_dir": "a/../../b"},

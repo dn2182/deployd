@@ -4,6 +4,12 @@
 
 Initial release.
 
+### Tag-based deployment (October 2026)
+
+- GitHub Actions setup can trigger on Git tags matching a pattern (`v*`,
+  `web-v*`) instead of branch pushes, so only tagged commits deploy and one
+  repository can feed several apps with distinct prefixes.
+
 ### Hardening pass (September 2026)
 
 - Change the management login password from the English/Spanish admin UI,

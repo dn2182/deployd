@@ -259,7 +259,9 @@ from the UI. App names use hyphens, replaced with underscores in these keys.
 
 The completion screen and each app card provide **GitHub Actions setup**.
 Choose pnpm/npm, plain HTML (no build), or a custom build; specify the repository
-folder, build command, output folder, and deployment branch. Node presets install
+folder, build command, output folder, and the trigger: pushes to a deployment
+branch, or Git tags matching a pattern such as `v*` or `web-v*` so only the
+commits you tag go live, from any branch. Node presets install
 locked dependencies before building. Custom commands must install their own tools.
 **Save settings and download ZIP** remembers these settings and generates
 `.github/workflows/deploy.yml`, `scripts/notify_deploy.py`, and setup instructions.
@@ -268,8 +270,9 @@ any existing deployment workflow to avoid duplicate runs.
 
 Generated workflows are manual by default. Commit them to the repository's default
 branch, then select **Actions → Deploy APP → Run workflow** and the deployment
-branch. After a successful test, you can enable deployment on pushes, download
-again, and commit the updated workflow. Saving here does not update GitHub.
+branch (or a tag, in tag mode). After a successful test, you can enable
+automatic deployment on pushes or on matching tags, download again, and commit
+the updated workflow. Saving here does not update GitHub.
 Only the selected output folder is packaged, with readable modes for Nginx.
 Git metadata is excluded; symlinks, dependency folders, common private keys and
 credential dotfiles (`.env*`, `.ssh`, `.npmrc`, `.netrc` and similar) are

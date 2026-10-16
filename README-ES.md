@@ -276,7 +276,10 @@ bajos y el nombre se convierte a mayúsculas.
 
 La pantalla de confirmación y cada tarjeta ofrecen **Configuración de GitHub Actions**.
 Elige pnpm/npm, HTML simple (sin compilación) o un comando personalizado; indica
-la carpeta del repositorio, el comando, la carpeta de salida y la rama de despliegue.
+la carpeta del repositorio, el comando, la carpeta de salida y el disparador:
+pushes a una rama de despliegue, o tags de Git que coincidan con un patrón como
+`v*` o `web-v*` para que solo salgan a producción los commits que etiquetes,
+desde cualquier rama.
 Los presets de Node instalan dependencias desde el lockfile; los comandos
 personalizados deben instalar sus propias herramientas.
 **Guardar ajustes y descargar ZIP** guarda estos datos y genera
@@ -286,8 +289,9 @@ y revisa los workflows existentes para evitar ejecuciones duplicadas.
 
 Por defecto, el workflow es manual. Súbelo a la rama predeterminada y usa
 **Actions → Deploy APP → Run workflow**, seleccionando la rama de despliegue.
-Después de una prueba exitosa puedes habilitar despliegues al hacer push,
-descargar otra vez y subir el workflow actualizado. Guardar aquí no modifica GitHub.
+Después de una prueba exitosa puedes habilitar despliegues automáticos al hacer
+push o al subir un tag que coincida, descargar otra vez y subir el workflow
+actualizado. Guardar aquí no modifica GitHub.
 Solo se empaqueta la carpeta seleccionada, con permisos de lectura para Nginx.
 Se excluyen metadatos de Git y se rechazan enlaces, carpetas de dependencias,
 claves privadas comunes y dotfiles de credenciales (`.env*`, `.ssh`, `.npmrc`,

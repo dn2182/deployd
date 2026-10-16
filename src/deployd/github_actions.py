@@ -22,6 +22,11 @@ class GitHubActionsSettings(BaseModel):
     pnpm_version: str = Field(default="10.33.0", pattern=r"^[0-9]{1,2}\.[0-9]{1,3}\.[0-9]{1,3}$")
     branch: str = Field(default="main", max_length=100)
     automatic: bool = False
+    # "branch": the deployment branch deploys. "tag": only commits carrying a tag that
+    # matches tag_pattern deploy, from whichever branch; one repository can feed
+    # several apps with distinct prefixes (web-v*, api-v*).
+    trigger: Literal["branch", "tag"] = "branch"
+    tag_pattern: str = Field(default="v*", max_length=100)
 
     @field_validator("project_dir", "output_dir")
     @classmethod
@@ -48,6 +53,19 @@ class GitHubActionsSettings(BaseModel):
             or value.endswith("/")
         ):
             raise ValueError("use a literal Git branch name, without patterns")
+        return value
+
+    @field_validator("tag_pattern")
+    @classmethod
+    def tag_glob(cls, value):
+        if (
+            not re.fullmatch(r"[A-Za-z0-9*?][A-Za-z0-9_.*?/-]*", value)
+            or ".." in value
+            or "//" in value
+            or "@{" in value
+            or value.endswith(("/", ".", ".lock"))
+        ):
+            raise ValueError("use a Git tag name or a glob such as v* or web-v*")
         return value
 
     @field_validator("build_command")
@@ -91,7 +109,11 @@ def render_workflow(name: str, settings: GitHubActionsSettings, *, static_site: 
     workflow = yaml.safe_load(template)
     workflow["name"] = f"Deploy {name}"
     if settings.automatic:
-        workflow["on"]["push"] = {"branches": [settings.branch]}
+        workflow["on"]["push"] = (
+            {"tags": [settings.tag_pattern]}
+            if settings.trigger == "tag"
+            else {"branches": [settings.branch]}
+        )
     workflow["concurrency"]["group"] = f"deploy-{name}"
     workflow["env"] = {
         "APP_NAME": name,
@@ -99,7 +121,11 @@ def render_workflow(name: str, settings: GitHubActionsSettings, *, static_site: 
         "OUTPUT_DIR": "." if settings.kind == "static" else settings.output_dir,
     }
     build = workflow["jobs"]["build"]
-    build["if"] = f"github.ref == 'refs/heads/{settings.branch}'"
+    build["if"] = (
+        "startsWith(github.ref, 'refs/tags/')"
+        if settings.trigger == "tag"
+        else f"github.ref == 'refs/heads/{settings.branch}'"
+    )
     steps = build["steps"]
     build_steps = []
     if settings.kind in {"pnpm", "npm"}:
@@ -153,6 +179,23 @@ def render_workflow(name: str, settings: GitHubActionsSettings, *, static_site: 
     return "\n".join(lines) + "\n"
 
 
+def _trigger_summary(settings: GitHubActionsSettings) -> str:
+    if not settings.automatic:
+        return "manual only"
+    if settings.trigger == "tag":
+        return f"pushed tags matching {settings.tag_pattern}, and manual runs from a tag"
+    return f"push to {settings.branch} and manual"
+
+
+def _trigger_scope(settings: GitHubActionsSettings) -> str:
+    if settings.trigger == "tag":
+        return (
+            f"Only tagged commits deploy ({settings.tag_pattern}); the branch does not matter. "
+            "Tag the commit you want live, for example: git tag v1.2.0 && git push origin v1.2.0."
+        )
+    return f"Only {settings.branch} can deploy."
+
+
 def setup_bundle(name: str, repository: str, settings: GitHubActionsSettings, *, static_site: bool):
     workflow_text = render_workflow(name, settings, static_site=static_site)
     instructions = f"""# GitHub Actions setup: {name}
@@ -168,11 +211,11 @@ Repository: https://github.com/{repository}
    No secret values are included in this download.
 3. Commit and push the files. Manual runs appear after the workflow is on the
    repository's default branch. In Actions, choose Deploy {name}, Run workflow,
-   and select {settings.branch}.
+   and select {"a tag matching " + settings.tag_pattern if settings.trigger == "tag" else settings.branch}.
 
-Trigger: {"push to " + settings.branch + " and manual" if settings.automatic else "manual only"}.
-Only {settings.branch} can deploy. First verify a manual deployment before opting
-into push deployment. Downloading or saving settings does not update GitHub;
+Trigger: {_trigger_summary(settings)}.
+{_trigger_scope(settings)} First verify a manual deployment before opting
+into automatic deployment. Downloading or saving settings does not update GitHub;
 commit the newly generated workflow whenever these settings change.
 
 Build commands run in GitHub Actions, never on the deployd server. Node presets

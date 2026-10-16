@@ -22,6 +22,7 @@ export default function GitHubSetup({ name, spec, call, onChanged }) {
   const [form, setForm] = useState(() => ({
     kind: 'pnpm', project_dir: '.', output_dir: 'dist', build_command: 'pnpm run build',
     node_version: '22', pnpm_version: '10.33.0', branch: 'main', automatic: false,
+    trigger: 'branch', tag_pattern: 'v*',
     ...spec.github_actions,
   }))
   const [pending, setPending] = useState(false)
@@ -91,13 +92,26 @@ export default function GitHubSetup({ name, spec, call, onChanged }) {
           <input className={inputClass} required pattern="[0-9]{1,2}\.[0-9]{1,3}\.[0-9]{1,3}" value={form.pnpm_version}
             onChange={(event) => change('pnpm_version', event.target.value)} />
         </Field>}
-        <Field label={t('github.branch')}>
-          <input className={inputClass} required maxLength="100" value={form.branch}
-            onChange={(event) => change('branch', event.target.value)} />
+        <Field label={t('github.trigger')} help={t('github.trigger_help')}>
+          <select className={inputClass} value={form.trigger} onChange={(event) => change('trigger', event.target.value)}>
+            <option value="branch">{t('github.trigger_branch')}</option>
+            <option value="tag">{t('github.trigger_tag')}</option>
+          </select>
         </Field>
-        <Checkbox label={t('github.automatic')} checked={form.automatic}
+        {form.trigger === 'tag' ? (
+          <Field label={t('github.tag_pattern')} help={t('github.tag_pattern_help')}>
+            <input className={inputClass} required maxLength="100" value={form.tag_pattern}
+              placeholder="v*" onChange={(event) => change('tag_pattern', event.target.value)} />
+          </Field>
+        ) : (
+          <Field label={t('github.branch')}>
+            <input className={inputClass} required maxLength="100" value={form.branch}
+              onChange={(event) => change('branch', event.target.value)} />
+          </Field>
+        )}
+        <Checkbox label={t(form.trigger === 'tag' ? 'github.automatic_tag' : 'github.automatic')} checked={form.automatic}
           onChange={(event) => change('automatic', event.target.checked)} />
-        <Help>{t(form.automatic ? 'github.push_warning' : 'github.manual_help')}</Help>
+        <Help>{t(form.automatic ? (form.trigger === 'tag' ? 'github.tag_warning' : 'github.push_warning') : 'github.manual_help')}</Help>
         <Help>{t('github.artifact_help')}</Help>
         {error && <ErrorMessage compact>{error}</ErrorMessage>}
         <div><Button type="submit" variant="primary">{t(pending ? 'github.preparing' : 'github.download')}</Button></div>
