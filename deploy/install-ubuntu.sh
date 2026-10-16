@@ -3,7 +3,6 @@
 set -Eeuo pipefail
 
 # shellcheck source=deploy/lib.sh
-# shellcheck source=deploy/lib.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/lib.sh"
 
 readonly PNPM_VERSION="11.20.0"
@@ -75,13 +74,6 @@ choose_mode() {
     n | N | no | NO) printf 'reconfigure\n' ;;
     *) printf 'update\n' ;;
   esac
-}
-
-confirm_testing_mode() {
-  printf '%s\n' \
-    "Cloudflare Flexible mode leaves Cloudflare-to-origin traffic unencrypted." \
-    "The management port must remain blocked by the firewall or restricted to a trusted network."
-  confirm "Continue with this testing-only setup?" || die "installation declined"
 }
 
 validate_domain() {
@@ -779,7 +771,6 @@ main() {
   if [[ $mode == update ]]; then
     printf 'Updating in place: %s, management on %s:%s\n' "$domain" "$admin_bind" "$admin_port"
   else
-    confirm_testing_mode
     domain=$(prompt_default DEPLOYD_INSTALL_DOMAIN "Public deployd domain" "${domain:-deployd.example.com}")
     admin_bind=$(prompt_default DEPLOYD_INSTALL_ADMIN_BIND "Management bind address" "${admin_bind:-127.0.0.1}")
     admin_port=$(prompt_default DEPLOYD_INSTALL_ADMIN_PORT "Management port" "${admin_port:-844}")

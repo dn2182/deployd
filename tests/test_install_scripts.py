@@ -297,15 +297,6 @@ def test_update_flag_sets_mode_and_rejects_unknown_arguments():
     )
 
 
-def test_testing_mode_decline_exits_non_zero():
-    assert run_function("install-ubuntu.sh", "confirm_testing_mode", stdin="n\n").returncode != 0
-    assert run_function("install-ubuntu.sh", "confirm_testing_mode", stdin="").returncode != 0
-    assert (
-        run_function("install-ubuntu.sh", "DEPLOYD_INSTALL_YES=1 confirm_testing_mode").returncode
-        == 0
-    )
-
-
 def test_apt_update_runs_only_when_a_package_is_missing():
     result = run_function(
         "install-ubuntu.sh",
