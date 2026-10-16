@@ -337,7 +337,12 @@ de GitHub en el servidor.
 El workflow tiene dos jobs: un `build` de solo lectura que empaqueta y sube el
 artefacto, y un `publish` con `contents: write` que vuelve a verificar el
 checksum, crea el release `deploy-<app>-<sha>`, notifica a deployd y elimina los
-releases y tags de deploy anteriores más allá de los diez más recientes. La
+releases y tags de deploy anteriores más allá de los diez más recientes. Para
+espejos o nodos idénticos, llena **Destinos de despliegue** en la pestaña de
+configuración (`node1, node2`): el artefacto se publica una sola vez y un tercer
+job matriz `deploy` notifica a cada nodo usando `DEPLOYD_URL_NODE1` /
+`DEPLOYD_SECRET_NODE1` y así sucesivamente, con la app registrada en cada nodo
+bajo su propio secreto. La
 entrada `dry_run` de `workflow_dispatch` compila y empaqueta sin publicar.
 Descomenta la línea `environment:` para exigir revisores antes de los pushes a
 producción. El notificador reintenta errores HTTP transitorios (429, 502 a 504,

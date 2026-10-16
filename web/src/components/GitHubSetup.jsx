@@ -24,7 +24,12 @@ export default function GitHubSetup({ name, spec, call, onChanged }) {
     node_version: '22', pnpm_version: '10.33.0', branch: 'main', automatic: false,
     trigger: 'branch', tag_pattern: 'v*',
     ...spec.github_actions,
+    targets: (spec.github_actions?.targets || []).join(', '),
   }))
+  const payload = () => ({
+    ...form,
+    targets: form.targets.split(',').map((target) => target.trim()).filter(Boolean),
+  })
   const [pending, setPending] = useState(false)
   const [error, setError] = useState(null)
   const [saved, setSaved] = useState(false)
@@ -35,7 +40,7 @@ export default function GitHubSetup({ name, spec, call, onChanged }) {
     setPending(true)
     setError(null)
     try {
-      const result = await call(`${endpoint}/preview`, { method: 'POST', body: JSON.stringify(form) })
+      const result = await call(`${endpoint}/preview`, { method: 'POST', body: JSON.stringify(payload()) })
       setWorkflow(result.workflow)
     } catch (err) { setError(err.message) } finally { setPending(false) }
   }
@@ -64,7 +69,7 @@ export default function GitHubSetup({ name, spec, call, onChanged }) {
     setError(null)
     setSaved(false)
     try {
-      const result = await call(endpoint, { method: 'POST', body: JSON.stringify(form) })
+      const result = await call(endpoint, { method: 'POST', body: JSON.stringify(payload()) })
       downloadBundle(result)
       setWorkflow(result.workflow)
       setSaved(true)
@@ -129,6 +134,10 @@ export default function GitHubSetup({ name, spec, call, onChanged }) {
         <Checkbox label={t(form.trigger === 'tag' ? 'github.automatic_tag' : 'github.automatic')} checked={form.automatic}
           onChange={(event) => change('automatic', event.target.checked)} />
         <Help>{t(form.automatic ? (form.trigger === 'tag' ? 'github.tag_warning' : 'github.push_warning') : 'github.manual_help')}</Help>
+        <Field label={t('github.targets')} help={t('github.targets_help')}>
+          <input className={inputClass} value={form.targets} placeholder="node1, node2"
+            onChange={(event) => change('targets', event.target.value)} />
+        </Field>
         <Help>{t('github.artifact_help')}</Help>
         {error && <ErrorMessage compact>{error}</ErrorMessage>}
         <div className="flex flex-wrap gap-2">

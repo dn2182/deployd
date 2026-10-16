@@ -68,6 +68,14 @@ describe('GitHub setup', () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('name: Deploy site\non: {}\n'))
   })
 
+  it('sends deployment targets as a list', () => {
+    const { call } = panel({ github_actions: { targets: ['NODE1'] } })
+    expect(screen.getByLabelText('Deployment targets (optional)')).toHaveValue('NODE1')
+    fireEvent.change(screen.getByLabelText('Deployment targets (optional)'), { target: { value: 'node1, node2, ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save settings and download ZIP' }))
+    expect(JSON.parse(call.mock.calls[0][1].body).targets).toEqual(['node1', 'node2'])
+  })
+
   it('offers tag-based deployment with a pattern instead of a branch', () => {
     const { call } = panel()
     fireEvent.change(screen.getByLabelText('Deploy trigger'), { target: { value: 'tag' } })

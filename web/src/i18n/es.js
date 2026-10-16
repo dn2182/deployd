@@ -194,6 +194,8 @@ export default {
   'github.automatic': 'Desplegar también automáticamente al hacer push a esta rama',
   'github.push_warning': 'Al subir este workflow se puede desplegar inmediatamente desde la rama seleccionada. Actívalo solo después de una prueba manual exitosa. Se aplica a todos los pushes de esa rama.',
   'github.manual_help': 'Por defecto, solo manual. Sube el workflow a la rama predeterminada para habilitar Run workflow; selecciona la rama de despliegue al ejecutarlo.',
+  'github.targets': 'Destinos de despliegue (opcional)',
+  'github.targets_help': 'Déjalo vacío para un solo servidor. Para espejos o nodos idénticos, lista un nombre por nodo (node1, node2): el artefacto se publica una vez y un job matriz notifica a cada nodo usando DEPLOYD_URL_NODE1 y DEPLOYD_SECRET_NODE1 y así sucesivamente. Registra esta app en cada nodo.',
   'github.artifact_help': 'Solo se empaqueta la carpeta seleccionada. Mantén el backend y los secretos fuera de ella. Se rechazan archivos ocultos, dependencias, enlaces y archivos comunes de claves privadas; se excluyen los metadatos de Git.',
   'github.preparing': 'Preparando descarga',
   'github.download': 'Guardar ajustes y descargar ZIP',

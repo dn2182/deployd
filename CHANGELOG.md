@@ -10,6 +10,12 @@ Initial release.
   detects an existing installation and keeps its domain, management bind and
   port, login and token by default; `--reconfigure` asks again.
 
+### Multi-node targets (October 2026)
+
+- GitHub Actions setup accepts deployment targets; the generated workflow then
+  publishes once and notifies every node from a matrix job that reads
+  `DEPLOYD_URL_<TARGET>` and `DEPLOYD_SECRET_<TARGET>`.
+
 ### Help section (October 2026)
 
 - A Help dialog in the admin top bar with searchable question and answer

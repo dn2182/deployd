@@ -27,6 +27,25 @@ class GitHubActionsSettings(BaseModel):
     # several apps with distinct prefixes (web-v*, api-v*).
     trigger: Literal["branch", "tag"] = "branch"
     tag_pattern: str = Field(default="v*", max_length=100)
+    # Mirror or identical nodes, each running its own deployd: the artifact is
+    # published once and every target is notified from a matrix job that reads
+    # DEPLOYD_URL_<TARGET> and DEPLOYD_SECRET_<TARGET>. Empty keeps the single
+    # DEPLOYD_URL / DEPLOYD_SECRET_<APP> layout.
+    targets: list[str] = Field(default_factory=list, max_length=10)
+
+    @field_validator("targets")
+    @classmethod
+    def target_names(cls, value):
+        names = []
+        for raw in value:
+            name = raw.strip().upper().replace("-", "_")
+            if not name:
+                continue
+            if not re.fullmatch(r"[A-Z0-9][A-Z0-9_]{0,30}", name):
+                raise ValueError("target names use letters, digits, dashes or underscores")
+            if name not in names:
+                names.append(name)
+        return names
 
     @field_validator("project_dir", "output_dir")
     @classmethod
@@ -174,6 +193,8 @@ def render_workflow(name: str, settings: GitHubActionsSettings, *, static_site: 
         i for i, step in enumerate(steps) if step.get("name") == "Check artifact contents"
     )
     steps[insert_at:insert_at] = build_steps
+    if settings.targets:
+        _fan_out(workflow, settings.targets)
     text = yaml.dump(workflow, Dumper=_WorkflowDumper, sort_keys=False, width=1000)
     # A repository that feeds several apps needs one signing secret per app; the
     # generic name stays as the fallback for single-app repositories.
@@ -206,6 +227,52 @@ def _trigger_scope(settings: GitHubActionsSettings) -> str:
     return f"Only {settings.branch} can deploy."
 
 
+def _fan_out(workflow: dict, targets: list[str]) -> None:
+    publish = workflow["jobs"]["publish"]
+    notify = next(
+        step for step in publish["steps"] if step.get("name") == "Deploy and wait for result"
+    )
+    publish["steps"].remove(notify)
+    publish["outputs"] = {"url": "${{ steps.release.outputs.url }}"}
+    notify["env"] = {
+        "DEPLOYD_URL": "${{ vars[format('DEPLOYD_URL_{0}', matrix.target)] }}",
+        "DEPLOYD_SECRET": "${{ secrets[format('DEPLOYD_SECRET_{0}', matrix.target)] }}",
+        "ARTIFACT_URL": "${{ needs.publish.outputs.url }}",
+        "ARTIFACT_SHA256": "${{ needs.build.outputs.sha256 }}",
+    }
+    workflow["jobs"]["deploy"] = {
+        "needs": ["build", "publish"],
+        "if": "success()",
+        "runs-on": "ubuntu-latest",
+        "timeout-minutes": 25,
+        "permissions": {"contents": "read"},
+        "strategy": {"fail-fast": False, "matrix": {"target": list(targets)}},
+        "steps": [
+            {
+                "uses": "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+                "with": {"persist-credentials": False},
+            },
+            notify,
+        ],
+    }
+
+
+def _secrets_instructions(name: str, settings: GitHubActionsSettings) -> str:
+    if not settings.targets:
+        return f"""   DEPLOYD_URL (the public HTTPS deployd API address shown in management), and
+   repository secret {secret_name(name)} (this app's signing secret, not the admin
+   token). The workflow falls back to a secret named DEPLOYD_SECRET, so a
+   single-app repository may keep that name."""
+    pairs = "\n".join(
+        f"   DEPLOYD_URL_{target} and secret DEPLOYD_SECRET_{target}" for target in settings.targets
+    )
+    return f"""   one variable and one secret per target node, each node running its own
+   deployd with this app registered under its own signing secret:
+{pairs}
+   The artifact is published once; a matrix job notifies every target and the
+   run fails if any node fails, while the others still finish."""
+
+
 def setup_bundle(name: str, repository: str, settings: GitHubActionsSettings, *, static_site: bool):
     workflow_text = render_workflow(name, settings, static_site=static_site)
     instructions = f"""# GitHub Actions setup: {name}
@@ -220,11 +287,8 @@ Repository: https://github.com/{repository}
    keeps its own copy; they share scripts/notify_deploy.py and each reads its
    own DEPLOYD_SECRET_* secret.
 2. In Settings > Secrets and variables > Actions, add repository variable
-   DEPLOYD_URL (the public HTTPS deployd API address shown in management), and
-   repository secret {secret_name(name)} (this app's signing secret, not the admin
-   token). The workflow falls back to a secret named DEPLOYD_SECRET, so a
-   single-app repository may keep that name. No secret values are included in
-   this download.
+{_secrets_instructions(name, settings)}
+   No secret values are included in this download.
 3. Commit and push the files. Manual runs appear after the workflow is on the
    repository's default branch. In Actions, choose Deploy {name}, Run workflow,
    and select {"a tag matching " + settings.tag_pattern if settings.trigger == "tag" else settings.branch}.

@@ -318,7 +318,11 @@ on the server.
 The workflow has two jobs: a read-only `build` job that packages and uploads
 the artifact, and a `publish` job with `contents: write` that re-verifies the
 checksum, creates the `deploy-<app>-<sha>` release, notifies deployd, and
-prunes older deploy releases and tags beyond the newest ten. A
+prunes older deploy releases and tags beyond the newest ten. For mirrors or
+identical nodes, fill **Deployment targets** in the setup tab (`node1, node2`):
+the artifact is still published once, and a third `deploy` matrix job notifies
+each node using `DEPLOYD_URL_NODE1` / `DEPLOYD_SECRET_NODE1` and so on, with
+the app registered on every node under its own secret. A
 `workflow_dispatch` input `dry_run` builds and packages without publishing.
 Uncomment the `environment:` line to require reviewers before production
 pushes. The notifier retries transient HTTP errors (429, 502 to 504, 520 to

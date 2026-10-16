@@ -269,5 +269,33 @@ def test_workflow_reads_a_per_app_secret_with_the_generic_fallback():
     assert "DEPLOYD_SECRET_BLUEDATOS" in archive.read("DEPLOYD-SETUP.md").decode()
 
 
+def test_targets_fan_out_to_a_matrix_deploy_job():
+    _, workflow = bundle(targets=["node-1", "Node_2", "node-1"])
+    publish = workflow["jobs"]["publish"]
+    assert publish["outputs"] == {"url": "${{ steps.release.outputs.url }}"}
+    assert all(step.get("name") != "Deploy and wait for result" for step in publish["steps"])
+    deploy = workflow["jobs"]["deploy"]
+    assert deploy["needs"] == ["build", "publish"]
+    assert deploy["strategy"] == {"fail-fast": False, "matrix": {"target": ["NODE_1", "NODE_2"]}}
+    assert deploy["permissions"] == {"contents": "read"}
+    notify = deploy["steps"][-1]
+    assert notify["env"]["DEPLOYD_URL"] == "${{ vars[format('DEPLOYD_URL_{0}', matrix.target)] }}"
+    assert (
+        notify["env"]["DEPLOYD_SECRET"]
+        == "${{ secrets[format('DEPLOYD_SECRET_{0}', matrix.target)] }}"
+    )
+    assert notify["env"]["ARTIFACT_URL"] == "${{ needs.publish.outputs.url }}"
+    archive, _ = bundle(targets=["node-1", "node-2"])
+    instructions = archive.read("DEPLOYD-SETUP.md").decode()
+    assert "DEPLOYD_URL_NODE_1 and secret DEPLOYD_SECRET_NODE_1" in instructions
+    assert "deploy" not in bundle()[1]["jobs"]
+
+
+@pytest.mark.parametrize("targets", [["bad name"], ["a" * 40], ["ñ"]])
+def test_invalid_target_names_are_rejected(targets):
+    with pytest.raises(ValueError):
+        GitHubActionsSettings(targets=targets)
+
+
 def test_example_workflow_is_generated_from_template():
     assert EXAMPLE_WORKFLOW.read_text(encoding="utf-8") == example_workflow_text()

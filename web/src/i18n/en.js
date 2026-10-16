@@ -194,6 +194,8 @@ export default {
   'github.automatic': 'Also deploy automatically on pushes to this branch',
   'github.push_warning': 'Committing this workflow can deploy immediately on the selected branch. Enable only after a successful manual test. This applies to every push on that branch.',
   'github.manual_help': 'Manual only by default. Commit the workflow to the repository default branch to make Run workflow available; select the deployment branch when running it.',
+  'github.targets': 'Deployment targets (optional)',
+  'github.targets_help': 'Leave empty for one server. For mirrors or identical nodes, list a name per node (node1, node2): the artifact is published once and a matrix job notifies each node using DEPLOYD_URL_NODE1 and DEPLOYD_SECRET_NODE1 and so on. Register this app on every node.',
   'github.artifact_help': 'Only the selected folder is packaged. Keep backend code and secrets outside it. Hidden files, dependencies, symlinks, and common private-key files are rejected; Git metadata is excluded.',
   'github.preparing': 'Preparing download',
   'github.download': 'Save settings and download ZIP',
