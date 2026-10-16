@@ -28,6 +28,55 @@ prompt_default() {
   printf '%s' "${value:-$default}"
 }
 
+usage() {
+  printf 'usage: %s [--update | --reconfigure]\n' "${BASH_SOURCE[0]}"
+  printf '  --update       upgrade an existing installation, keeping domain, bind, port and login\n'
+  printf '  --reconfigure  upgrade and ask for the settings again\n'
+}
+
+parse_args() {
+  local arg
+  for arg in "$@"; do
+    case $arg in
+      --update) DEPLOYD_INSTALL_MODE=update ;;
+      --reconfigure) DEPLOYD_INSTALL_MODE=reconfigure ;;
+      -h | --help) usage; exit 0 ;;
+      *) usage >&2; die "unknown argument: $arg" ;;
+    esac
+  done
+  case ${DEPLOYD_INSTALL_MODE:-} in
+    "" | update | reconfigure) ;;
+    *) die "DEPLOYD_INSTALL_MODE must be update or reconfigure" ;;
+  esac
+}
+
+# Prints domain, management bind and port from the installed Nginx site, one per line.
+installed_settings() {
+  local site domain listen
+  sudo test -f "$NGINX_SITE" && sudo test -f "$SERVICE_FILE" || return 1
+  site=$(sudo cat "$NGINX_SITE") || return 1
+  domain=$(printf '%s\n' "$site" | awk '$1 == "server_name" && $2 != "_;" { sub(";", "", $2); print $2; exit }')
+  listen=$(printf '%s\n' "$site" | awk '$1 == "listen" && $2 ~ /:/ { sub(";", "", $2); print $2; exit }')
+  [[ -n $domain && -n $listen ]] || return 1
+  printf '%s\n%s\n%s\n' "$domain" "${listen%:*}" "${listen##*:}"
+}
+
+# Decides between keeping the installed settings and prompting again. Unattended
+# runs (closed stdin) keep them, so a plain rerun is always an in-place upgrade.
+choose_mode() {
+  local domain=$1 bind=$2 port=$3 answer
+  if [[ -n ${DEPLOYD_INSTALL_MODE:-} ]]; then
+    printf '%s\n' "$DEPLOYD_INSTALL_MODE"
+    return 0
+  fi
+  printf 'Existing installation found: %s, management on %s:%s\n' "$domain" "$bind" "$port" >&2
+  read -r -p "Update and keep these settings? [Y/n]: " answer || answer=y
+  case $answer in
+    n | N | no | NO) printf 'reconfigure\n' ;;
+    *) printf 'update\n' ;;
+  esac
+}
+
 confirm_testing_mode() {
   printf '%s\n' \
     "Cloudflare Flexible mode leaves Cloudflare-to-origin traffic unencrypted." \
@@ -713,16 +762,28 @@ install_website_helper() {
 }
 
 main() {
+  parse_args "$@"
   require_install_user
   export PATH="$NODE_DIR/bin:$TOOL_BIN_DIR:$PATH"
-  confirm_testing_mode
 
   local script_dir repo_root domain admin_bind admin_port admin_username token_state db_path
+  local mode=install installed
   script_dir=$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
   repo_root=$(cd -P -- "$script_dir/.." && pwd)
-  domain=$(prompt_default DEPLOYD_INSTALL_DOMAIN "Public deployd domain" "deployd.example.com")
-  admin_bind=$(prompt_default DEPLOYD_INSTALL_ADMIN_BIND "Management bind address" "127.0.0.1")
-  admin_port=$(prompt_default DEPLOYD_INSTALL_ADMIN_PORT "Management port" "844")
+  if installed=$(installed_settings); then
+    { read -r domain; read -r admin_bind; read -r admin_port; } <<<"$installed"
+    mode=$(choose_mode "$domain" "$admin_bind" "$admin_port")
+  elif [[ ${DEPLOYD_INSTALL_MODE:-} == update ]]; then
+    die "no existing installation to update; run without --update"
+  fi
+  if [[ $mode == update ]]; then
+    printf 'Updating in place: %s, management on %s:%s\n' "$domain" "$admin_bind" "$admin_port"
+  else
+    confirm_testing_mode
+    domain=$(prompt_default DEPLOYD_INSTALL_DOMAIN "Public deployd domain" "${domain:-deployd.example.com}")
+    admin_bind=$(prompt_default DEPLOYD_INSTALL_ADMIN_BIND "Management bind address" "${admin_bind:-127.0.0.1}")
+    admin_port=$(prompt_default DEPLOYD_INSTALL_ADMIN_PORT "Management port" "${admin_port:-844}")
+  fi
   if admin_username=$(existing_basic_auth_user); then
     printf 'Management Basic Auth user (existing): %s\n' "$admin_username"
   else
@@ -758,7 +819,11 @@ main() {
   verify_installation "$domain" "$admin_port"
   sudo rm -f -- "$LEGACY_HTPASSWD_FILE"
 
-  printf '\nInstallation complete.\n'
+  if [[ $mode == update ]]; then
+    printf '\nUpdate complete.\n'
+  else
+    printf '\nInstallation complete.\n'
+  fi
   printf 'Public API: https://%s (Cloudflare proxy to origin port 80)\n' "$domain"
   printf 'Management UI: http://%s:%s\n' "$admin_bind" "$admin_port"
   printf 'Firewall management: not modified; keep port %s restricted.\n' "$admin_port"

@@ -4,6 +4,12 @@
 
 Initial release.
 
+### In-place updates (October 2026)
+
+- `deploy/update-ubuntu.sh` pulls and upgrades without prompts. The installer
+  detects an existing installation and keeps its domain, management bind and
+  port, login and token by default; `--reconfigure` asks again.
+
 ### Tag-based deployment (October 2026)
 
 - GitHub Actions setup can trigger on Git tags matching a pattern (`v*`,

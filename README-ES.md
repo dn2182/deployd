@@ -149,10 +149,16 @@ opcional y los elimina junto con la configuración de administración.
 ## Actualización en Ubuntu
 
 ```bash
-cd /opt/deployd
-git pull --ff-only origin main
-./deploy/install-ubuntu.sh
+/opt/deployd/deploy/update-ubuntu.sh
 ```
+
+Eso trae el último release y ejecuta el instalador con `--update`, que conserva
+el dominio, el bind y puerto de administración, el acceso Basic Auth y el token
+de administración sin preguntar. Ejecutar `install-ubuntu.sh` a mano hace lo
+mismo: detecta la instalación existente y ofrece conservar sus ajustes (es la
+opción por defecto, también con stdin cerrado); responde `n`, o pasa
+`--reconfigure`, para cambiarlos. `DEPLOYD_INSTALL_MODE=update|reconfigure`
+fija la decisión en ejecuciones desatendidas.
 
 Volver a ejecutar el instalador es la ruta de actualización soportada: refresca
 la unidad de systemd, los sitios de Nginx, el helper root de sitios y los

@@ -94,7 +94,7 @@ def run_function(script, body, stdin=""):
     )
 
 
-@pytest.mark.parametrize("script", ["install-ubuntu.sh", "uninstall-ubuntu.sh"])
+@pytest.mark.parametrize("script", ["install-ubuntu.sh", "uninstall-ubuntu.sh", "update-ubuntu.sh"])
 def test_bash_syntax(script):
     assert subprocess.run(["bash", "-n", str(DEPLOY / script)], check=False).returncode == 0
 
@@ -234,6 +234,67 @@ def test_prompts_honour_environment_overrides():
         stdin="\n",
     )
     assert result.stdout == "x.example"
+
+
+SITE = """server {
+    listen 80;
+    server_name deploy.example.com;
+}
+server {
+    listen 10.0.0.5:9443;
+    server_name _;
+}
+"""
+
+
+def test_installed_settings_are_read_from_the_nginx_site():
+    result = run_function(
+        "install-ubuntu.sh",
+        "SITE=$(cat <<'NGINX'\n" + SITE + "NGINX\n)\n"
+        'sudo() { case "$1" in test) return 0 ;; cat) printf "%s" "$SITE" ;; esac; }\n'
+        "installed_settings",
+    )
+    assert result.stdout.split() == ["deploy.example.com", "10.0.0.5", "9443"]
+    missing = run_function("install-ubuntu.sh", "sudo() { return 1; }; installed_settings")
+    assert missing.returncode != 0 and missing.stdout == ""
+
+
+@pytest.mark.parametrize(
+    ("env", "stdin", "expected"),
+    [
+        ("", "", "update"),
+        ("", "\n", "update"),
+        ("", "y\n", "update"),
+        ("", "n\n", "reconfigure"),
+        ("DEPLOYD_INSTALL_MODE=update", "n\n", "update"),
+        ("DEPLOYD_INSTALL_MODE=reconfigure", "", "reconfigure"),
+    ],
+)
+def test_existing_install_defaults_to_in_place_update(env, stdin, expected):
+    result = run_function(
+        "install-ubuntu.sh", f"{env} choose_mode deploy.example.com 127.0.0.1 844", stdin=stdin
+    )
+    assert result.stdout.strip() == expected
+    assert "Existing installation found" in result.stderr or env
+
+
+def test_update_flag_sets_mode_and_rejects_unknown_arguments():
+    assert (
+        run_function(
+            "install-ubuntu.sh", "parse_args --update; echo $DEPLOYD_INSTALL_MODE"
+        ).stdout.strip()
+        == "update"
+    )
+    assert (
+        run_function(
+            "install-ubuntu.sh", "parse_args --reconfigure; echo $DEPLOYD_INSTALL_MODE"
+        ).stdout.strip()
+        == "reconfigure"
+    )
+    assert run_function("install-ubuntu.sh", "parse_args --bogus").returncode != 0
+    assert (
+        run_function("install-ubuntu.sh", "DEPLOYD_INSTALL_MODE=weird parse_args").returncode != 0
+    )
 
 
 def test_testing_mode_decline_exits_non_zero():

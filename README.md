@@ -139,10 +139,15 @@ with the management configuration.
 ## Update on Ubuntu
 
 ```bash
-cd /opt/deployd
-git pull --ff-only origin main
-./deploy/install-ubuntu.sh
+/opt/deployd/deploy/update-ubuntu.sh
 ```
+
+That pulls the latest release and runs the installer with `--update`, which
+keeps the domain, management bind and port, Basic Auth login and admin token
+without asking. Rerunning `install-ubuntu.sh` by hand does the same: it detects
+the existing installation and offers to keep its settings (the default, also
+when stdin is closed); answer `n`, or pass `--reconfigure`, to change them.
+`DEPLOYD_INSTALL_MODE=update|reconfigure` sets the choice for unattended runs.
 
 Rerunning the installer is the supported upgrade path: it refreshes the
 systemd unit, Nginx sites, the root website helper and file ownership, which
