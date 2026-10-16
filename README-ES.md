@@ -288,8 +288,10 @@ pushes a una rama de despliegue, o tags de Git que coincidan con un patrón como
 desde cualquier rama.
 Los presets de Node instalan dependencias desde el lockfile; los comandos
 personalizados deben instalar sus propias herramientas.
-**Guardar ajustes y descargar ZIP** guarda estos datos y genera
-`.github/workflows/deploy.yml`, `scripts/notify_deploy.py` e instrucciones.
+**Previsualizar workflow** genera `deploy.yml` desde el formulario, con botón
+de copiar, sin guardar nada. **Guardar ajustes y descargar ZIP** guarda estos
+datos y genera `.github/workflows/deploy.yml`, `scripts/notify_deploy.py` e
+instrucciones.
 El ZIP no contiene valores secretos. Copia los archivos a la raíz del repositorio
 y revisa los workflows existentes para evitar ejecuciones duplicadas.
 

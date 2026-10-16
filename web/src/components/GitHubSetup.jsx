@@ -28,6 +28,24 @@ export default function GitHubSetup({ name, spec, call, onChanged }) {
   const [pending, setPending] = useState(false)
   const [error, setError] = useState(null)
   const [saved, setSaved] = useState(false)
+  const [workflow, setWorkflow] = useState(null)
+  const [copied, setCopied] = useState(false)
+  const endpoint = `/admin/apps/${encodeURIComponent(name)}/github-actions`
+  const preview = async () => {
+    setPending(true)
+    setError(null)
+    try {
+      const result = await call(`${endpoint}/preview`, { method: 'POST', body: JSON.stringify(form) })
+      setWorkflow(result.workflow)
+    } catch (err) { setError(err.message) } finally { setPending(false) }
+  }
+  const copyWorkflow = async () => {
+    try {
+      await navigator.clipboard.writeText(workflow)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch { setCopied(false) }
+  }
   const change = (key, value) => {
     setSaved(false)
     setForm((old) => ({ ...old, [key]: value }))
@@ -46,10 +64,9 @@ export default function GitHubSetup({ name, spec, call, onChanged }) {
     setError(null)
     setSaved(false)
     try {
-      const result = await call(`/admin/apps/${encodeURIComponent(name)}/github-actions`, {
-        method: 'POST', body: JSON.stringify(form),
-      })
+      const result = await call(endpoint, { method: 'POST', body: JSON.stringify(form) })
       downloadBundle(result)
+      setWorkflow(result.workflow)
       setSaved(true)
       onChanged?.()
     } catch (err) { setError(err.message) } finally { setPending(false) }
@@ -114,10 +131,21 @@ export default function GitHubSetup({ name, spec, call, onChanged }) {
         <Help>{t(form.automatic ? (form.trigger === 'tag' ? 'github.tag_warning' : 'github.push_warning') : 'github.manual_help')}</Help>
         <Help>{t('github.artifact_help')}</Help>
         {error && <ErrorMessage compact>{error}</ErrorMessage>}
-        <div><Button type="submit" variant="primary">{t(pending ? 'github.preparing' : 'github.download')}</Button></div>
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" variant="primary">{t(pending ? 'github.preparing' : 'github.download')}</Button>
+          <Button type="button" onClick={preview}>{t('github.preview')}</Button>
+        </div>
       </fieldset>
     </form>
     {saved && <Notice>{t('github.saved')}</Notice>}
+    {workflow && <section className="flex flex-col gap-2" aria-label={t('github.preview_title')}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h5 className="m-0 text-xs font-semibold text-text-strong">{t('github.preview_title')}</h5>
+        <Button size="small" type="button" onClick={copyWorkflow}>{t(copied ? 'app.copied' : 'app.copy')}</Button>
+      </div>
+      <pre className="m-0 max-h-96 overflow-auto rounded-card border border-border-subtle bg-surface-soft p-3 font-mono text-[11px] leading-relaxed whitespace-pre text-text">{workflow}</pre>
+      <Help>{t('github.preview_help')}</Help>
+    </section>}
     <ol className="m-0 flex list-decimal flex-col gap-2 pl-5 text-xs leading-relaxed text-text">
       <li>{t('github.copy_files')} <code className={code}>.github/workflows/deploy.yml</code> + <code className={code}>scripts/notify_deploy.py</code>. {t('github.existing')}</li>
       <li>{t('github.variable')} <code className={code}>DEPLOYD_URL</code>: <code className={code}>{spec.deploy_url || t('setup.set_url')}</code>.</li>

@@ -54,6 +54,19 @@ describe('GitHub setup', () => {
     expect(screen.getByText(/Committing this workflow can deploy immediately/)).toBeInTheDocument()
   })
 
+  it('previews the rendered workflow without saving and copies it', async () => {
+    const { call, onChanged } = panel()
+    call.mockResolvedValueOnce({ workflow: 'name: Deploy site\non: {}\n', settings: {} })
+    const writeText = vi.fn().mockResolvedValue()
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    fireEvent.click(screen.getByRole('button', { name: 'Preview workflow' }))
+    expect(await screen.findByText(/name: Deploy site/)).toBeInTheDocument()
+    expect(call.mock.calls[0][0]).toBe('/admin/apps/site/github-actions/preview')
+    expect(onChanged).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('name: Deploy site\non: {}\n'))
+  })
+
   it('offers tag-based deployment with a pattern instead of a branch', () => {
     const { call } = panel()
     fireEvent.change(screen.getByLabelText('Deploy trigger'), { target: { value: 'tag' } })

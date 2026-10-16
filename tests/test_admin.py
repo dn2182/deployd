@@ -181,6 +181,13 @@ def test_github_setup_saves_only_build_metadata_and_downloads_no_secrets(env):
         for path in archive.namelist():
             assert ADMIN_TOKEN.encode() not in archive.read(path)
             assert b"signing-secret-" not in archive.read(path)
+        assert data["workflow"] == archive.read(".github/workflows/deploy.yml").decode()
+        preview = client.post(
+            f"{endpoint}/preview", json={"project_dir": "other", "trigger": "tag"}, headers=ADMIN
+        )
+        assert preview.status_code == 200
+        assert "startsWith(github.ref, 'refs/tags/')" in preview.json()["workflow"]
+        assert "content_base64" not in preview.json()
         saved = client.get("/admin/apps", headers=ADMIN).json()["app-x"]
         assert saved["github_actions"]["project_dir"] == "frontend"
         assert saved["github_actions"]["automatic"] is False

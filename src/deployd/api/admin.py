@@ -29,7 +29,7 @@ from ..config import (
     set_frozen,
     upsert_app,
 )
-from ..github_actions import GitHubActionsSettings, setup_bundle
+from ..github_actions import GitHubActionsSettings, render_workflow, setup_bundle
 from ..models import DeployStatus
 from ..security import constant_time_equal
 from ..worker import runner, website
@@ -373,29 +373,44 @@ async def setup_defaults():
     return {"github_server_token_configured": bool(get_settings().github_token)}
 
 
+def _github_actions_target(request: Request, name: str) -> tuple[AppSpec, bool]:
+    spec = _release_app(request, name)
+    if not spec.github_repository or not spec.deploy_url:
+        raise HTTPException(
+            status_code=422, detail="set the GitHub repository and public deployd URL first"
+        )
+    if not spec.deploy_url.startswith("https://"):
+        raise HTTPException(
+            status_code=422, detail="GitHub Actions requires a public HTTPS deployd URL"
+        )
+    expected_prefix = f"https://api.github.com/repos/{spec.github_repository}/releases/assets/"
+    if spec.artifact.allowed_url_prefix != expected_prefix:
+        raise HTTPException(
+            status_code=422,
+            detail="update the app's GitHub artifact source before generating its workflow",
+        )
+    static_site = spec.restart.command == [
+        "/usr/bin/test",
+        "-s",
+        f"{spec.current_link}/index.html",
+    ]
+    return spec, static_site
+
+
+@router.post("/apps/{name}/github-actions/preview")
+async def github_actions_preview(request: Request, name: AppName, settings: GitHubActionsSettings):
+    """Render the workflow for the given settings without saving them."""
+    spec, static_site = _github_actions_target(request, name)
+    return {
+        "workflow": render_workflow(name, settings, static_site=static_site),
+        "settings": settings.model_dump(),
+    }
+
+
 @router.post("/apps/{name}/github-actions")
 async def github_actions_setup(request: Request, name: AppName, settings: GitHubActionsSettings):
     with config_lock():
-        spec = _release_app(request, name)
-        if not spec.github_repository or not spec.deploy_url:
-            raise HTTPException(
-                status_code=422, detail="set the GitHub repository and public deployd URL first"
-            )
-        if not spec.deploy_url.startswith("https://"):
-            raise HTTPException(
-                status_code=422, detail="GitHub Actions requires a public HTTPS deployd URL"
-            )
-        expected_prefix = f"https://api.github.com/repos/{spec.github_repository}/releases/assets/"
-        if spec.artifact.allowed_url_prefix != expected_prefix:
-            raise HTTPException(
-                status_code=422,
-                detail="update the app's GitHub artifact source before generating its workflow",
-            )
-        static_site = spec.restart.command == [
-            "/usr/bin/test",
-            "-s",
-            f"{spec.current_link}/index.html",
-        ]
+        spec, static_site = _github_actions_target(request, name)
         bundle = setup_bundle(name, spec.github_repository, settings, static_site=static_site)
         updated = spec.model_copy(update={"github_actions": settings})
         try:

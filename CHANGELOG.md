@@ -10,6 +10,11 @@ Initial release.
   detects an existing installation and keeps its domain, management bind and
   port, login and token by default; `--reconfigure` asks again.
 
+### Workflow preview (October 2026)
+
+- The GitHub Actions setup tab can preview the rendered `deploy.yml` with a
+  copy button before saving; the ZIP response also carries the workflow text.
+
 ### Tag-based deployment (October 2026)
 
 - GitHub Actions setup can trigger on Git tags matching a pattern (`v*`,

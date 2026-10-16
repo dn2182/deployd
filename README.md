@@ -268,8 +268,10 @@ folder, build command, output folder, and the trigger: pushes to a deployment
 branch, or Git tags matching a pattern such as `v*` or `web-v*` so only the
 commits you tag go live, from any branch. Node presets install
 locked dependencies before building. Custom commands must install their own tools.
-**Save settings and download ZIP** remembers these settings and generates
-`.github/workflows/deploy.yml`, `scripts/notify_deploy.py`, and setup instructions.
+**Preview workflow** renders `deploy.yml` from the form, with a copy button,
+without saving anything. **Save settings and download ZIP** remembers these
+settings and generates `.github/workflows/deploy.yml`, `scripts/notify_deploy.py`,
+and setup instructions.
 No secret values are included. Copy the files to the repository root, reviewing
 any existing deployment workflow to avoid duplicate runs.
 
