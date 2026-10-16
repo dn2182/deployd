@@ -208,7 +208,7 @@ describe('App', () => {
     expect(screen.getByText('30s')).toBeInTheDocument()
     const time = screen.getByText('30s').parentElement.querySelector('time')
     expect(time).toHaveAttribute('datetime', '2026-08-28T04:00:00.000Z')
-    expect(time.textContent).toMatch(/ago\)$/)
+    expect(time.textContent).toMatch(/^Aug 27, 2026, 10:00 PM\(.+\)$/)
     expect(screen.getByTitle('db: ok, worker: ok')).toHaveTextContent('API ok')
   })
 
@@ -472,11 +472,9 @@ describe('App', () => {
     expect(await screen.findByRole('heading', { name: 'Resumen de despliegues' })).toBeInTheDocument()
     expect(document.documentElement.lang).toBe('es')
     expect((await screen.findAllByText('Completado')).length).toBeGreaterThan(0)
-    expect(screen.getByText('ES')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Switch to English' }))
     expect(screen.getByRole('heading', { name: 'Deployment overview' })).toBeInTheDocument()
     expect(document.documentElement.lang).toBe('en')
-    expect(screen.getByText('EN')).toBeInTheDocument()
   })
 
   it('defaults non-Spanish browsers to English', async () => {

@@ -12,6 +12,7 @@ import AppRegistry, { RegistrySkeleton } from './components/AppRegistry.jsx'
 import AuditLog from './components/AuditLog.jsx'
 import DeployHistory from './components/DeployHistory.jsx'
 import SecretModal from './components/SecretModal.jsx'
+import BanIcon from './components/BanIcon.jsx'
 import TokenGate from './components/TokenGate.jsx'
 import PasswordDialog from './components/PasswordDialog.jsx'
 
@@ -91,8 +92,8 @@ function Console({ language, setLanguage }) {
             <IconButton label={t('theme.switch', { theme: t(`theme.${theme === 'dark' ? 'light' : 'dark'}`) })} onClick={toggleTheme}>
               {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
             </IconButton>
-            <IconButton label={t('language.switch')} onClick={() => setLanguage(language === 'es' ? 'en' : 'es')}>
-              <span className="text-[11px] font-bold tracking-wider">{language === 'es' ? 'ES' : 'EN'}</span>
+            <IconButton label={t('language.switch')} className="group" onClick={() => setLanguage(language === 'es' ? 'en' : 'es')}>
+              <BanIcon />
             </IconButton>
             {session.token && (
               <Button size="small" onClick={session.logout}><LogOut size={14} /> {t('token.logout')}</Button>
