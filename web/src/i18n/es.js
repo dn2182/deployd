@@ -1,4 +1,10 @@
 export default {
+  'help.title': 'Ayuda',
+  'help.open': 'Ayuda',
+  'help.intro': 'Respuestas cortas a las preguntas habituales. El README cubre el resto.',
+  'help.search': 'Buscar preguntas',
+  'help.close': 'Cerrar',
+  'help.no_matches': 'Ninguna pregunta coincide.',
   'password.title': 'Cambiar contraseña de administración',
   'password.description': 'Cambia la contraseña de acceso del navegador. El token de administración y los secretos de las aplicaciones no cambian.',
   'password.username': 'Usuario',

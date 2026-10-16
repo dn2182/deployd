@@ -1,4 +1,10 @@
 export default {
+  'help.title': 'Help',
+  'help.open': 'Help',
+  'help.intro': 'Short answers to the usual questions. The README covers the rest.',
+  'help.search': 'Search questions',
+  'help.close': 'Close',
+  'help.no_matches': 'No questions match.',
   'password.title': 'Change management password',
   'password.description': 'Change your browser login password. Your API admin token and application secrets stay unchanged.',
   'password.username': 'Username',

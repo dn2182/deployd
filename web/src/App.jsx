@@ -1,5 +1,5 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
-import { Activity, AppWindow, CloudCog, KeyRound, LogOut, Moon, RefreshCw, ScrollText, Sun } from 'lucide-react'
+import { Activity, AppWindow, CircleHelp, CloudCog, KeyRound, LogOut, Moon, RefreshCw, ScrollText, Sun } from 'lucide-react'
 import { LanguageProvider, detectLanguage, useT } from './i18n/index.js'
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.js'
 import { useRegistry } from './hooks/useRegistry.js'
@@ -15,6 +15,7 @@ import SecretModal from './components/SecretModal.jsx'
 import BanIcon from './components/BanIcon.jsx'
 import TokenGate from './components/TokenGate.jsx'
 import PasswordDialog from './components/PasswordDialog.jsx'
+import HelpDialog from './components/HelpDialog.jsx'
 
 const TERMINAL_TOAST = { succeeded: 'success', failed: 'error', rolled_back: 'error', cancelled: 'info' }
 
@@ -51,6 +52,7 @@ function Console({ language, setLanguage }) {
   const session = useSession()
   const [secret, setSecret] = useState(null)
   const [passwordOpen, setPasswordOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [view, setView] = useState('deploys')
   const searchRef = useRef(null)
@@ -99,10 +101,12 @@ function Console({ language, setLanguage }) {
               <Button size="small" onClick={session.logout}><LogOut size={14} /> {t('token.logout')}</Button>
             )}
             {!locked && <IconButton label={t('password.title')} onClick={() => setPasswordOpen(true)}><KeyRound size={17} /></IconButton>}
+            <IconButton label={t('help.open')} onClick={() => setHelpOpen(true)}><CircleHelp size={17} /></IconButton>
           </div>
         </div>
       </header>
       {passwordOpen && !locked && <PasswordDialog api={session.api} onClose={() => setPasswordOpen(false)} />}
+      {helpOpen && <HelpDialog onClose={() => setHelpOpen(false)} />}
 
       <main className="relative z-10 mx-auto flex w-[min(1120px,calc(100%-32px))] flex-col gap-8 py-7 sm:py-9">
         <section className="grid grid-cols-1 items-center gap-5 md:grid-cols-[minmax(0,1fr)_auto]">

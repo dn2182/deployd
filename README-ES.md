@@ -224,6 +224,9 @@ del servicio Ubuntu bajo `/var/lib/deployd`.
 ## Configuración guiada de aplicaciones
 
 Abre la interfaz por HTTPS o un túnel SSH e ingresa el token de administración.
+El botón **Ayuda** de la barra superior (disponible antes de iniciar sesión)
+responde las preguntas habituales en ambos idiomas: una app o dos, servicios sin
+sitio, hooks, disparadores, secretos, rollback, actualizaciones.
 Busca por nombre, repositorio o ruta local. La lista muestra diez aplicaciones
 por página y solo los detalles de la seleccionada. **Conexión del sitio**,
 **Administrar versiones** y **Configuración de GitHub Actions** son pestañas: solo

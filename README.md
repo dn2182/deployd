@@ -213,6 +213,9 @@ Ubuntu service paths under `/var/lib/deployd`.
 ## Guided application setup
 
 Open the management UI over HTTPS or an SSH tunnel and enter the admin token.
+The **Help** button in the top bar (available before login) answers the usual
+questions in both languages: one app or two, services without a site, hooks,
+triggers, secrets, rollback, updates.
 Search applications by name, repository, or local site path; the list shows ten
 per page and only the selected application's details. **Website connection**,
 **Manage versions**, and **GitHub Actions setup** are mutually exclusive tabs.

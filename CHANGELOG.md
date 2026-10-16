@@ -10,6 +10,12 @@ Initial release.
   detects an existing installation and keeps its domain, management bind and
   port, login and token by default; `--reconfigure` asks again.
 
+### Help section (October 2026)
+
+- A Help dialog in the admin top bar with searchable question and answer
+  entries in English and Spanish, covering setup, triggers, hooks, secrets,
+  rollback and updates.
+
 ### Workflow preview (October 2026)
 
 - The GitHub Actions setup tab can preview the rendered `deploy.yml` with a
