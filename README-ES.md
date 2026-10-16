@@ -27,15 +27,26 @@ fijo firmado por HMAC es toda la superficie de ataque.
   un cambio controlado de junction (Windows); si el health check falla, el
   rollback es automático
 - **Migraciones que condicionan el release** — migraciones SQL forward-only
-  con checksum (`deployd-migrate`, SQL Server vía pyodbc) corren antes del
-  cutover y detienen el despliegue en seco si fallan
+  con checksum (`deployd-migrate`, SQL Server vía pyodbc o PostgreSQL vía
+  psycopg) corren antes del cutover bajo un lock a nivel de base de datos y
+  detienen el despliegue en seco si fallan
+- **Hooks y aserciones de salud** — comandos opcionales `before_cutover` y
+  `after_health`, y health checks que pueden exigir el SHA desplegado en el
+  cuerpo o en un header de la respuesta, para que un proceso viejo no pase
 - **UI de administración** — registro de aplicaciones, rotación de secretos
-  en un clic (se muestran una sola vez), historial de despliegues con log
-  por paso, redeploy, estado en vivo
-- **Nativo en bare-host** — systemd en Linux, NSSM/IIS en Windows; un solo
-  servicio Python con un archivo de estado SQLite
-- **Cola consciente de reinicios** — los deploys en cola se recuperan; los
-  interrumpidos fallan explícitamente en vez de quedar en `running`
+  en un clic (se muestran una sola vez), historial con log por paso, redeploy,
+  cancelar, congelar, rollback, estado por app, bitácora de auditoría y
+  actualización manual
+- **Nativo en bare-host** — systemd en Linux; un solo
+  servicio Python con un archivo de estado SQLite, el comando `deployd check`
+  y soporte para el watchdog de systemd
+- **Cola consciente de reinicios** — los deploys en cola se recuperan; un push
+  más nuevo reemplaza a los que seguían en cola; los pasos desde migrate en
+  adelante terminan aunque el servicio se detenga, y el trabajo interrumpido
+  antes de ese punto se reanuda al reiniciar
+- **Comandos contenidos** — los procesos de migrate, restart y hooks reciben un
+  entorno depurado; los secretos del servicio nunca llegan al código del
+  artefacto
 
 ## Cómo funciona
 
@@ -48,13 +59,20 @@ API de despliegue (FastAPI)  -- valida, encola, 202 + deploy_id
       |
       v
 Worker de despliegue (cola serializada por app)
-      +--> descarga el artefacto + verifica SHA256
-      +--> desempaqueta en release único     (límites + path traversal seguro)
-      +--> ejecuta migraciones               (forward-only, se detiene si falla)
-      +--> cutover                           (intercambio de directorios o enlaces)
-      +--> restart + health check            (falla => rollback automático)
-      +--> registra estado + log por paso    (CI consulta GET /deploys/{id})
+      +--> descarga el artefacto + verifica SHA256  (hash en streaming, con reintentos)
+      +--> desempaqueta en release único            (límites + path traversal seguro)
+      +--> ejecuta migraciones                      (forward-only, se detiene si falla)
+      +--> hook before_cutover                      (opcional)
+      +--> cutover                                  (intercambio de directorios o enlaces)
+      +--> restart + health check                   (falla => rollback automático)
+      +--> hook after_health                        (opcional, falla => rollback automático)
+      +--> registra estado y log por paso          (CI consulta GET /deploys/{id})
 ```
+
+Todo lo que va desde `migrate` en adelante es la fase de commit: una vez que
+empieza, detener el servicio espera a que termine (hasta
+`DEPLOYD_DRAIN_TIMEOUT_SECONDS`). Una parada durante descarga, verificación o
+desempaquetado devuelve el deploy a la cola y se reanuda al reiniciar.
 
 ### Decisiones de diseño
 
@@ -75,7 +93,10 @@ Worker de despliegue (cola serializada por app)
 
 Git es la única dependencia inicial. El instalador guiado instala los demás
 requisitos del sistema y del proyecto, ejecuta las validaciones y configura el
-servicio, Nginx, el estado y la interfaz de administración.
+servicio, Nginx, el estado y la interfaz de administración. Node 22 y `uv` se
+descargan como tarballs oficiales, se verifican contra sus checksums publicados
+y quedan bajo el checkout (`.node`) y `~/.local/bin`; nada se canaliza desde la
+red a un shell.
 
 ```bash
 sudo apt update
@@ -91,32 +112,77 @@ normal propietario del repositorio, no con `sudo`. El script eleva únicamente
 las operaciones que necesitan acceso al sistema. El modo Flexible de
 Cloudflare es solo para pruebas; restringe el puerto de administración con el
 firewall y usa Full (strict) antes de producción.
-El instalador solicita el dominio público, bind/puerto de administración y
-usuario de Basic Auth, y genera el token de administración cuando hace falta.
+El instalador solicita el dominio público, bind/puerto de administración (por
+defecto `127.0.0.1:844`) y usuario de Basic Auth, y genera el token de
+administración cuando hace falta. El token nunca se imprime; el instalador
+indica dónde quedó. Cada pregunta acepta una variable de entorno para
+ejecuciones desatendidas: `DEPLOYD_INSTALL_DOMAIN`,
+`DEPLOYD_INSTALL_ADMIN_BIND`, `DEPLOYD_INSTALL_ADMIN_PORT`,
+`DEPLOYD_INSTALL_ADMIN_USER`, `DEPLOYD_INSTALL_ADMIN_PASSWORD` y
+`DEPLOYD_INSTALL_YES=1` para las confirmaciones. Los puertos 80 y el de
+administración se verifican antes de tocar Nginx. El sitio de administración
+generado reenvía el usuario de Basic Auth a deployd como `X-Remote-User` para
+la bitácora de auditoría, aplica los headers de seguridad también a `/api/` y
+limita la tasa de `POST /deploys` en el sitio público.
 Repara rutas de desarrollo ausentes o sin datos en un `.env` existente,
 conserva tokens y rutas absolutas, y respalda `.env` antes de modificarlo.
 Si una ruta de desarrollo contiene datos, se detiene con instrucciones de
 migración. Valida las rutas y la configuración de aplicaciones con el usuario
 del servicio antes de iniciarlo.
 
+### Cambiar la contraseña de administración
+
+Usa el botón de llave del encabezado, **Cambiar contraseña de administración**.
+Ingresa tu contraseña actual y confirma la nueva. Solo cambia el acceso Basic Auth
+de Nginx; el token de administración y los secretos de las aplicaciones no cambian.
+El navegador puede pedirte que ingreses de nuevo con la nueva contraseña. Usa
+HTTPS o un túnel SSH para administrar, nunca HTTP público.
+
+En instalaciones existentes, ejecuta primero el instalador actualizado. Conserva
+el acceso y traslada los hashes de `/etc/nginx/deployd.htpasswd` a
+`/var/lib/deployd-auth/htpasswd`, propiedad de root. Un helper con permisos sudo
+limitados verifica la contraseña actual y reemplaza el hash de forma atómica;
+deployd no puede leer ni escribir ese archivo directamente. No agrega servicios ni
+puertos. La desinstalación incluye las credenciales y el helper en el respaldo
+opcional y los elimina junto con la configuración de administración.
+
 ## Actualización en Ubuntu
 
 ```bash
-cd /opt/deployd
-git pull --ff-only origin main
-make install
-make build
-sudo systemctl restart deployd
+/opt/deployd/deploy/update-ubuntu.sh
 ```
 
-Para cambios únicamente del frontend basta con ejecutar
+Eso trae el último release y ejecuta el instalador con `--update`, que conserva
+el dominio, el bind y puerto de administración, el acceso Basic Auth y el token
+de administración sin preguntar. Ejecutar `install-ubuntu.sh` a mano hace lo
+mismo: detecta la instalación existente y ofrece conservar sus ajustes (es la
+opción por defecto, también con stdin cerrado); responde `n`, o pasa
+`--reconfigure`, para cambiarlos. `DEPLOYD_INSTALL_MODE=update|reconfigure`
+fija la decisión en ejecuciones desatendidas.
+
+Volver a ejecutar el instalador es la ruta de actualización soportada: refresca
+la unidad de systemd, los sitios de Nginx, el helper root de sitios y los
+permisos, cosas que `make install` por sí solo no hace. La actualización corre
+lint, pruebas, auditoría de dependencias y el build web **antes** de detener el
+servicio, se niega a detenerlo mientras haya deploys en cola o en ejecución
+(espera hasta `DEPLOYD_INSTALL_WAIT_SECONDS`, 600 por defecto), escribe un
+respaldo en línea de la base de estado en `/var/lib/deployd/backups/` (conserva
+los cinco más recientes) y se detiene solo para sincronizar dependencias y
+reiniciar. Para cambios únicamente del frontend basta con ejecutar
 `git pull --ff-only origin main` y `make build`; después refresca el navegador.
 
 ## Desinstalación en Ubuntu
 
+Para reinstalar desde cero, usa el desinstalador normal sin `--purge`, acepta el
+respaldo y restaura los sitios conectados a carpetas reales primero. Después clona
+e instala nuevamente. La desinstalación elimina configuración, tokens y estado de
+deployd; sin restaurar el respaldo tendrás que registrar las apps y actualizar sus
+secretos en GitHub. Las carpetas de releases no reconstruyen su historial.
+
 ```bash
 cd /opt/deployd
-./deploy/uninstall-ubuntu.sh
+./deploy/uninstall-ubuntu.sh            # agrega --purge para eliminar también /srv/deployd,
+                                        # /var/lib/deployd-connect, herramientas y logs
 ```
 
 [`deploy/uninstall-ubuntu.sh`](deploy/uninstall-ubuntu.sh) ofrece un respaldo
@@ -129,8 +195,8 @@ mantener su propietario. Las rutas de estado personalizadas fuera del checkout y
 La desinstalación se detiene si no puede parar el servicio y restaura los cambios
 de Nginx si su validación o recarga falla.
 
-El instalador detiene deployd antes de reconstruir dependencias, repara permisos
-del estado estándar y verifica el acceso del usuario de servicio. Python
+El instalador repara permisos del estado estándar y verifica el acceso del
+usuario de servicio antes de reiniciar. Python
 administrado se instala en `.python` dentro del checkout para que `ProtectHome`
 no lo oculte. Si una `.venv` existente apunta al directorio personal, debe
 recrearse. Si falla una actualización tras detener el servicio, corrige el error
@@ -161,11 +227,19 @@ Abre la interfaz por HTTPS o un túnel SSH e ingresa el token de administración
 Busca por nombre, repositorio o ruta local. La lista muestra diez aplicaciones
 por página y solo los detalles de la seleccionada. **Conexión del sitio**,
 **Administrar versiones** y **Configuración de GitHub Actions** son pestañas: solo
-una está activa. Las rutas están en **Carpetas de la aplicación**. **Actualizar**
-consulta la salud de la API, aplicaciones, actividad y el panel abierto de conexión
-o versiones; no hay consultas periódicas de la interfaz. Actualiza después de un
-despliegue o una operación pendiente para ver el resultado. GitHub Actions sigue
-consultando su propio despliegue hasta terminar.
+una está activa. Las rutas están en **Carpetas de la aplicación**. Cada tarjeta
+tiene un panel de estado con el release actual, la cantidad en cola, el último
+deploy y el último health check, más **Congelar** / **Descongelar**. El último
+deploy corresponde a un despliegue de artefacto; la limpieza y otras operaciones
+locales quedan en actividad sin reemplazar ese resultado. La zona de
+actividad se actualiza con **Actualizar** (o la tecla `r`), sin consultas
+periódicas en segundo plano. Al actualizar, muestra avisos de resultados recién
+detectados. **Deploys recientes** filtra por app y estado, busca por prefijo de
+commit, pagina con **Cargar más** y ofrece cancelar, redeploy y enlaces al commit
+y a la comparación por fila. El rollback se hace eligiendo la versión exacta en
+**Administrar versiones**. **Auditoría** lista las acciones administrativas con
+el usuario que las hizo. GitHub Actions sigue consultando su propio despliegue
+hasta terminar.
 
 En **Agregar aplicación** puedes configurar:
 
@@ -208,7 +282,10 @@ bajos y el nombre se convierte a mayúsculas.
 
 La pantalla de confirmación y cada tarjeta ofrecen **Configuración de GitHub Actions**.
 Elige pnpm/npm, HTML simple (sin compilación) o un comando personalizado; indica
-la carpeta del repositorio, el comando, la carpeta de salida y la rama de despliegue.
+la carpeta del repositorio, el comando, la carpeta de salida y el disparador:
+pushes a una rama de despliegue, o tags de Git que coincidan con un patrón como
+`v*` o `web-v*` para que solo salgan a producción los commits que etiquetes,
+desde cualquier rama.
 Los presets de Node instalan dependencias desde el lockfile; los comandos
 personalizados deben instalar sus propias herramientas.
 **Guardar ajustes y descargar ZIP** guarda estos datos y genera
@@ -218,11 +295,14 @@ y revisa los workflows existentes para evitar ejecuciones duplicadas.
 
 Por defecto, el workflow es manual. Súbelo a la rama predeterminada y usa
 **Actions → Deploy APP → Run workflow**, seleccionando la rama de despliegue.
-Después de una prueba exitosa puedes habilitar despliegues al hacer push,
-descargar otra vez y subir el workflow actualizado. Guardar aquí no modifica GitHub.
+Después de una prueba exitosa puedes habilitar despliegues automáticos al hacer
+push o al subir un tag que coincida, descargar otra vez y subir el workflow
+actualizado. Guardar aquí no modifica GitHub.
 Solo se empaqueta la carpeta seleccionada, con permisos de lectura para Nginx.
-Se excluyen metadatos de Git y se rechazan archivos ocultos, enlaces, dependencias
-y archivos comunes de claves privadas. Revisa si hay otro contenido privado.
+Se excluyen metadatos de Git y se rechazan enlaces, carpetas de dependencias,
+claves privadas comunes y dotfiles de credenciales (`.env*`, `.ssh`, `.npmrc`,
+`.netrc` y similares); los dotfiles que un sitio necesita, como `.well-known`,
+`.htaccess` y `.nojekyll`, sí se permiten. Revisa si hay otro contenido privado.
 
 Guardar configura deployd; **no** agrega secretos ni workflows a GitHub,
 prueba el token, modifica Nginx ni despliega la aplicación. Copia el secreto de
@@ -239,6 +319,16 @@ al repo de tu aplicación e incorpora
 `scripts/notify_deploy.py`. El repo necesita un secreto (`DEPLOYD_SECRET`) y
 una variable (`DEPLOYD_URL`). Las descargas públicas no necesitan una credencial
 de GitHub en el servidor.
+
+El workflow tiene dos jobs: un `build` de solo lectura que empaqueta y sube el
+artefacto, y un `publish` con `contents: write` que vuelve a verificar el
+checksum, crea el release `deploy-<app>-<sha>`, notifica a deployd y elimina los
+releases y tags de deploy anteriores más allá de los diez más recientes. La
+entrada `dry_run` de `workflow_dispatch` compila y empaqueta sin publicar.
+Descomenta la línea `environment:` para exigir revisores antes de los pushes a
+producción. El notificador reintenta errores HTTP transitorios (429, 502 a 504,
+520 a 524) con espera creciente y trata `superseded` y `cancelled` como fallos
+con un mensaje claro.
 
 Para un repositorio privado, agrega en el formulario un token granular con
 **Contents: read** para ese repositorio; no requiere reiniciar el servicio.
@@ -275,9 +365,13 @@ X-Deploy-Signature: sha256=<hmac hex de "{timestamp}.{nonce}.{cuerpo crudo}">
 ```
 
 `202 {deploy_id}` → consulta `GET /deploys/{deploy_id}` para
-`queued | running | succeeded | failed | rolled_back` más el log por paso.
-Si se pierde la respuesta `202`, reintenta exactamente el mismo request
-firmado y nonce; deployd devuelve el `deploy_id` original sin duplicarlo.
+`queued | running | succeeded | failed | rolled_back | superseded | cancelled`
+más la línea de tiempo por paso. La salida de los comandos solo se incluye
+cuando el request lleva el token de administración; CI ve nombres y estados de
+los pasos. Si se pierde la respuesta `202`, reintenta exactamente el mismo
+request firmado y nonce; deployd devuelve el `deploy_id` original sin
+duplicarlo. Un push que llega mientras un deploy anterior de la misma app sigue
+en cola marca ese anterior como `superseded`; una app congelada responde `423`.
 
 ## Administración de versiones
 
@@ -453,6 +547,74 @@ se convierte a `keep_previous = keep_releases - 1`, conservando su política.
 Por ejemplo, `keep_releases: 5` equivale a `keep_previous: 4`.
 Un valor anterior `keep_previous: null` ahora usa el valor predeterminado de una versión anterior.
 
+## Migraciones de base de datos
+
+`deployd-migrate` aplica archivos `NNN_nombre.sql` de un directorio en orden
+numérico, registra el SHA256 de cada archivo en `deploy_migrations` y se niega a
+correr cuando un archivo ya aplicado cambió. Úsalo como `migrate.command` de la
+app para que una migración fallida detenga el deploy antes del cutover.
+
+```bash
+deployd-migrate --dir migrations --dialect mssql --dsn-env DEPLOYD_MIGRATE_DSN
+deployd-migrate --dir migrations --dialect postgres --dsn-file /etc/app/dsn --dry-run
+deployd-migrate --dir migrations status
+```
+
+Pasa el DSN con `--dsn-env` (por defecto `DEPLOYD_MIGRATE_DSN`) o `--dsn-file`;
+`--dsn` funciona pero es visible para otros usuarios en `ps`. Los comandos corren
+con un entorno depurado, así que una variable de DSN definida en el entorno del
+servicio debe listarse en `env_passthrough` de la app para llegar a
+`deployd-migrate`; `--dsn-file` no necesita passthrough. En SQL Server cada
+archivo corre con `SET XACT_ABORT ON` dentro de una transacción, se drenan todos
+los result sets para que un error después de un `PRINT` siga fallando el
+archivo, y un archivo que maneja sus propias transacciones se rechaza. Los
+runners que comparten una base se serializan con `sp_getapplock` (SQL Server) o
+`pg_advisory_xact_lock` (PostgreSQL). Instala el driver con
+`pip install 'deployd[mssql]'` o `'deployd[postgres]'`.
+
+## Operación
+
+- **Congelar** una app desde su panel de estado (o
+  `POST /admin/apps/{name}/freeze`) rechaza los deploys de CI con `423` durante
+  un incidente o una ventana de mantenimiento. La activación local y el
+  rollback siguen funcionando congelada.
+- **Cancelar** un deploy en cola desde el historial
+  (`POST /admin/deploys/{id}/cancel`). Los deploys en ejecución no se cancelan;
+  un push más nuevo reemplaza automáticamente a los que están en cola.
+- **Rollback** desde **Administrar versiones**: selecciona la versión guardada
+  exacta y actívala por el mismo camino de cutover, restart y health check.
+- **Limpieza** desde **Administrar versiones**: se pone en la misma cola de la
+  app que los despliegues y queda registrada en actividad. Actualiza para ver
+  el resultado. Se vuelve a comprobar la protección de la versión antes de borrarla.
+- **Hooks**: `hooks.before_cutover` corre en el directorio del release nuevo
+  después de las migraciones; `hooks.after_health` corre en el release vivo
+  cuando el health check pasó y hace rollback si falla. Ambos son listas argv
+  con su propio `timeout_seconds`, igual que `migrate` y `restart`. Los comandos
+  reciben `DEPLOYD_APP`, `DEPLOYD_DEPLOY_ID`, `DEPLOYD_COMMIT_SHA`,
+  `DEPLOYD_RELEASE_DIR` y `DEPLOYD_CURRENT`, más las variables del servicio
+  listadas en `env_passthrough` de la app (nunca los secretos de
+  administración, GitHub o firma), y nada más del entorno del servicio.
+- **Aserciones de salud**: `health.expect_body` (subcadena) y
+  `health.expect_header` (`Nombre: valor`) aceptan el marcador `{commit_sha}`.
+  Expón el SHA en ejecución desde tu app y configura una de las dos; un restart
+  que dejó al proceso viejo sirviendo falla y hace rollback.
+- **Bitácora de auditoría**: cada mutación administrativa registra al usuario
+  de Basic Auth que actuó (desde `X-Remote-User`, fijado por el sitio Nginx de
+  administración) en **Auditoría** y en `GET /admin/audit`.
+- **Historial**: se conserva, incluidos los registros necesarios para activar
+  versiones guardadas. La retención de archivos sigue siendo configurable por app.
+  El mantenimiento horario solo elimina nonces vencidos; las descargas huérfanas
+  bajo `releases/.incoming` se eliminan al arrancar.
+- **`deployd check`** es de solo lectura: inspecciona configuración, permisos de
+  las rutas de estado, secretos, metadatos de versiones y ejecutables. No crea ni
+  migra la base, no prueba escrituras ni repara carpetas. No garantiza la integridad
+  de la base ni que una escritura tenga éxito. Ejecútalo tras editar la configuración.
+  Si reporta recuperación pendiente, reinicia el servicio de forma controlada
+  cuando termine cualquier operación en curso.
+- **`/healthz`** devuelve `{"status": "ok"}` solo cuando la base de estado es
+  escribible y todas las tareas worker están vivas; si no, `degraded` con el
+  chequeo que falla.
+
 ## Notas de despliegue
 
 - **Linux:** [`deploy/deployd.service`](deploy/deployd.service) — unidad de
@@ -473,20 +635,23 @@ versión anterior compatible si hace falta un rollback de aplicación.
 
 ```
 src/deployd/
-  main.py                  factory de la app FastAPI + lifespan (inicia el worker)
+  main.py                  factory de la app FastAPI + lifespan (worker, mantenimiento, watchdog)
   config.py                settings, registro de apps, secretos
   security.py              verificación HMAC (firma, ventana, nonce)
   models.py                esquemas de request/response
+  check.py                 validador de configuración `deployd check`
   api/routes.py            POST /deploys, GET /deploys/{id}, GET /healthz
-  api/admin.py             /admin: CRUD del registro, rotación de secretos, redeploy, historial
-  worker/queue.py          cola asyncio serializada por app
-  worker/runner.py         el pipeline de despliegue de siete pasos
+  api/admin.py             /admin: registro, secretos, historial, cancelar, congelar, estado, auditoría
+  worker/queue.py          cola asyncio serializada por app, con supervisión y drenado
+  worker/runner.py         el pipeline de despliegue (pasos preparatorios, fase de commit protegida)
+  worker/directory_layout.py  intercambio de carpeta current real e identidades de release
+  worker/website.py        protocolo del helper de conexión de sitios
   migrate.py               CLI deployd-migrate
-  store/db.py              store de estado SQLite
+  store/db.py              store de estado SQLite versionado
 web/                       UI de administración en React (Vite + Tailwind)
 examples/                  workflow de CI + script de notificación para incorporar
-deploy/                    unidad systemd, guía de Windows
-tests/                     pytest (API/worker) — web/ usa vitest
+deploy/                    instaladores, unidad systemd, helper root, guía de Windows
+tests/                     pytest (API/worker/instalador) — web/ usa vitest
 ```
 
 ## Contribuir

@@ -1,10 +1,9 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { translate } from '../i18n.js'
 import GitHubSetup from './GitHubSetup.jsx'
 import SetupSummary from './SetupSummary.jsx'
+import { renderWith } from '../test-utils.jsx'
 
-const t = (key, values) => translate('en', key, values)
 const spec = { github_repository: 'acme/site', deploy_url: 'https://deployd.example.com' }
 
 afterEach(() => vi.restoreAllMocks())
@@ -12,7 +11,7 @@ afterEach(() => vi.restoreAllMocks())
 function panel(settings = {}) {
   const call = vi.fn().mockResolvedValue({ filename: 'site-github-actions.zip', content_base64: btoa('zip') })
   const onChanged = vi.fn()
-  render(<GitHubSetup name="site" spec={{ ...spec, ...settings }} call={call} onChanged={onChanged} t={t} />)
+  renderWith(<GitHubSetup name="site" spec={{ ...spec, ...settings }} call={call} onChanged={onChanged} />)
   return { call, onChanged }
 }
 
@@ -55,6 +54,17 @@ describe('GitHub setup', () => {
     expect(screen.getByText(/Committing this workflow can deploy immediately/)).toBeInTheDocument()
   })
 
+  it('offers tag-based deployment with a pattern instead of a branch', () => {
+    const { call } = panel()
+    fireEvent.change(screen.getByLabelText('Deploy trigger'), { target: { value: 'tag' } })
+    expect(screen.queryByLabelText('Deployment branch')).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Tag pattern'), { target: { value: 'web-v*' } })
+    fireEvent.click(screen.getByLabelText('Also deploy automatically when a matching tag is pushed'))
+    expect(screen.getByText(/Pushing a matching tag deploys immediately/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Save settings and download ZIP' }))
+    expect(JSON.parse(call.mock.calls[0][1].body)).toMatchObject({ trigger: 'tag', tag_pattern: 'web-v*', automatic: true })
+  })
+
   it('switches Node commands but preserves custom build commands', () => {
     panel()
     fireEvent.change(screen.getByLabelText('Build preset'), { target: { value: 'npm' } })
@@ -75,8 +85,7 @@ describe('GitHub setup', () => {
   })
 
   it('appears immediately after application setup with Spanish instructions', () => {
-    render(<SetupSummary result={{ app: 'site' }} spec={spec} call={vi.fn()} onDismiss={vi.fn()}
-      t={(key, values) => translate('es', key, values)} />)
+    renderWith(<SetupSummary result={{ app: 'site' }} spec={spec} call={vi.fn()} onDismiss={vi.fn()} />, { language: 'es' })
     expect(screen.getByRole('region', { name: 'Configuración de GitHub Actions' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Guardar ajustes y descargar ZIP' })).toBeInTheDocument()
     expect(screen.getByText(/ZIP no contiene valores secretos/)).toBeInTheDocument()

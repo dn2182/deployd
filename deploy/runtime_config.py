@@ -63,6 +63,7 @@ def prepare(repo: Path, state: Path) -> str:
             with os.fdopen(backup_fd, "wb") as handle:
                 handle.write(env.read_bytes())
             print(f"Existing environment backed up to {backup}", file=sys.stderr)
+            _prune_backups(repo, keep=3)
         for key, value in updates.items():
             set_key(candidate, key, value, quote_mode="always")
         os.chmod(candidate, 0o600)
@@ -70,6 +71,15 @@ def prepare(repo: Path, state: Path) -> str:
     finally:
         candidate.unlink(missing_ok=True)
     return token
+
+
+def _prune_backups(repo: Path, keep: int) -> None:
+    backups = sorted(
+        (path for path in repo.glob(".env.backup-*") if path.is_file() and not path.is_symlink()),
+        key=lambda path: path.stat().st_mtime_ns,
+    )
+    for path in backups[:-keep]:
+        path.unlink()
 
 
 def check() -> None:

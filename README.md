@@ -24,14 +24,23 @@ is the entire attack surface.
   attempts plus a `current` symlink (atomic on Linux) or guarded junction swap
   (Windows); failed health checks roll back automatically
 - **Migrations that gate the release** — forward-only, checksummed SQL
-  migrations (`deployd-migrate`, SQL Server via pyodbc) run before cutover
-  and halt the deploy hard on failure
+  migrations (`deployd-migrate`, SQL Server via pyodbc or PostgreSQL via
+  psycopg) run before cutover under a database-wide lock and halt the deploy
+  hard on failure
+- **Hooks and health assertions** — optional `before_cutover` and
+  `after_health` commands, and health checks that can require the deployed
+  SHA in the response body or a header, so a stale process cannot pass
 - **Admin UI** — app registry, one-click secret rotation (shown once),
-  deploy history with per-step logs, redeploy, live status
-- **Bare-host native** — systemd on Linux, NSSM/IIS on Windows; a single
-  Python service with a SQLite state file
-- **Crash-aware queue** — queued deploys resume after restart; interrupted
-  deploys fail explicitly instead of remaining stuck in `running`
+  deploy history with per-step logs, redeploy, cancel, freeze, rollback,
+  per-app status, audit log, and manual refresh
+- **Bare-host native** — systemd on Linux; a single
+  Python service with a SQLite state file, a `deployd check` command, and
+  systemd watchdog support
+- **Crash-aware queue** — queued deploys resume after restart; a newer push
+  supersedes older queued ones; steps from migrate onward finish even during a
+  service stop, and work interrupted before that point resumes on restart
+- **Contained commands** — migrate, restart and hook processes get a scrubbed
+  environment; service secrets never reach artifact code
 
 ## How it works
 
@@ -44,13 +53,20 @@ Deploy API (FastAPI)  -- validate, enqueue, 202 + deploy_id
       |
       v
 Deploy Worker (per-app serialized queue)
-      +--> download artifact + verify SHA256
-      +--> unpack into unique release dir  (traversal + resource-limit safe)
-      +--> run migrations                  (forward-only, halt on failure)
-      +--> cutover                         (directory exchange or legacy link swap)
-      +--> restart + health check          (fail => auto-rollback)
-      +--> record status + step log        (CI polls GET /deploys/{id})
+      +--> download artifact + verify SHA256  (hashed while streaming, retried)
+      +--> unpack into unique release dir     (traversal + resource-limit safe)
+      +--> run migrations                     (forward-only, halt on failure)
+      +--> before_cutover hook                (optional)
+      +--> cutover                            (directory exchange or legacy link swap)
+      +--> restart + health check             (fail => auto-rollback)
+      +--> after_health hook                  (optional, fail => auto-rollback)
+      +--> record status and step log         (CI polls GET /deploys/{id})
 ```
+
+Everything from `migrate` on is the commit phase: once it starts, a service
+stop waits for it to finish (up to `DEPLOYD_DRAIN_TIMEOUT_SECONDS`). A stop
+during download, verify or unpack returns the deploy to the queue and it
+resumes after restart.
 
 ### Design decisions
 
@@ -69,7 +85,10 @@ Deploy Worker (per-app serialized queue)
 
 Git is the only bootstrap dependency. The guided installer installs the
 remaining system and project requirements, runs validation, and configures the
-service, Nginx, runtime state, and management UI.
+service, Nginx, runtime state, and management UI. Node 22 and `uv` are
+downloaded as official release tarballs, verified against their published
+checksums, and kept under the checkout (`.node`) and `~/.local/bin`; nothing
+is piped from the network into a shell.
 
 ```bash
 sudo apt update
@@ -84,32 +103,75 @@ Run [`deploy/install-ubuntu.sh`](deploy/install-ubuntu.sh) as the normal
 repository owner, not with `sudo`. It elevates only operations that require
 system access. Cloudflare Flexible mode is provided for testing only; keep the
 management port firewall-restricted and move to Full (strict) before production.
-The installer prompts for the public domain, management bind/port, and Basic
-Auth username, then generates the admin token when needed.
+The installer prompts for the public domain, management bind/port (default
+`127.0.0.1:844`), and Basic Auth username, then generates the admin token when
+needed. The token is never printed; the installer tells you where it lives.
+Every prompt reads an environment override for unattended runs:
+`DEPLOYD_INSTALL_DOMAIN`, `DEPLOYD_INSTALL_ADMIN_BIND`,
+`DEPLOYD_INSTALL_ADMIN_PORT`, `DEPLOYD_INSTALL_ADMIN_USER`,
+`DEPLOYD_INSTALL_ADMIN_PASSWORD`, and `DEPLOYD_INSTALL_YES=1` for the
+confirmations. Ports 80 and the management port are checked before Nginx is
+touched. The generated management site forwards the Basic Auth user to deployd
+as `X-Remote-User` for the audit log, applies the security headers to `/api/`
+too, and rate-limits `POST /deploys` on the public site.
 It repairs missing or unused development paths in an existing `.env`, keeps
 existing tokens and absolute paths, and backs up `.env` before changes. If a
 development path contains state, it stops with migration instructions rather
 than switching to an empty database. Runtime paths and app configuration are
 checked as the service user before startup.
 
+### Change your management password
+
+Use the key button in the admin header, **Change management password**. Enter
+your current password and confirm a new one. This changes Nginx Basic Auth only;
+the API admin token and application signing secrets are unchanged. Your browser
+may prompt you to sign in again with the new password. Use HTTPS or an SSH tunnel,
+not public HTTP, for management access.
+
+Existing installations must rerun the updated installer first. It preserves
+the existing login while moving password hashes from `/etc/nginx/deployd.htpasswd`
+to the root-owned `/var/lib/deployd-auth/htpasswd`. A narrowly scoped sudo helper
+verifies the old password and atomically replaces the hash; deployd cannot read or
+write that file directly. No new service or port is added. Uninstall includes
+these credentials and the helper in its optional backup, then removes them along
+with the management configuration.
+
 ## Update on Ubuntu
 
 ```bash
-cd /opt/deployd
-git pull --ff-only origin main
-make install
-make build
-sudo systemctl restart deployd
+/opt/deployd/deploy/update-ubuntu.sh
 ```
 
-For frontend-only changes, `git pull --ff-only origin main` followed by
-`make build` is enough; refresh the browser afterward.
+That pulls the latest release and runs the installer with `--update`, which
+keeps the domain, management bind and port, Basic Auth login and admin token
+without asking. Rerunning `install-ubuntu.sh` by hand does the same: it detects
+the existing installation and offers to keep its settings (the default, also
+when stdin is closed); answer `n`, or pass `--reconfigure`, to change them.
+`DEPLOYD_INSTALL_MODE=update|reconfigure` sets the choice for unattended runs.
+
+Rerunning the installer is the supported upgrade path: it refreshes the
+systemd unit, Nginx sites, the root website helper and file ownership, which
+`make install` alone does not. The upgrade runs lint, tests, the dependency
+audit and the web build **before** stopping the service, refuses to stop while
+any deploy is queued or running (it waits up to `DEPLOYD_INSTALL_WAIT_SECONDS`,
+default 600), writes an online backup of the state database to
+`/var/lib/deployd/backups/` (newest five kept), and stops only for the
+dependency sync and restart. For frontend-only changes,
+`git pull --ff-only origin main` followed by `make build` is enough; refresh
+the browser afterward.
+
+For a clean reinstall, use the normal uninstaller without `--purge`, accept the
+backup and restore connected websites to real folders first. Then clone and run
+the installer again. Uninstall removes deployd's configuration, tokens and state;
+without restoring that backup, re-register apps and update their GitHub secrets.
+Release folders alone do not restore their deployment-history records.
 
 ## Uninstall from Ubuntu
 
 ```bash
 cd /opt/deployd
-./deploy/uninstall-ubuntu.sh
+./deploy/uninstall-ubuntu.sh            # add --purge to also drop /srv/deployd,
+                                        # /var/lib/deployd-connect, tooling and logs
 ```
 
 [`deploy/uninstall-ubuntu.sh`](deploy/uninstall-ubuntu.sh) offers a
@@ -121,8 +183,8 @@ Custom runtime paths outside the checkout and `/var/lib/deployd` are not include
 in the backup or removed; back them up separately. Removal aborts if the service
 cannot stop; rejected Nginx changes are restored before continuing.
 
-The installer stops deployd before rebuilding dependencies, repairs ownership
-of standard runtime files, and validates service-user access before restarting.
+The installer repairs ownership of standard runtime files and validates
+service-user access before restarting.
 Managed Python downloads live under `.python` in the checkout so systemd's
 `ProtectHome` does not hide them. Existing virtual environments pointing into a
 home directory must be recreated before installation can complete. If an upgrade
@@ -154,10 +216,17 @@ Open the management UI over HTTPS or an SSH tunnel and enter the admin token.
 Search applications by name, repository, or local site path; the list shows ten
 per page and only the selected application's details. **Website connection**,
 **Manage versions**, and **GitHub Actions setup** are mutually exclusive tabs.
-Internal paths are under **Application folders**. **Refresh** updates API health,
-applications, recent activity, and the open website/version panel; there is no
-background UI polling. Refresh after GitHub deployments or queued operations to
-see their result. GitHub Actions still polls its own deployment until completion.
+Internal paths are under **Application folders**. Each app card has a status
+panel with the current release, queued count, last deploy and last health
+result, plus **Freeze** / **Unfreeze**. Last deploy refers to an artifact
+deployment; cleanup and other local operations remain in activity without
+overwriting that result. Use **Refresh** (or the `r` key) to
+update status; the console does not poll in the background. A refresh shows
+a toast for newly observed completion results. **Recent deploys** filters by
+app and status, searches by commit prefix, pages with **Load more**, and offers
+cancel, redeploy, commit and compare links per row. Select an exact retained
+version in **Manage versions** to roll back. **Audit log** lists admin actions
+with the acting user. GitHub Actions still polls its own deployment until completion.
 
 Choose **Add application** to configure:
 
@@ -195,7 +264,9 @@ from the UI. App names use hyphens, replaced with underscores in these keys.
 
 The completion screen and each app card provide **GitHub Actions setup**.
 Choose pnpm/npm, plain HTML (no build), or a custom build; specify the repository
-folder, build command, output folder, and deployment branch. Node presets install
+folder, build command, output folder, and the trigger: pushes to a deployment
+branch, or Git tags matching a pattern such as `v*` or `web-v*` so only the
+commits you tag go live, from any branch. Node presets install
 locked dependencies before building. Custom commands must install their own tools.
 **Save settings and download ZIP** remembers these settings and generates
 `.github/workflows/deploy.yml`, `scripts/notify_deploy.py`, and setup instructions.
@@ -204,11 +275,15 @@ any existing deployment workflow to avoid duplicate runs.
 
 Generated workflows are manual by default. Commit them to the repository's default
 branch, then select **Actions → Deploy APP → Run workflow** and the deployment
-branch. After a successful test, you can enable deployment on pushes, download
-again, and commit the updated workflow. Saving here does not update GitHub.
+branch (or a tag, in tag mode). After a successful test, you can enable
+automatic deployment on pushes or on matching tags, download again, and commit
+the updated workflow. Saving here does not update GitHub.
 Only the selected output folder is packaged, with readable modes for Nginx.
-Git metadata is excluded; hidden files, symlinks, dependencies, and common private
-keys are rejected. Review the output for other private content before deploying.
+Git metadata is excluded; symlinks, dependency folders, common private keys and
+credential dotfiles (`.env*`, `.ssh`, `.npmrc`, `.netrc` and similar) are
+rejected, while dotfiles a site needs such as `.well-known`, `.htaccess` and
+`.nojekyll` are allowed. Review the output for other private content before
+deploying.
 
 Saving configures deployd; it does **not** add GitHub secrets/workflows, test the
 GitHub credential, alter Nginx, or deploy the app. Copy the signing secret into
@@ -225,6 +300,16 @@ into your app repo and vendor
 `scripts/notify_deploy.py`. The repo needs one secret (`DEPLOYD_SECRET`) and
 one variable (`DEPLOYD_URL`). Public release downloads need no GitHub credential
 on the server.
+
+The workflow has two jobs: a read-only `build` job that packages and uploads
+the artifact, and a `publish` job with `contents: write` that re-verifies the
+checksum, creates the `deploy-<app>-<sha>` release, notifies deployd, and
+prunes older deploy releases and tags beyond the newest ten. A
+`workflow_dispatch` input `dry_run` builds and packages without publishing.
+Uncomment the `environment:` line to require reviewers before production
+pushes. The notifier retries transient HTTP errors (429, 502 to 504, 520 to
+524) with backoff and treats `superseded` and `cancelled` as failures with a
+clear message.
 
 For a private repository, add a fine-grained token with **Contents: read** for
 that repository in the app form; no service restart is needed. The server-wide
@@ -260,9 +345,13 @@ X-Deploy-Signature: sha256=<hex hmac of "{timestamp}.{nonce}.{raw body}">
 ```
 
 `202 {deploy_id}` → poll `GET /deploys/{deploy_id}` for
-`queued | running | succeeded | failed | rolled_back` plus the step log.
-If the `202` response is lost, retry the exact signed request with the same
-nonce; deployd returns the original `deploy_id` without enqueueing a duplicate.
+`queued | running | succeeded | failed | rolled_back | superseded | cancelled`
+plus the step timeline. Step output is included only when the request carries
+the admin token; CI sees step names and statuses. If the `202` response is
+lost, retry the exact signed request with the same nonce; deployd returns the
+original `deploy_id` without enqueueing a duplicate. A push that arrives while
+an older deploy of the same app is still queued marks the older one
+`superseded`; a frozen app answers `423`.
 
 ## Version management
 
@@ -438,6 +527,73 @@ converted to `keep_previous = keep_releases - 1`, preserving the existing policy
 For example, the old `keep_releases: 5` becomes `keep_previous: 4`.
 An earlier `keep_previous: null` now uses the default of one previous version.
 
+## Database migrations
+
+`deployd-migrate` applies `NNN_name.sql` files from a directory in numeric
+order, records each file's SHA256 in `deploy_migrations`, and refuses to run
+when an applied file changed. Use it as the app's `migrate.command` so a failed
+migration halts the deploy before cutover.
+
+```bash
+deployd-migrate --dir migrations --dialect mssql --dsn-env DEPLOYD_MIGRATE_DSN
+deployd-migrate --dir migrations --dialect postgres --dsn-file /etc/app/dsn --dry-run
+deployd-migrate --dir migrations status
+```
+
+Pass the DSN through `--dsn-env` (default `DEPLOYD_MIGRATE_DSN`) or
+`--dsn-file`; `--dsn` works but is visible to other users in `ps`. Commands run
+with a scrubbed environment, so a DSN variable set in the service environment
+must be listed in the app's `env_passthrough` to reach `deployd-migrate`;
+`--dsn-file` needs no passthrough. On SQL
+Server each file runs with `SET XACT_ABORT ON` inside one transaction, every
+result set is drained so errors after a `PRINT` still fail the file, and a
+file that manages its own transactions is rejected. Runners sharing one
+database serialize on `sp_getapplock` (SQL Server) or `pg_advisory_xact_lock`
+(PostgreSQL). Install the driver with `pip install 'deployd[mssql]'` or
+`'deployd[postgres]'`.
+
+## Operations
+
+- **Freeze** an app from its status panel (or `POST /admin/apps/{name}/freeze`)
+  to reject CI deploys with `423` during an incident or a maintenance window.
+  Local activation and rollback keep working while frozen.
+- **Cancel** a queued deploy from the history (`POST /admin/deploys/{id}/cancel`).
+  Running deploys cannot be cancelled; a newer push supersedes queued ones
+  automatically.
+- **Roll back** from **Manage versions**: select the exact retained version to
+  activate through the same cutover, restart and health path.
+- **Clean up** a retained version from **Manage versions**. Cleanup is queued
+  alongside deployments for that app and recorded in activity. Refresh to see
+  its result. Active/protected versions are checked again before deletion.
+- **Hooks**: `hooks.before_cutover` runs in the new release directory after
+  migrations, `hooks.after_health` runs in the live release once the health
+  check passed and rolls back on failure. Both are argv lists with their own
+  `timeout_seconds`, like `migrate` and `restart`. Commands receive
+  `DEPLOYD_APP`, `DEPLOYD_DEPLOY_ID`, `DEPLOYD_COMMIT_SHA`,
+  `DEPLOYD_RELEASE_DIR` and `DEPLOYD_CURRENT`, plus any service variables
+  listed in the app's `env_passthrough` (never the admin, GitHub or signing
+  secrets), and nothing else from the service environment.
+- **Health assertions**: `health.expect_body` (substring) and
+  `health.expect_header` (`Name: value`) accept a `{commit_sha}` placeholder.
+  Expose the running SHA from your app and set one of them; a restart that
+  left the old process serving then fails and rolls back.
+- **Audit log**: every admin mutation records the acting Basic Auth user (from
+  `X-Remote-User`, set by the management Nginx site) under **Audit** and
+  `GET /admin/audit`.
+- **History** is preserved, including the records needed to activate retained
+  releases. Per-app release-file retention remains configurable. Hourly maintenance
+  only expires stale nonces; leftover downloads under `releases/.incoming` are
+  removed at startup.
+- **`deployd check`** is read-only: it inspects settings, state-path permissions,
+  secrets and their file mode, release metadata, command executables and per-app
+  warnings. It does not create or migrate the database, probe filesystem writes,
+  or repair release folders. It does not prove database integrity or successful
+  writes. Run it after editing configuration by hand; reported release recovery
+  requires a controlled service restart after any running work finishes.
+- **`/healthz`** returns `{"status": "ok"}` only when the state database is
+  writable and every worker task is alive; otherwise `degraded` with the
+  failing check named.
+
 ## Deployment notes
 
 - **Linux:** [`deploy/deployd.service`](deploy/deployd.service) — systemd
@@ -457,20 +613,23 @@ remains compatible if application rollback is required.
 
 ```
 src/deployd/
-  main.py                  FastAPI app factory + lifespan (starts worker)
+  main.py                  FastAPI app factory + lifespan (worker, maintenance, watchdog)
   config.py                settings, app registry, secrets
   security.py              HMAC verification (signature, window, nonce)
   models.py                request/response schemas
+  check.py                 `deployd check` configuration validator
   api/routes.py            POST /deploys, GET /deploys/{id}, GET /healthz
-  api/admin.py             /admin: registry CRUD, secret rotation, redeploy, history
-  worker/queue.py          per-app serialized asyncio queue
-  worker/runner.py         the seven-step deploy pipeline
+  api/admin.py             /admin: registry, secrets, history, cancel, freeze, status, audit
+  worker/queue.py          per-app serialized asyncio queue with supervision and drain
+  worker/runner.py         the deploy pipeline (staged steps, shielded commit phase)
+  worker/directory_layout.py  real current directory exchange and release identities
+  worker/website.py        website connection helper protocol
   migrate.py               deployd-migrate CLI
-  store/db.py              SQLite state store
+  store/db.py              versioned SQLite state store
 web/                       React admin UI (Vite + Tailwind)
 examples/                  CI workflow + vendorable notify script
-deploy/                    systemd unit, Windows guide
-tests/                     pytest (API/worker) — web/ has vitest
+deploy/                    installers, systemd unit, root helper, Windows guide
+tests/                     pytest (API/worker/installer) — web/ has vitest
 ```
 
 ## Contributing

@@ -1,7 +1,7 @@
-# Reference workflow for deploying through deployd.
-# Copy into your app repo as .github/workflows/deploy.yml, replace the Build
-# step with your real build, and vendor examples/notify_deploy.py as
-# scripts/notify_deploy.py.
+# Reference workflow for deploying through deployd, generated from
+# src/deployd/templates/deploy.yml (tests/test_github_actions.py keeps it in sync).
+# Copy into your app repo as .github/workflows/deploy.yml, adjust the Build step,
+# and vendor examples/notify_deploy.py as scripts/notify_deploy.py.
 #
 # Repo settings needed:
 #   variables: DEPLOYD_URL   (e.g. https://deploy.example.com)
@@ -10,73 +10,180 @@
 # Private repos: set DEPLOYD_GITHUB_TOKEN on the server with Contents: read.
 # Allowlist https://api.github.com/repos/OWNER/REPO/releases/assets/ and
 # the redirect host release-assets.githubusercontent.com in the app registry.
-
-name: Deploy
-
-on:
+name: Deploy example-site
+'on':
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and package only; skip publishing and deployment
+        type: boolean
+        default: false
   push:
-    branches: [main]
-
+    branches:
+    - main
 concurrency:
-  group: deploy-${{ github.ref }}
+  group: deploy-example-site
   cancel-in-progress: false
-
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+env:
+  APP_NAME: example-site
+  PROJECT_DIR: web
+  OUTPUT_DIR: dist
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
+      contents: read
+    outputs:
+      sha256: ${{ steps.artifact.outputs.sha256 }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - name: Check deployment settings
+      env:
+        DEPLOYD_URL: ${{ vars.DEPLOYD_URL }}
+        DEPLOYD_SECRET: ${{ secrets.DEPLOYD_SECRET }}
+      run: |
+        python3 - <<'PY'
+        import os
+        from urllib.parse import urlsplit
+
+        url = urlsplit(os.environ['DEPLOYD_URL'])
+        if url.scheme != 'https' or not url.hostname or url.username or url.password or url.query or url.fragment:
+            raise SystemExit('Set DEPLOYD_URL to the public HTTPS deployd address.')
+        if len(os.environ['DEPLOYD_SECRET'].encode()) < 32:
+            raise SystemExit('Set DEPLOYD_SECRET to the app signing secret (at least 32 bytes).')
+        PY
+    - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
+      with:
+        version: 10.33.0
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      with:
+        node-version: '22'
+    - name: Install dependencies
+      working-directory: web
+      run: pnpm install --frozen-lockfile
+    - name: Build
+      working-directory: web
+      run: pnpm run build
+    - name: Check static entry point
+      run: test -s "$PROJECT_DIR/$OUTPUT_DIR/index.html"
+    - name: Check artifact contents
+      run: |
+        python3 - <<'PY'
+        import os
+        from pathlib import Path
+
+        workspace = Path(os.environ['GITHUB_WORKSPACE']).resolve()
+        source = workspace / os.environ['PROJECT_DIR'] / os.environ['OUTPUT_DIR']
+        if not source.resolve().is_relative_to(workspace) or not source.is_dir():
+            raise SystemExit('Artifact folder must exist inside the checkout.')
+        if any(path.is_symlink() for path in (source, *source.parents) if path != workspace and workspace in path.parents):
+            raise SystemExit('Artifact folder cannot use symlinks.')
+        # Dotfiles deploy (.well-known, .htaccess, .nojekyll) except repository and credential files.
+        skipped = {'.git', '.github', '.gitignore', '.gitattributes', '.editorconfig', '.DS_Store'}
+        denied = {'.env', '.ssh', '.npmrc', '.pypirc', '.netrc', '.aws', '.docker', 'node_modules', 'id_rsa', 'id_ed25519'}
+        for root, directories, filenames in os.walk(source, followlinks=False):
+            directories[:] = [name for name in directories if name not in skipped]
+            for name in directories + filenames:
+                if name in skipped:
+                    continue
+                path = Path(root) / name
+                if path.is_symlink() or not (path.is_dir() or path.is_file()):
+                    raise SystemExit('Artifact contains a symlink or special file.')
+                if name in denied or name.startswith('.env.') or name.lower().endswith(('.pem', '.key', '.p12', '.pfx')):
+                    raise SystemExit(f'Artifact contains a credential, dependency, or private-key entry: {path.relative_to(source)}')
+        PY
+    - name: Package artifact
+      id: artifact
+      run: |
+        # Normalize metadata for retries and preserve Nginx-readable modes after extraction.
+        tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
+          --mode='u=rwX,go=rX' --exclude=.git --exclude=.github --exclude=.gitignore \
+          --exclude=.gitattributes --exclude=.editorconfig --exclude=.DS_Store \
+          --exclude=./DEPLOYD-SETUP.md --exclude=./scripts/notify_deploy.py \
+          -C "$PROJECT_DIR/$OUTPUT_DIR" -cf - . | gzip -n > "$RUNNER_TEMP/deployd-artifact.tar.gz"
+        echo "sha256=$(sha256sum "$RUNNER_TEMP/deployd-artifact.tar.gz" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: deployd-artifact
+        path: ${{ runner.temp }}/deployd-artifact.tar.gz
+        if-no-files-found: error
+        retention-days: 1
+    if: github.ref == 'refs/heads/main'
+  publish:
+    needs: build
+    # environment: production   # optional: require reviewers before publishing and deploying
+    if: success() && inputs.dry_run != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
       contents: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - name: Build
-        run: |
-          mkdir -p dist
-          echo "replace this with your real build; commit ${GITHUB_SHA}" > dist/version.txt
-          cd dist && zip -r ../app.zip .
-
-      - name: Hash artifact
-        id: hash
-        run: echo "sha256=$(sha256sum app.zip | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-
-      - name: Publish immutable release asset
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ARTIFACT_SHA256: ${{ steps.hash.outputs.sha256 }}
-        run: |
-          tag="deploy-${GITHUB_SHA}"
-          if gh release view "${tag}" >/dev/null 2>&1; then
-            mkdir existing-release
-            gh release download "${tag}" --pattern app.zip --dir existing-release
-            existing_sha="$(sha256sum existing-release/app.zip | cut -d' ' -f1)"
-            if [ "${existing_sha}" != "${ARTIFACT_SHA256}" ]; then
-              echo "release ${tag} already exists with a different artifact" >&2
-              exit 1
-            fi
-          else
-            gh release create "${tag}" app.zip \
-              --title "deploy ${GITHUB_SHA:0:12}" --notes "automated deploy artifact"
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      with:
+        name: deployd-artifact
+        path: ${{ runner.temp }}
+    - name: Publish immutable artifact
+      id: release
+      env:
+        GH_TOKEN: ${{ github.token }}
+        ARTIFACT_SHA256: ${{ needs.build.outputs.sha256 }}
+      run: |
+        actual=$(sha256sum "$RUNNER_TEMP/deployd-artifact.tar.gz" | cut -d' ' -f1)
+        if [ "$actual" != "$ARTIFACT_SHA256" ]; then
+          echo "Downloaded artifact does not match the build checksum." >&2
+          exit 1
+        fi
+        tag="deploy-${APP_NAME}-${GITHUB_SHA}"
+        if gh release view "$tag" >/dev/null 2>&1; then
+          existing=$(mktemp -d "$RUNNER_TEMP/deployd-existing.XXXXXX")
+          gh release download "$tag" --pattern deployd-artifact.tar.gz --dir "$existing"
+          existing_sha=$(sha256sum "$existing/deployd-artifact.tar.gz" | cut -d' ' -f1)
+          if [ "$existing_sha" != "$ARTIFACT_SHA256" ]; then
+            echo "Release $tag already contains a different artifact; it will not be overwritten." >&2
+            exit 1
           fi
-
-      - name: Resolve release asset URL
-        id: asset
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          asset_url=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/deploy-${GITHUB_SHA}" \
-            --jq '.assets[] | select(.name == "app.zip") | .url')
-          test -n "$asset_url"
-          echo "url=$asset_url" >> "$GITHUB_OUTPUT"
-
-      - name: Notify deployd and wait
-        env:
-          DEPLOYD_URL: ${{ vars.DEPLOYD_URL }}
-          DEPLOYD_SECRET: ${{ secrets.DEPLOYD_SECRET }}
-        run: |
-          python3 scripts/notify_deploy.py \
-            --app example-api \
-            --commit-sha "${GITHUB_SHA}" \
-            --artifact-url "${{ steps.asset.outputs.url }}" \
-            --artifact-sha256 "${{ steps.hash.outputs.sha256 }}" \
-            --triggered-by "github-actions:${GITHUB_RUN_ID}"
+        else
+          gh release create "$tag" "$RUNNER_TEMP/deployd-artifact.tar.gz" --target "$GITHUB_SHA" --latest=false \
+            --title "$APP_NAME ${GITHUB_SHA:0:12}" --notes "Deployment artifact for $APP_NAME."
+        fi
+        asset_url=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$tag" \
+          --jq '.assets[] | select(.name == "deployd-artifact.tar.gz") | .url')
+        test -n "$asset_url"
+        echo "url=$asset_url" >> "$GITHUB_OUTPUT"
+    - name: Deploy and wait for result
+      env:
+        DEPLOYD_URL: ${{ vars.DEPLOYD_URL }}
+        DEPLOYD_SECRET: ${{ secrets.DEPLOYD_SECRET }}
+        ARTIFACT_URL: ${{ steps.release.outputs.url }}
+        ARTIFACT_SHA256: ${{ needs.build.outputs.sha256 }}
+      run: |
+        python3 scripts/notify_deploy.py \
+          --app "$APP_NAME" \
+          --commit-sha "$GITHUB_SHA" \
+          --artifact-url "$ARTIFACT_URL" \
+          --artifact-sha256 "$ARTIFACT_SHA256" \
+          --triggered-by "github-actions:${GITHUB_RUN_ID}"
+    - name: Prune old deployment releases
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        # Keeps the newest 10 deploy-<app>-* releases (and their tags) for rollbacks.
+        prefix="deploy-${APP_NAME}-"
+        gh release list --limit 200 --json tagName,createdAt \
+          --jq '.[] | [.createdAt, .tagName] | @tsv' |
+          sort -r | awk -v prefix="$prefix" 'index($2, prefix) == 1 { print $2 }' |
+          tail -n +11 |
+          while IFS= read -r tag; do
+            gh release delete "$tag" --cleanup-tag --yes
+          done
