@@ -62,7 +62,11 @@ def change(payload):
     for parent in reversed(AUTH_DIR.parents):
         protected(parent, directory=True)
     protected(AUTH_DIR, directory=True)
-    with open(AUTH_DIR / "password.lock", "a+b") as lock:
+    # Created with an explicit mode: the caller's umask must not decide whether the
+    # lock passes the same checks as the credential file.
+    lock_fd = os.open(AUTH_DIR / "password.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    os.fchmod(lock_fd, 0o600)
+    with os.fdopen(lock_fd, "r+b") as lock:
         protected(AUTH_DIR / "password.lock")
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         info = protected(PASSWORD_FILE)
