@@ -181,7 +181,7 @@ def test_github_setup_saves_only_build_metadata_and_downloads_no_secrets(env):
         for path in archive.namelist():
             assert ADMIN_TOKEN.encode() not in archive.read(path)
             assert b"signing-secret-" not in archive.read(path)
-        assert data["workflow"] == archive.read(".github/workflows/deploy.yml").decode()
+        assert data["workflow"] == archive.read(".github/workflows/deployd.yml").decode()
         preview = client.post(
             f"{endpoint}/preview", json={"project_dir": "other", "trigger": "tag"}, headers=ADMIN
         )

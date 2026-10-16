@@ -1,11 +1,12 @@
 # Reference workflow for deploying through deployd, generated from
 # src/deployd/templates/deploy.yml (tests/test_github_actions.py keeps it in sync).
-# Copy into your app repo as .github/workflows/deploy.yml, adjust the Build step,
+# Copy into your app repo as .github/workflows/deployd.yml (one per app if the repo
+# holds several, e.g. deployd-api.yml), adjust the Build step,
 # and vendor examples/notify_deploy.py as scripts/notify_deploy.py.
 #
 # Repo settings needed:
 #   variables: DEPLOYD_URL   (e.g. https://deploy.example.com)
-#   secrets:   DEPLOYD_SECRET (the app's HMAC secret)
+#   secrets:   DEPLOYD_SECRET_<APP> (the app's HMAC secret; DEPLOYD_SECRET is the fallback)
 #
 # Private repos: set DEPLOYD_GITHUB_TOKEN on the server with Contents: read.
 # Allowlist https://api.github.com/repos/OWNER/REPO/releases/assets/ and
@@ -48,7 +49,7 @@ jobs:
     - name: Check deployment settings
       env:
         DEPLOYD_URL: ${{ vars.DEPLOYD_URL }}
-        DEPLOYD_SECRET: ${{ secrets.DEPLOYD_SECRET }}
+        DEPLOYD_SECRET: ${{ secrets.DEPLOYD_SECRET_EXAMPLE_SITE || secrets.DEPLOYD_SECRET }}
       run: |
         python3 - <<'PY'
         import os
@@ -164,7 +165,7 @@ jobs:
     - name: Deploy and wait for result
       env:
         DEPLOYD_URL: ${{ vars.DEPLOYD_URL }}
-        DEPLOYD_SECRET: ${{ secrets.DEPLOYD_SECRET }}
+        DEPLOYD_SECRET: ${{ secrets.DEPLOYD_SECRET_EXAMPLE_SITE || secrets.DEPLOYD_SECRET }}
         ARTIFACT_URL: ${{ steps.release.outputs.url }}
         ARTIFACT_SHA256: ${{ needs.build.outputs.sha256 }}
       run: |

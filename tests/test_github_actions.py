@@ -28,7 +28,7 @@ def bundle(**settings):
         "bluedatos", "acme/site", GitHubActionsSettings(**settings), static_site=True
     )
     archive = zipfile.ZipFile(io.BytesIO(base64.b64decode(result["content_base64"])))
-    return archive, yaml.safe_load(archive.read(".github/workflows/deploy.yml"))
+    return archive, yaml.safe_load(archive.read(".github/workflows/deployd.yml"))
 
 
 def steps_named(job, name):
@@ -39,7 +39,7 @@ def steps_named(job, name):
 def test_generated_presets(kind):
     archive, workflow = bundle(kind=kind, project_dir="frontend", build_command="echo build")
     assert set(archive.namelist()) == {
-        ".github/workflows/deploy.yml",
+        ".github/workflows/deployd.yml",
         "scripts/notify_deploy.py",
         "DEPLOYD-SETUP.md",
     }
@@ -79,7 +79,9 @@ def test_generated_presets(kind):
         "Deploy and wait for result",
         "Prune old deployment releases",
     ]
-    assert "${{ secrets.DEPLOYD_SECRET }}" in str(publish["steps"])
+    assert "${{ secrets.DEPLOYD_SECRET_BLUEDATOS || secrets.DEPLOYD_SECRET }}" in str(
+        publish["steps"]
+    )
     for step in build["steps"] + publish["steps"]:
         if "uses" in step:
             assert len(step["uses"].split("@")[1]) == 40
@@ -257,6 +259,14 @@ def example_workflow_text() -> str:
         "example-site", GitHubActionsSettings(**EXAMPLE_SETTINGS), static_site=True
     )
     return "\n".join(header) + "\n" + rendered
+
+
+def test_workflow_reads_a_per_app_secret_with_the_generic_fallback():
+    text = render_workflow("shop-api", GitHubActionsSettings(), static_site=False)
+    assert "${{ secrets.DEPLOYD_SECRET_SHOP_API || secrets.DEPLOYD_SECRET }}" in text
+    assert "${{ secrets.DEPLOYD_SECRET }}" not in text
+    archive, _ = bundle()
+    assert "DEPLOYD_SECRET_BLUEDATOS" in archive.read("DEPLOYD-SETUP.md").decode()
 
 
 def test_example_workflow_is_generated_from_template():

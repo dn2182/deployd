@@ -104,6 +104,10 @@ ENVIRONMENT_HINT = (
 )
 
 
+def secret_name(app: str) -> str:
+    return "DEPLOYD_SECRET_" + app.upper().replace("-", "_")
+
+
 def render_workflow(name: str, settings: GitHubActionsSettings, *, static_site: bool) -> str:
     template = files("deployd").joinpath("templates/deploy.yml").read_text(encoding="utf-8")
     workflow = yaml.safe_load(template)
@@ -171,6 +175,12 @@ def render_workflow(name: str, settings: GitHubActionsSettings, *, static_site: 
     )
     steps[insert_at:insert_at] = build_steps
     text = yaml.dump(workflow, Dumper=_WorkflowDumper, sort_keys=False, width=1000)
+    # A repository that feeds several apps needs one signing secret per app; the
+    # generic name stays as the fallback for single-app repositories.
+    text = text.replace(
+        "${{ secrets.DEPLOYD_SECRET }}",
+        f"${{{{ secrets.{secret_name(name)} || secrets.DEPLOYD_SECRET }}}}",
+    )
     # PyYAML drops comments, so the optional environment hint is re-inserted under the publish job.
     lines = text.splitlines()
     publish_at = lines.index("  publish:")
@@ -202,13 +212,19 @@ def setup_bundle(name: str, repository: str, settings: GitHubActionsSettings, *,
 
 Repository: https://github.com/{repository}
 
-1. Review and copy .github/workflows/deploy.yml and scripts/notify_deploy.py
+1. Review and copy .github/workflows/deployd.yml and scripts/notify_deploy.py
    into your repository root. Do not overwrite an existing workflow blindly;
-   merge or replace it deliberately to avoid duplicate deployments.
+   merge or replace it deliberately to avoid duplicate deployments. If this
+   repository holds more than one deployd app (frontend, backend, worker...),
+   rename the file per app, for example deployd-{name}.yml, so each workflow
+   keeps its own copy; they share scripts/notify_deploy.py and each reads its
+   own DEPLOYD_SECRET_* secret.
 2. In Settings > Secrets and variables > Actions, add repository variable
    DEPLOYD_URL (the public HTTPS deployd API address shown in management), and
-   repository secret DEPLOYD_SECRET (this app's signing secret, not the admin token).
-   No secret values are included in this download.
+   repository secret {secret_name(name)} (this app's signing secret, not the admin
+   token). The workflow falls back to a secret named DEPLOYD_SECRET, so a
+   single-app repository may keep that name. No secret values are included in
+   this download.
 3. Commit and push the files. Manual runs appear after the workflow is on the
    repository's default branch. In Actions, choose Deploy {name}, Run workflow,
    and select {"a tag matching " + settings.tag_pattern if settings.trigger == "tag" else settings.branch}.
@@ -241,7 +257,7 @@ release and web-server permissions before the initial site cutover.
 """
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(".github/workflows/deploy.yml", workflow_text)
+        archive.writestr(".github/workflows/deployd.yml", workflow_text)
         archive.writestr(
             "scripts/notify_deploy.py",
             files("deployd").joinpath("templates/notify_deploy.py.txt").read_bytes(),

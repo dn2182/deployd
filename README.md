@@ -254,7 +254,12 @@ Existing configured health URLs continue to be checked unless explicitly cleared
 
 For a frontend plus an API, register two applications, even if they share a
 repository and domain. Each has its own artifact, signing secret, versions, and
-rollback. One GitHub Actions workflow can deploy either or both.
+rollback, and each gets its own generated workflow. A service without a site
+(API, worker, .NET or Go binary) is the same flow with **Service** selected: a
+restart command such as `sudo systemctl restart shop-api`, a health URL, and a
+custom build command whose output folder holds the deployable files. deployd
+never writes Nginx sites, systemd units or app configuration; those exist on
+the server before the first deploy.
 
 Credentials are stored separately in `DEPLOYD_SECRETS_FILE` with mode `0600`.
 GitHub tokens are never returned by the API. Per-app environment values
@@ -268,10 +273,13 @@ folder, build command, output folder, and the trigger: pushes to a deployment
 branch, or Git tags matching a pattern such as `v*` or `web-v*` so only the
 commits you tag go live, from any branch. Node presets install
 locked dependencies before building. Custom commands must install their own tools.
-**Preview workflow** renders `deploy.yml` from the form, with a copy button,
+**Preview workflow** renders the workflow from the form, with a copy button,
 without saving anything. **Save settings and download ZIP** remembers these
-settings and generates `.github/workflows/deploy.yml`, `scripts/notify_deploy.py`,
-and setup instructions.
+settings and generates `.github/workflows/deployd.yml`,
+`scripts/notify_deploy.py`, and setup instructions. A repository holding an API
+and a frontend registers two apps and downloads two ZIPs; rename each workflow
+per app (`deployd-api.yml`, `deployd-web.yml`), use distinct tag prefixes in tag
+mode, and keep one `DEPLOYD_SECRET_*` secret per app.
 No secret values are included. Copy the files to the repository root, reviewing
 any existing deployment workflow to avoid duplicate runs.
 
@@ -299,8 +307,9 @@ check the first release before switching an existing site to its new path.
 Use the generated ZIP above, or adapt [`examples/github-actions-deploy.yml`](examples/github-actions-deploy.yml)
 into your app repo and vendor
 [`examples/notify_deploy.py`](examples/notify_deploy.py) as
-`scripts/notify_deploy.py`. The repo needs one secret (`DEPLOYD_SECRET`) and
-one variable (`DEPLOYD_URL`). Public release downloads need no GitHub credential
+`scripts/notify_deploy.py`. The repo needs one variable (`DEPLOYD_URL`) and one
+secret per app, `DEPLOYD_SECRET_<APP>` (`DEPLOYD_SECRET` still works as the
+fallback for a single-app repository). Public release downloads need no GitHub credential
 on the server.
 
 The workflow has two jobs: a read-only `build` job that packages and uploads

@@ -147,9 +147,9 @@ export default function GitHubSetup({ name, spec, call, onChanged }) {
       <Help>{t('github.preview_help')}</Help>
     </section>}
     <ol className="m-0 flex list-decimal flex-col gap-2 pl-5 text-xs leading-relaxed text-text">
-      <li>{t('github.copy_files')} <code className={code}>.github/workflows/deploy.yml</code> + <code className={code}>scripts/notify_deploy.py</code>. {t('github.existing')}</li>
+      <li>{t('github.copy_files')} <code className={code}>.github/workflows/deployd.yml</code> + <code className={code}>scripts/notify_deploy.py</code>. {t('github.existing')} {t('github.rename_note', { name })}</li>
       <li>{t('github.variable')} <code className={code}>DEPLOYD_URL</code>: <code className={code}>{spec.deploy_url || t('setup.set_url')}</code>.</li>
-      <li>{t('github.secret')} <code className={code}>DEPLOYD_SECRET</code>: {t('github.secret_help')}</li>
+      <li>{t('github.secret')} <code className={code}>{`DEPLOYD_SECRET_${name.toUpperCase().replace(/-/g, '_')}`}</code>: {t('github.secret_help')}</li>
       <li>{t('github.run', { name })}</li>
     </ol>
     {spec.github_repository && <div className="flex flex-wrap gap-4">
