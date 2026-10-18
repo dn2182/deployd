@@ -18,7 +18,7 @@ class GitHubActionsSettings(BaseModel):
     project_dir: str = Field(default=".", max_length=200)
     output_dir: str = Field(default="dist", max_length=200)
     build_command: str = Field(default="pnpm run build", max_length=4000)
-    node_version: Literal["22", "24"] = "22"
+    node_version: Literal["22", "24"] = "24"
     pnpm_version: str = Field(default="10.33.0", pattern=r"^[0-9]{1,2}\.[0-9]{1,3}\.[0-9]{1,3}$")
     branch: str = Field(default="main", max_length=100)
     automatic: bool = False

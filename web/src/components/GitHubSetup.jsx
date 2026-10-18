@@ -22,7 +22,7 @@ export default function GitHubSetup({ name, spec, call, onChanged }) {
   const t = useT()
   const [form, setForm] = useState(() => ({
     kind: 'pnpm', project_dir: '.', output_dir: 'dist', build_command: 'pnpm run build',
-    node_version: '22', pnpm_version: '10.33.0', branch: 'main', automatic: false,
+    node_version: '24', pnpm_version: '10.33.0', branch: 'main', automatic: false,
     trigger: 'branch', tag_pattern: 'v*',
     ...spec.github_actions,
     targets: (spec.github_actions?.targets || []).join(', '),

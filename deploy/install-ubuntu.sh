@@ -6,7 +6,7 @@ set -Eeuo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/lib.sh"
 
 readonly PNPM_VERSION="11.20.0"
-readonly NODE_VERSION="22.23.2"
+readonly NODE_VERSION="24.22.0"
 readonly NODE_MIN_MAJOR=22
 readonly NODE_MIN_MINOR=19
 readonly UV_VERSION="0.12.13"
