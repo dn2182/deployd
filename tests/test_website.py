@@ -34,8 +34,21 @@ def test_fixed_helper_command(spec):
         str(website.HELPER),
         "connect",
         "site",
-        "example.com",
+        "/var/www/example.com",
     ]
+
+
+def test_custom_site_root_from_config_file(spec, monkeypatch, tmp_path):
+    roots = tmp_path / "site-roots"
+    roots.write_text("# comment\n/srv/sites\n\n/opt/www\n")
+    monkeypatch.setattr(website, "SITE_ROOTS_FILE", roots)
+    spec.site_path = Path("/srv/sites/example.com")
+    assert website.arguments("site", spec, "connect")[-1] == "/srv/sites/example.com"
+    spec.site_path = Path("/var/www/example.com")
+    assert website.arguments("site", spec, "connect")[-1] == "/var/www/example.com"
+    spec.site_path = Path("/home/dan/site")
+    with pytest.raises(ValueError, match="/var/www, /srv/sites, /opt/www"):
+        website.arguments("site", spec, "connect")
 
 
 @pytest.mark.parametrize(

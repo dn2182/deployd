@@ -456,7 +456,10 @@ la versión anterior protegida. Los enlaces ya conectados se conservan; el asist
 no puede reconstruir un sitio original movido manualmente.
 
 La conexión automática requiere Linux, carpetas de versiones administradas, un sitio
-estático existente directamente bajo `/var/www` y el mismo sistema de archivos para
+estático existente directamente bajo una raíz de sitios permitida (`/var/www`, más
+cualquier directorio listado en `/etc/deployd/site-roots`, propiedad de root, que
+el instalador crea y verifica; `DEPLOYD_INSTALL_SITE_ROOTS=/srv/sites:/opt/www`
+agrega raíces sin preguntar) y el mismo sistema de archivos para
 sitio, versiones y almacenamiento del asistente. Solo admite archivos normales y
 directorios: sin enlaces simbólicos, enlaces duros ni archivos especiales. Los
 archivos deben ser legibles públicamente y las carpetas accesibles. Límite: 2 GiB y

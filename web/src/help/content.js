@@ -78,6 +78,10 @@ const en = [
     a: 'On the server run /opt/deployd/deploy/update-ubuntu.sh. It pulls, runs the checks and build before stopping, refuses to stop while a deploy is running, backs up the state database, and restarts. deployd cannot deploy itself through its own queue; the restart would kill the deploy in progress.',
   },
   {
+    q: 'Can the website live outside /var/www?',
+    a: 'Yes. The root helper connects direct children of the site roots listed in /etc/deployd/site-roots on the server; /var/www is always included. Add a line per extra root (for example /srv/sites), rerun the installer so it checks that root is root-owned and not group or world writable, then use the custom path in the app. The symlink layout is the same: /srv/sites/example.com becomes a link to the app release.',
+  },
+  {
     q: 'How do I deploy the same app to two mirror servers?',
     a: 'Run deployd on each node and register the app on both, each with its own secret. In the GitHub Actions tab fill Deployment targets with a name per node (node1, node2). The generated workflow publishes the artifact once and a matrix job notifies every node using DEPLOYD_URL_NODE1 and DEPLOYD_SECRET_NODE1 and so on. If one node fails the run goes red; the others still finish.',
   },
@@ -163,6 +167,10 @@ const es = [
   {
     q: 'Cómo actualizo deployd?',
     a: 'En el servidor ejecuta /opt/deployd/deploy/update-ubuntu.sh. Trae los cambios, corre las pruebas y el build antes de detener, se niega a detener mientras hay un deploy en ejecución, respalda la base de estado y reinicia. deployd no puede desplegarse a sí mismo por su propia cola; el restart mataría el deploy en curso.',
+  },
+  {
+    q: 'El sitio puede vivir fuera de /var/www?',
+    a: 'Sí. El helper root conecta hijos directos de las raíces de sitios listadas en /etc/deployd/site-roots en el servidor; /var/www siempre está incluido. Agrega una línea por raíz extra (por ejemplo /srv/sites), vuelve a ejecutar el instalador para que verifique que esa raíz es de root y no es escribible por grupo u otros, y usa la ruta personalizada en la app. El enlace es el mismo: /srv/sites/example.com pasa a ser un link al release de la app.',
   },
   {
     q: 'Cómo despliego la misma app en dos servidores espejo?',

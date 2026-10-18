@@ -16,6 +16,9 @@ from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 WEB_ROOT = Path("/var/www")
+# Root-owned list of directories whose direct children may be connected; the
+# installer writes it and /var/www is always allowed.
+SITE_ROOTS_FILE = Path("/etc/deployd/site-roots")
 RELEASE_ROOT = Path("/srv/deployd")
 STATE_ROOT = Path("/var/lib/deployd-connect")
 MANIFEST = ".deployd-release.json"
@@ -23,6 +26,50 @@ ROOT_UID = 0
 APP = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\Z")
 SITE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}\Z")
 VERSION = re.compile(r"(?:[a-f0-9]{40}-[a-f0-9]{32}|b4deployd)\Z")
+
+
+def site_roots():
+    roots = [WEB_ROOT]
+    try:
+        metadata = SITE_ROOTS_FILE.lstat()
+    except FileNotFoundError:
+        return roots
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != ROOT_UID
+        or metadata.st_mode & 0o022
+        or metadata.st_size > 16384
+    ):
+        raise ValueError(f"{SITE_ROOTS_FILE} must be a root-owned file that others cannot write")
+    for line in SITE_ROOTS_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        root = Path(line)
+        if not root.is_absolute() or root.parent == root or ".." in root.parts:
+            raise ValueError(f"invalid site root in {SITE_ROOTS_FILE}: {line}")
+        if root not in roots:
+            roots.append(root)
+    return roots
+
+
+def resolve_site(value):
+    """A bare name means a /var/www child; an absolute path must sit directly under an allowed root."""
+    if "/" not in value:
+        if not SITE.fullmatch(value):
+            raise ValueError("expected a direct /var/www child name")
+        return WEB_ROOT, value
+    path = Path(value)
+    roots = site_roots()
+    if (
+        not path.is_absolute()
+        or ".." in path.parts
+        or path.parent not in roots
+        or not SITE.fullmatch(path.name)
+    ):
+        allowed = ", ".join(str(root) for root in roots)
+        raise ValueError(f"site must be a direct child of an allowed site root ({allowed})")
+    return path.parent, path.name
 
 
 @contextmanager
@@ -220,15 +267,15 @@ def copy_site(source, destination, owner, *, budget=None, mount=None, depth=0):
     os.fsync(destination)
 
 
-def protected_storage(web, state):
-    for fd, path, mask in ((web, WEB_ROOT, 0o022), (state, STATE_ROOT, 0o077)):
+def protected_storage(web, state, root=WEB_ROOT):
+    for fd, path, mask in ((web, root, 0o022), (state, STATE_ROOT, 0o077)):
         value = os.fstat(fd)
         if value.st_uid != ROOT_UID:
             raise ValueError(f"{path} must be root-owned; have the server administrator check it")
         if value.st_mode & mask:
             action = (
-                "sudo chmod go-w /var/www"
-                if path == WEB_ROOT
+                f"sudo chmod go-w {path}"
+                if path == root
                 else "sudo chmod 0700 /var/lib/deployd-connect"
             )
             raise ValueError(
@@ -272,13 +319,14 @@ def reconnect(operation, transaction, web, site, target):
 
 
 def disconnect(app, site, owner):
-    if not APP.fullmatch(app) or not SITE.fullmatch(site):
-        raise ValueError("expected an app name and a direct /var/www child name")
+    if not APP.fullmatch(app):
+        raise ValueError("expected an app name and a site path")
+    root, site = resolve_site(site)
     target = str(RELEASE_ROOT / app / "releases/current")
     with ExitStack() as stack:
-        web = open_path(stack, WEB_ROOT)
+        web = open_path(stack, root)
         state = open_path(stack, STATE_ROOT)
-        protected_storage(web, state)
+        protected_storage(web, state, root)
         lock = os.open("lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600, dir_fd=state)
         stack.callback(os.close, lock)
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -317,7 +365,7 @@ def disconnect(app, site, owner):
                     raise ValueError(
                         "unexpected restore staging files; operator inspection required"
                     )
-                return {"status": "restored", "path": str(WEB_ROOT / site)}
+                return {"status": "restored", "path": str(root / site)}
             if not expected_link(web, site, target):
                 raise ValueError("website changed after restore; refusing to overwrite it")
             if identity(info(transaction, "detached-files")) != receipt["copied"]:
@@ -330,7 +378,7 @@ def disconnect(app, site, owner):
         else:
             existing = info(web, site)
             if existing is None or stat.S_ISDIR(existing.st_mode):
-                return {"status": "unlinked", "path": str(WEB_ROOT / site)}
+                return {"status": "unlinked", "path": str(root / site)}
             if not expected_link(web, site, target):
                 raise ValueError("local path is not this app's symlink; refusing to replace it")
             current = open_path(stack, Path(target))
@@ -369,17 +417,18 @@ def disconnect(app, site, owner):
             raise ValueError("unexpected displaced link; operator inspection required")
         os.unlink("detached-files", dir_fd=transaction)
         os.fsync(transaction)
-        return {"status": "restored", "path": str(WEB_ROOT / site)}
+        return {"status": "restored", "path": str(root / site)}
 
 
 def connect(operation, app, site, owner):
-    if operation not in {"check", "connect"} or not APP.fullmatch(app) or not SITE.fullmatch(site):
-        raise ValueError("expected check|connect, an app name, and a direct /var/www child name")
+    if operation not in {"check", "connect"} or not APP.fullmatch(app):
+        raise ValueError("expected check|connect, an app name, and a site path")
+    root, site = resolve_site(site)
     target = str(RELEASE_ROOT / app / "releases/current")
     with ExitStack() as stack:
-        web = open_path(stack, WEB_ROOT)
+        web = open_path(stack, root)
         state = open_path(stack, STATE_ROOT)
-        protected_storage(web, state)
+        protected_storage(web, state, root)
         lock = os.open("lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600, dir_fd=state)
         stack.callback(os.close, lock)
         fcntl.flock(lock, fcntl.LOCK_EX)

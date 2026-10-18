@@ -37,7 +37,8 @@ response within a few days.
 - Run the service as a dedicated low-privilege user; grant restart rights per
   app (narrow sudoers rule on Linux, IIS permissions on Windows).
 - The optional website connector grants the deployd account authority over
-  existing static document roots directly under `/var/www`. Enable it only if
+  existing static document roots directly under `/var/www` or under the
+  additional roots listed in root-owned `/etc/deployd/site-roots`. Enable it only if
   that scope is appropriate for this server. The helper is root-owned, runs the
   system Python in isolated mode, accepts no arbitrary paths or commands, and
   rejects symlinks and mount crossings during traversal. UI confirmation prevents

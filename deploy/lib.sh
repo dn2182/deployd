@@ -19,6 +19,7 @@ readonly PASSWORD_HELPER="/usr/local/libexec/deployd/change-password"
 readonly PASSWORD_SUDOERS="/etc/sudoers.d/deployd-password"
 readonly HELPER_BIN="/usr/local/libexec/deployd/connect-website"
 readonly HELPER_SUDOERS="/etc/sudoers.d/deployd-connect"
+readonly SITE_ROOTS_FILE="/etc/deployd/site-roots"
 readonly NODE_DIR="${REPO_ROOT}/.node"
 readonly TOOL_BIN_DIR="${HOME}/.local/bin"
 

@@ -10,6 +10,13 @@ Initial release.
   detects an existing installation and keeps its domain, management bind and
   port, login and token by default; `--reconfigure` asks again.
 
+### Custom site roots (October 2026)
+
+- Website connection works for any directory listed in root-owned
+  `/etc/deployd/site-roots` (`/var/www` is always allowed). The helper takes
+  the full site path, the installer writes and checks the list, and the
+  uninstaller discovers connected sites under every root.
+
 ### Multi-node targets (October 2026)
 
 - GitHub Actions setup accepts deployment targets; the generated workflow then

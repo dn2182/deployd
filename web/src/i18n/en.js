@@ -221,7 +221,7 @@ export default {
   'setup.static': 'Static website (HTML / React / Vite)',
   'setup.service': 'Service with a restart command',
   'setup.site_path': 'Local site path',
-  'setup.site_path_help': 'The path Nginx already serves, for example /var/www/bluedatos.com. It is fixed after setup. Existing files are not moved or replaced when saving.',
+  'setup.site_path_help': 'The path Nginx already serves, for example /var/www/bluedatos.com. Its parent must be an allowed site root: /var/www by default, or any directory listed in /etc/deployd/site-roots on the server. It is fixed after setup. Existing files are not moved or replaced when saving.',
   'setup.current': 'Active path',
   'setup.executable': 'Restart executable',
   'setup.arguments': 'Arguments (one per line)',

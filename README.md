@@ -434,7 +434,10 @@ a protected previous version. Already-connected symlinks are left alone; the
 helper cannot reconstruct an original site that was moved manually.
 
 Automatic connection requires Linux, managed directory layout, an existing static
-site directly under `/var/www`, and website/releases/helper storage on the same
+site directly under an allowed site root (`/var/www`, plus any directory listed
+in root-owned `/etc/deployd/site-roots`, which the installer creates and checks;
+`DEPLOYD_INSTALL_SITE_ROOTS=/srv/sites:/opt/www` adds roots unattended), and
+website/releases/helper storage on the same
 filesystem. The original must contain only ordinary files and directories (no
 symlinks, hardlinks, or special files), with public-read files and traversable
 directories. The limit is 2 GiB and 100,000 entries. Connection makes backup

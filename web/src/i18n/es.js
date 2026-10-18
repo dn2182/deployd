@@ -221,7 +221,7 @@ export default {
   'setup.static': 'Sitio estático (HTML / React / Vite)',
   'setup.service': 'Servicio con comando de reinicio',
   'setup.site_path': 'Ruta local del sitio',
-  'setup.site_path_help': 'La ruta que ya sirve Nginx, por ejemplo /var/www/bluedatos.com. Queda fija al guardar. Los archivos existentes no se mueven ni reemplazan al configurar la app.',
+  'setup.site_path_help': 'La ruta que ya sirve Nginx, por ejemplo /var/www/bluedatos.com. Su carpeta padre debe ser una raíz de sitios permitida: /var/www por defecto, o cualquier directorio listado en /etc/deployd/site-roots en el servidor. Queda fija al guardar. Los archivos existentes no se mueven ni reemplazan al configurar la app.',
   'setup.current': 'Ruta activa',
   'setup.executable': 'Ejecutable de reinicio',
   'setup.arguments': 'Argumentos (uno por línea)',

@@ -45,6 +45,30 @@ def test_check_does_not_move_website_or_create_transaction(site):
     assert not (current.parent / "b4deployd").exists()
 
 
+def test_connects_a_site_under_a_configured_custom_root(site, tmp_path, monkeypatch):
+    original, current, state = site
+    custom = tmp_path.resolve() / "srv-sites"
+    custom.mkdir(mode=0o755)
+    other = custom / "custom.example"
+    other.mkdir(mode=0o755)
+    (other / "index.html").write_text("custom original")
+    roots = tmp_path / "site-roots"
+    roots.write_text(f"# allowed roots\n{custom}\n")
+    roots.chmod(0o644)
+    monkeypatch.setattr(helper, "SITE_ROOTS_FILE", roots)
+    assert helper.site_roots() == [helper.WEB_ROOT, custom]
+    assert run(name=str(other)) == {"status": "ready", "backup": False}
+    if sys.platform == "linux":
+        assert run("connect", name=str(other)) == {"status": "connected", "backup": True}
+        assert other.is_symlink() and (other / "index.html").read_text() == "new website"
+        assert (current.parent / "b4deployd" / "index.html").read_text() == "custom original"
+    with pytest.raises(ValueError, match="allowed site root"):
+        run(name=str(tmp_path / "elsewhere" / "x"))
+    roots.chmod(0o666)
+    with pytest.raises(ValueError, match="root-owned file"):
+        run(name=str(other))
+
+
 @pytest.mark.parametrize("name", ["../outside", ".", "..", "/etc", "--help", "a/b", "a\nb"])
 def test_rejects_unapproved_names(site, name):
     with pytest.raises(ValueError):
@@ -85,7 +109,7 @@ def test_requires_readable_current_and_protected_parent(site):
 def test_permissions_error_identifies_parent_and_never_changes_it(site):
     original, current, _ = site
     original.parent.chmod(0o2775)
-    with pytest.raises(ValueError, match="sudo chmod go-w /var/www"):
+    with pytest.raises(ValueError, match=f"sudo chmod go-w {original.parent}"):
         run()
     assert original.parent.stat().st_mode & 0o7777 == 0o2775
     assert (current / "index.html").read_text() == "new website"

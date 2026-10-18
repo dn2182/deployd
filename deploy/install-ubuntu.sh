@@ -709,14 +709,43 @@ stop_for_upgrade() {
   fi
 }
 
-check_website_parent() {
-  sudo test ! -L /var/www || die '/var/www must be a real directory, not a symlink'
-  if sudo test -e /var/www; then
-    sudo test -d /var/www || die '/var/www must be a directory'
-    [[ $(sudo stat -c '%U' /var/www) == root ]] || die '/var/www must be root-owned; ask the server administrator to review ownership'
-    [[ $(sudo find /var/www -maxdepth 0 -perm /022 -print) == '' ]] || die \
-      '/var/www is group- or world-writable. Review and run: sudo chmod go-w /var/www. This restricts creating/renaming its direct children; it does not change site contents. Then rerun the installer. No permissions were changed automatically.'
+# Prints the allowed site roots: /var/www plus every line of the root-owned list.
+site_roots() {
+  printf '/var/www\n'
+  if sudo test -f "$SITE_ROOTS_FILE"; then
+    sudo grep -v '^[[:space:]]*#' "$SITE_ROOTS_FILE" | sed 's/[[:space:]]*$//' | grep -v '^$' | grep -v '^/var/www$' || true
   fi
+}
+
+# Writes the site roots list and adds DEPLOYD_INSTALL_SITE_ROOTS (colon-separated).
+configure_site_roots() {
+  local root
+  sudo install -d -o root -g root -m 0755 /etc/deployd
+  if ! sudo test -f "$SITE_ROOTS_FILE"; then
+    printf '# Directories whose direct children deployd may connect as websites, one per line.\n/var/www\n' |
+      sudo install -o root -g root -m 0644 /dev/stdin "$SITE_ROOTS_FILE"
+  fi
+  IFS=: read -r -a extra <<<"${DEPLOYD_INSTALL_SITE_ROOTS:-}"
+  for root in "${extra[@]}"; do
+    [[ -n $root ]] || continue
+    [[ $root == /* && $root != *..* && $root != / ]] || die "site root must be an absolute path: $root"
+    if ! sudo grep -qx -- "$root" "$SITE_ROOTS_FILE"; then
+      printf '%s\n' "$root" | sudo tee -a "$SITE_ROOTS_FILE" >/dev/null
+    fi
+  done
+}
+
+check_website_parent() {
+  local root
+  for root in "${@:-/var/www}"; do
+    sudo test ! -L "$root" || die "$root must be a real directory, not a symlink"
+    if sudo test -e "$root"; then
+      sudo test -d "$root" || die "$root must be a directory"
+      [[ $(sudo stat -c '%U' "$root") == root ]] || die "$root must be root-owned; ask the server administrator to review ownership"
+      [[ $(sudo find "$root" -maxdepth 0 -perm /022 -print) == '' ]] || die \
+        "$root is group- or world-writable. Review and run: sudo chmod go-w $root. This restricts creating/renaming its direct children; it does not change site contents. Then rerun the installer. No permissions were changed automatically."
+    fi
+  done
 }
 
 install_website_helper() {
@@ -724,11 +753,14 @@ install_website_helper() {
   if ! sudo test -f "$HELPER_SUDOERS"; then
     printf '%s\n' \
       'Optional: allow the management UI to connect existing static websites.' \
-      'This grants deployd a restricted root helper for direct children of /var/www.' \
+      "This grants deployd a restricted root helper for direct children of the site roots in $SITE_ROOTS_FILE (default /var/www)." \
       'Each live switch requires UI confirmation and preserves the original as b4deployd.'
     confirm 'Enable website connection?' || return 0
   fi
-  check_website_parent
+  configure_site_roots
+  local roots
+  mapfile -t roots < <(site_roots)
+  check_website_parent "${roots[@]}"
   for path in /usr/local /usr/local/libexec /usr/local/libexec/deployd "$CONNECT_STATE_DIR"; do
     sudo test ! -L "$path" || die "helper path must not be a symlink: $path"
     if sudo test -e "$path"; then
@@ -736,9 +768,11 @@ install_website_helper() {
       [[ $(sudo find "$path" -maxdepth 0 -perm /022 -print) == '' ]] || die "helper path must not be writable by other users: $path"
     fi
   done
-  if ! sudo test -e /var/www; then
-    sudo install -d -o root -g root -m 0755 /var/www
-  fi
+  for path in "${roots[@]}"; do
+    if ! sudo test -e "$path"; then
+      sudo install -d -o root -g root -m 0755 "$path"
+    fi
+  done
   sudo install -d -o root -g root -m 0755 /usr/local/libexec /usr/local/libexec/deployd
   sudo install -d -o root -g root -m 0700 "$CONNECT_STATE_DIR"
   sudo test ! -L "$HELPER_BIN" || die "helper executable must not be a symlink"
@@ -759,7 +793,7 @@ main() {
   export PATH="$NODE_DIR/bin:$TOOL_BIN_DIR:$PATH"
 
   local script_dir repo_root domain admin_bind admin_port admin_username token_state db_path
-  local mode=install installed
+  local mode=install installed roots
   script_dir=$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
   repo_root=$(cd -P -- "$script_dir/.." && pwd)
   if installed=$(installed_settings); then
@@ -791,7 +825,8 @@ main() {
   install_prerequisites
   create_service_user
   if sudo test -f "$HELPER_SUDOERS"; then
-    check_website_parent
+    mapfile -t roots < <(site_roots)
+    check_website_parent "${roots[@]}"
   fi
   check_ports "$admin_port"
   repair_legacy_build_ownership "$repo_root"

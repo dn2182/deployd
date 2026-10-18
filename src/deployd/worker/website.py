@@ -9,6 +9,24 @@ from ..config import config_lock, delete_app_config, get_app_registry
 from . import runner
 
 HELPER = Path("/usr/local/libexec/deployd/connect-website")
+SITE_ROOTS_FILE = Path("/etc/deployd/site-roots")
+WEB_ROOT = Path("/var/www")
+
+
+def site_roots():
+    """Mirror of the helper's list, read for a clear error before sudo is involved."""
+    roots = [WEB_ROOT]
+    try:
+        lines = SITE_ROOTS_FILE.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return roots
+    for line in lines:
+        line = line.strip()
+        if line and not line.startswith("#"):
+            root = Path(line)
+            if root.is_absolute() and root not in roots:
+                roots.append(root)
+    return roots
 
 
 def arguments(name, spec, operation):
@@ -19,16 +37,18 @@ def arguments(name, spec, operation):
         or spec.releases_dir != root
         or spec.current_link != root / "current"
         or not spec.site_path
-        or spec.site_path.parent != Path("/var/www")
+        or spec.site_path.parent not in site_roots()
         or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}", spec.site_path.name)
         or spec.restart.command != ["/usr/bin/test", "-s", f"{spec.current_link}/index.html"]
     ):
+        allowed = ", ".join(str(root) for root in site_roots())
         raise ValueError(
-            "automatic connection requires a managed static site directly under /var/www"
+            "automatic connection requires a managed static site directly under an allowed "
+            f"site root ({allowed}); add roots to {SITE_ROOTS_FILE} and rerun the installer"
         )
     if not HELPER.is_file():
         raise ValueError("run the installer and enable the website connection helper first")
-    return ["/usr/bin/sudo", "-n", str(HELPER), operation, name, spec.site_path.name]
+    return ["/usr/bin/sudo", "-n", str(HELPER), operation, name, str(spec.site_path)]
 
 
 async def invoke(name, spec, operation):

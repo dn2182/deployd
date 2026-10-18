@@ -254,11 +254,19 @@ check_removal_targets() {
 }
 
 list_website_links() {
-  /usr/bin/python3 -I -c '
+  sudo /usr/bin/python3 -I -c '
 import os, re
 from pathlib import Path
-root = Path("/var/www")
-if root.exists():
+roots = [Path("/var/www")]
+listing = Path("/etc/deployd/site-roots")
+if listing.is_file():
+    for line in listing.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and Path(line).is_absolute() and Path(line) not in roots:
+            roots.append(Path(line))
+for root in roots:
+    if not root.is_dir() or root.is_symlink():
+        continue
     for path in sorted(root.iterdir()):
         if not path.is_symlink():
             continue
@@ -266,7 +274,7 @@ if root.exists():
         if match:
             if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}", path.name):
                 raise SystemExit("unsupported connected website name; restore it manually first")
-            print(match[1] + "\t" + path.name)
+            print(match[1] + "\t" + str(path))
 '
 }
 
