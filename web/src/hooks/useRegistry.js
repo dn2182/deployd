@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchHealth } from '../api.js'
 
-const PAGE_SIZE = 50
+const PAGE_SIZE = 10
+// Background refresh keeps the server idle most of the time; the browser tab must be visible.
+export const AUTO_REFRESH_MS = 120000
 const ACTIVE_STATUSES = new Set(['queued', 'running'])
 const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'rolled_back', 'superseded', 'cancelled'])
 
@@ -121,6 +123,14 @@ export function useRegistry({ token, api, onTerminal }) {
       pageRequest.current = null
     }
   }, [refresh])
+
+  useEffect(() => {
+    if (!token) return
+    const timer = setInterval(() => {
+      if (document.visibilityState !== 'hidden') refresh({ silent: true })
+    }, AUTO_REFRESH_MS)
+    return () => clearInterval(timer)
+  }, [token, refresh])
 
   const isBusy = useCallback(
     (name) => deploys.some((deploy) => deploy.app === name && ACTIVE_STATUSES.has(deploy.status)),

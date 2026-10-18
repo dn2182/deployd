@@ -90,8 +90,8 @@ const en = [
     a: 'Run deployd on each node and register the app on both, each with its own secret. In the GitHub Actions tab fill Deployment targets with a name per node (node1, node2). The generated workflow publishes the artifact once and a matrix job notifies every node using DEPLOYD_URL_NODE1 and DEPLOYD_SECRET_NODE1 and so on. If one node fails the run goes red; the others still finish.',
   },
   {
-    q: 'Why does the UI not refresh by itself?',
-    a: 'By design, to keep the server idle. Press Refresh or the r key. CI still polls its own deploy until it finishes.',
+    q: 'Does the UI refresh by itself?',
+    a: 'It does, every two minutes while the tab is visible, which keeps the server mostly idle. The Refresh button in the top bar or the r key updates immediately. CI still polls its own deploy until it finishes.',
   },
 ]
 
@@ -185,8 +185,8 @@ const es = [
     a: 'Ejecuta deployd en cada nodo y registra la app en ambos, cada uno con su propio secreto. En la pestaña de GitHub Actions llena Destinos de despliegue con un nombre por nodo (node1, node2). El workflow generado publica el artefacto una vez y un job matriz notifica a cada nodo usando DEPLOYD_URL_NODE1 y DEPLOYD_SECRET_NODE1 y así sucesivamente. Si un nodo falla la ejecución queda en rojo; los demás terminan igual.',
   },
   {
-    q: 'Por qué la UI no se actualiza sola?',
-    a: 'Por diseño, para mantener el servidor en reposo. Presiona Actualizar o la tecla r. CI sigue consultando su propio deploy hasta que termina.',
+    q: 'La UI se actualiza sola?',
+    a: 'Sí, cada dos minutos mientras la pestaña está visible, lo que mantiene el servidor casi en reposo. El botón Actualizar de la barra superior o la tecla r actualizan de inmediato. CI sigue consultando su propio deploy hasta que termina.',
   },
 ]
 

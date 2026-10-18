@@ -283,7 +283,6 @@ export default {
   'activity.kicker': 'Activity',
   'activity.title': 'Recent deploys',
   'activity.views': 'Activity views',
-  'activity.manual': 'Refresh on demand',
   'activity.pending': 'Work in progress. Refresh to check the result.',
   'activity.refresh': 'Refresh',
   'activity.empty': 'No deployments yet.',

@@ -223,9 +223,10 @@ Internal paths are under **Application folders**. Each app card has a status
 panel with the current release, queued count, last deploy and last health
 result, plus **Freeze** / **Unfreeze**. Last deploy refers to an artifact
 deployment; cleanup and other local operations remain in activity without
-overwriting that result. Use **Refresh** (or the `r` key) to
-update status; the console does not poll in the background. A refresh shows
-a toast for newly observed completion results. **Recent deploys** filters by
+overwriting that result. The activity area and the audit log refresh
+themselves every two minutes while the tab is visible; the top-bar **Refresh**
+button (or the `r` key) updates immediately. A refresh shows a toast for newly
+observed completion results. **Recent deploys** shows the last ten, filters by
 app and status, searches by commit prefix, pages with **Load more**, and offers
 cancel, redeploy, commit and compare links per row. Select an exact retained
 version in **Manage versions** to roll back. **Audit log** lists admin actions

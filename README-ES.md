@@ -235,10 +235,12 @@ tiene un panel de estado con el release actual, la cantidad en cola, el último
 deploy y el último health check, más **Congelar** / **Descongelar**. El último
 deploy corresponde a un despliegue de artefacto; la limpieza y otras operaciones
 locales quedan en actividad sin reemplazar ese resultado. La zona de
-actividad se actualiza con **Actualizar** (o la tecla `r`), sin consultas
-periódicas en segundo plano. Al actualizar, muestra avisos de resultados recién
-detectados. **Deploys recientes** filtra por app y estado, busca por prefijo de
-commit, pagina con **Cargar más** y ofrece cancelar, redeploy y enlaces al commit
+actividad y la auditoría se actualizan solas cada dos minutos mientras la
+pestaña está visible; el botón **Actualizar** de la barra superior (o la tecla
+`r`) actualiza de inmediato. Al actualizar, muestra avisos de resultados recién
+detectados. **Deploys recientes** muestra los últimos diez, filtra por app y
+estado, busca por prefijo de commit, pagina con **Cargar más** y ofrece
+cancelar, redeploy y enlaces al commit
 y a la comparación por fila. El rollback se hace eligiendo la versión exacta en
 **Administrar versiones**. **Auditoría** lista las acciones administrativas con
 el usuario que las hizo. GitHub Actions sigue consultando su propio despliegue

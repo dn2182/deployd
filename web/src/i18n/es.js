@@ -283,7 +283,6 @@ export default {
   'activity.kicker': 'Actividad',
   'activity.title': 'Despliegues recientes',
   'activity.views': 'Vistas de actividad',
-  'activity.manual': 'Actualización manual',
   'activity.pending': 'Operación en curso. Actualiza para consultar el resultado.',
   'activity.refresh': 'Actualizar',
   'activity.empty': 'Aún no hay despliegues.',

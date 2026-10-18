@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { RefreshCw, ScrollText } from 'lucide-react'
+import { ScrollText } from 'lucide-react'
 import { useT } from '../i18n/index.js'
 import When from './When.jsx'
 import { Button, EmptyState, ErrorMessage, Panel, Skeleton, Spinner } from './ui.jsx'
 
-const PAGE = 50
+const PAGE = 10
+// Same cadence as the deploy history; a reload replaces what is shown with the newest page.
+const AUTO_REFRESH_MS = 120000
 
 export default function AuditLog({ api }) {
   const t = useT()
@@ -32,16 +34,17 @@ export default function AuditLog({ api }) {
 
   useEffect(() => {
     const timer = setTimeout(() => load(0), 0)
-    return () => clearTimeout(timer)
+    const interval = setInterval(() => {
+      if (document.visibilityState !== 'hidden') load(0)
+    }, AUTO_REFRESH_MS)
+    return () => {
+      clearTimeout(timer)
+      clearInterval(interval)
+    }
   }, [load])
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex justify-end">
-        <Button size="small" disabled={loading} onClick={() => load(0)}>
-          <RefreshCw size={14} className={loading ? 'animate-spin' : undefined} /> {t('activity.refresh')}
-        </Button>
-      </div>
       {error && <ErrorMessage>{error}</ErrorMessage>}
       <Panel className="overflow-hidden">
         {!entries && !error ? (

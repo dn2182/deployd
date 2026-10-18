@@ -8,11 +8,12 @@ Applications use a searchable, ten-per-page list with one detail card. The
 card shows the last fetched app status (current release, frozen state, queue, last
 deploy and health), and accessible tabs for website connection, retained
 versions, and GitHub Actions setup. Deploy history filters by app and status,
-searches by commit prefix, and pages with Load more. An Audit log tab reads
-`/admin/audit`.
+searches by commit prefix, shows ten rows per page with Load more. An Audit
+log tab reads `/admin/audit`.
 
-The console does not poll in the background. Use Refresh (button or `r`) to
-fetch status and see completion results, including deploys started by CI.
+The history and the audit log refresh every two minutes while the tab is
+visible; the top-bar Refresh button (or `r`) fetches immediately. Completion
+results seen on a refresh, including deploys started by CI, show as toasts.
 Version activation and cleanup live in Manage versions; cleanup is queued and
 its result appears in activity after refreshing. Other shortcuts: `/` focuses
 the application search, Esc clears it.

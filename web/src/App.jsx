@@ -12,7 +12,6 @@ import AppRegistry, { RegistrySkeleton } from './components/AppRegistry.jsx'
 import AuditLog from './components/AuditLog.jsx'
 import DeployHistory from './components/DeployHistory.jsx'
 import SecretModal from './components/SecretModal.jsx'
-import BanIcon from './components/BanIcon.jsx'
 import TokenGate from './components/TokenGate.jsx'
 import PasswordDialog from './components/PasswordDialog.jsx'
 import HelpDialog from './components/HelpDialog.jsx'
@@ -94,8 +93,8 @@ function Console({ language, setLanguage }) {
             <IconButton label={t('theme.switch', { theme: t(`theme.${theme === 'dark' ? 'light' : 'dark'}`) })} onClick={toggleTheme}>
               {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
             </IconButton>
-            <IconButton label={t('language.switch')} className="group" onClick={() => setLanguage(language === 'es' ? 'en' : 'es')}>
-              <BanIcon />
+            <IconButton label={t('language.switch')} onClick={() => setLanguage(language === 'es' ? 'en' : 'es')}>
+              <span className="text-[11px] font-bold tracking-wider">{language === 'es' ? 'ES' : 'EN'}</span>
             </IconButton>
             {session.token && (
               <Button size="small" onClick={session.logout}><LogOut size={14} /> {t('token.logout')}</Button>
@@ -153,14 +152,6 @@ function Console({ language, setLanguage }) {
                     </button>
                   ))}
                 </div>
-                {view === 'deploys' && (
-                  <>
-                    <span className="text-[11px] text-muted">{t('activity.manual')}</span>
-                    <Button size="small" disabled={refreshing} onClick={doRefresh}>
-                      <RefreshCw size={14} className={refreshing ? 'animate-spin' : undefined} /> {t('activity.refresh')}
-                    </Button>
-                  </>
-                )}
               </div>
             </SectionHeading>
             {view === 'audit' ? <AuditLog api={session.api} /> : (

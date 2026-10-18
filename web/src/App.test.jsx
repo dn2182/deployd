@@ -114,21 +114,21 @@ describe('App', () => {
     expect(website).toHaveFocus()
   })
 
-  it.each(['running', 'succeeded'])('never polls automatically when a deploy is %s', async (status) => {
-    const routes = { ...BASE, 'GET /api/admin/deploys': [{ ...DEPLOYS[0], status }] }
+  it('refreshes the history every two minutes in the background', async () => {
+    const routes = { ...BASE, 'GET /api/admin/deploys': [{ ...DEPLOYS[0], status: 'running' }] }
     const fetcher = mockFetch(routes)
     global.fetch = fetcher
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
     render(<App />)
     await screen.findByText('No retained versions yet.')
-    expect(screen.getByText('Refresh on demand')).toBeInTheDocument()
-    const before = fetcher.mock.calls.length
-    await act(() => vi.advanceTimersByTimeAsync(600000))
-    expect(fetcher).toHaveBeenCalledTimes(before)
+    expect(screen.queryByText('Refresh on demand')).not.toBeInTheDocument()
+    const before = calls(fetcher, '/api/admin/deploys').length
+    await act(() => vi.advanceTimersByTimeAsync(119000))
+    expect(calls(fetcher, '/api/admin/deploys')).toHaveLength(before)
     routes['GET /api/admin/deploys'] = DEPLOYS
-    fireEvent.click(screen.getAllByRole('button', { name: 'Refresh' })[0])
-    await waitFor(() => expect(calls(fetcher, '/api/admin/deploys')).toHaveLength(2))
-    if (status === 'running') expect(await screen.findByText('my-api: Succeeded')).toBeInTheDocument()
+    await act(() => vi.advanceTimersByTimeAsync(2000))
+    await waitFor(() => expect(calls(fetcher, '/api/admin/deploys')).toHaveLength(before + 1))
+    expect(await screen.findByText('my-api: Succeeded')).toBeInTheDocument()
   })
 
   it('refreshes health, activity, and the active panel on demand and with the r shortcut', async () => {
@@ -266,19 +266,19 @@ describe('App', () => {
 
   it('filters history on the server, searches by sha prefix, and loads more with an offset', async () => {
     const page = (id, sha) => ({ ...DEPLOYS[0], deploy_id: id, commit_sha: sha.repeat(40) })
-    const first = Array.from({ length: 50 }, (_, i) => page(`p${i}`, i === 0 ? 'e' : 'a'))
+    const first = Array.from({ length: 10 }, (_, i) => page(`p${i}`, i === 0 ? 'e' : 'a'))
     const fetcher = mockFetch({ ...BASE,
-      'GET /api/admin/deploys?limit=50&offset=0': first,
-      'GET /api/admin/deploys?limit=50&offset=50': [page('x1', 'f')],
-      'GET /api/admin/deploys?limit=50&offset=0&app=my-api&status=failed': [page('z1', 'd')],
+      'GET /api/admin/deploys?limit=10&offset=0': first,
+      'GET /api/admin/deploys?limit=10&offset=10': [page('x1', 'f')],
+      'GET /api/admin/deploys?limit=10&offset=0&app=my-api&status=failed': [page('z1', 'd')],
     })
     global.fetch = fetcher
     render(<App />)
     await screen.findByRole('heading', { name: 'my-api' })
-    expect(screen.getAllByText('aaaaaaaaaaaa')).toHaveLength(49)
+    expect(screen.getAllByText('aaaaaaaaaaaa')).toHaveLength(9)
     fireEvent.click(screen.getByRole('button', { name: 'Load more' }))
     expect(await screen.findByText('ffffffffffff')).toBeInTheDocument()
-    expect(fetcher).toHaveBeenCalledWith('/api/admin/deploys?limit=50&offset=50', expect.anything())
+    expect(fetcher).toHaveBeenCalledWith('/api/admin/deploys?limit=10&offset=10', expect.anything())
     fireEvent.change(screen.getByLabelText('Commit prefix'), { target: { value: 'EEE' } })
     expect(screen.getAllByRole('listitem')).toHaveLength(1)
     expect(screen.getByText('eeeeeeeeeeee')).toBeInTheDocument()
@@ -326,18 +326,18 @@ describe('App', () => {
   it('shows the audit log with load more', async () => {
     const entry = (id) => ({ id, at: '2026-08-28 04:00:00', actor: 'dan', action: 'freeze', target: 'my-api', detail: { frozen: true } })
     const fetcher = mockFetch({ ...BASE,
-      'GET /api/admin/audit?limit=50&offset=0': Array.from({ length: 50 }, (_, i) => entry(`a${i}`)),
-      'GET /api/admin/audit?limit=50&offset=50': [entry('b1')],
+      'GET /api/admin/audit?limit=10&offset=0': Array.from({ length: 10 }, (_, i) => entry(`a${i}`)),
+      'GET /api/admin/audit?limit=10&offset=10': [entry('b1')],
     })
     global.fetch = fetcher
     render(<App />)
     await screen.findByRole('heading', { name: 'my-api' })
     fireEvent.click(screen.getByRole('tab', { name: 'Audit log' }))
-    expect((await screen.findAllByText('freeze'))).toHaveLength(50)
-    expect(screen.getAllByText('by dan')).toHaveLength(50)
+    expect((await screen.findAllByText('freeze'))).toHaveLength(10)
+    expect(screen.getAllByText('by dan')).toHaveLength(10)
     fireEvent.click(screen.getByRole('button', { name: 'Load more' }))
-    await waitFor(() => expect(screen.getAllByText('freeze')).toHaveLength(51))
-    expect(fetcher).toHaveBeenCalledWith('/api/admin/audit?limit=50&offset=50', expect.anything())
+    await waitFor(() => expect(screen.getAllByText('freeze')).toHaveLength(11))
+    expect(fetcher).toHaveBeenCalledWith('/api/admin/audit?limit=10&offset=10', expect.anything())
   })
 
   it('shows the rotated secret in a modal that survives switching apps until confirmed', async () => {
