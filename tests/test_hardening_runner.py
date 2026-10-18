@@ -378,3 +378,27 @@ async def test_directory_layout_rollback_to_previous(tmp_path, store, monkeypatc
     assert (spec.current_link / "app.txt").read_text() == "v1"
     with pytest.raises(ValueError, match="protected"):
         runner.remove_release(spec, "previous")
+
+
+async def test_deploy_reports_an_unlinked_site_path_without_failing(tmp_path, store, monkeypatch):
+    site = tmp_path / "www" / "example.com"
+    site.mkdir(parents=True)
+    spec = _spec(tmp_path, site_path=str(site))
+    artifact, digest = make_artifact(tmp_path, "v1.zip", "v1")
+    wire(monkeypatch, spec, artifact)
+    did = new_deploy(store, SHA_V1, digest)
+    await runner.run_deploy(store, "app-x", did)
+    row = store.get_deploy(did)
+    assert row["status"] == "succeeded"
+    step = row["steps"][-1]
+    assert step["step"] == "website" and step["status"] == "skipped"
+    assert "not linked to current" in step["output"]
+    site.rmdir()
+    site.symlink_to(spec.current_link)
+    second = new_deploy(store, "b" * 40, digest)
+    artifact2, digest2 = make_artifact(tmp_path, "v2.zip", "v2")
+    wire(monkeypatch, spec, artifact2)
+    second = new_deploy(store, "b" * 40, digest2)
+    await runner.run_deploy(store, "app-x", second)
+    step = store.get_deploy(second)["steps"][-1]
+    assert step["step"] == "website" and step["status"] == "succeeded"

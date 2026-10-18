@@ -184,6 +184,7 @@ def test_status_endpoint_summarizes_app(env):
             "current_release": None,
             "last_deploy": None,
             "last_health": None,
+            "website": None,
         }
         did = store.create_deploy("app-x", "a" * 40, "https://example.com/a.zip", "b" * 64, "ci")
         store.set_status(did, "succeeded", finished=True)

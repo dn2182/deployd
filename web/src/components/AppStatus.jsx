@@ -60,6 +60,13 @@ export default function AppStatus({ name, api, revision, onChanged }) {
                 </span>
               ) : t('status_panel.never')}
             </DetailItem>
+            {data.website && (
+              <DetailItem label={t('status_panel.website')}>
+                <span className={`inline-flex items-center gap-1.5 text-xs font-semibold ${data.website === 'linked' ? 'text-success' : 'text-danger'}`}>
+                  {t(`status_panel.website_${data.website}`)}
+                </span>
+              </DetailItem>
+            )}
             <DetailItem label={t('status_panel.last_health')}>
               {data.last_health ? (
                 <span className="flex flex-col gap-1">

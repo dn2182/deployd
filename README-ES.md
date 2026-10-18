@@ -450,6 +450,14 @@ originales quedan en `releases/b4deployd`, disponible para **Activar** desde la 
 de versiones. No se modifica Nginx, incluidas sus rutas proxy de API. Si la raíz
 configurada en Nginx no cambia, no hace falta recargarlo.
 
+Si más adelante la ruta del sitio es reemplazada por una carpeta real u otro
+enlace (una copia manual, una configuración extraviada), la pestaña Sitio lo
+reporta como sin conexión y ofrece **Reparar conexión**: el reemplazo se mueve a
+`/var/lib/deployd-connect` (no se borra nada) y la ruta vuelve a ser un enlace a
+`current`. La tarjeta de estado muestra el estado de la ruta, cada deploy
+registra un paso `website` que avisa cuando la ruta no está enlazada, y
+`deployd check` también avisa.
+
 `b4deployd` queda excluido de la limpieza automática y no cuenta dentro del límite
 normal de versiones. Puedes eliminarlo explícitamente cuando no esté activo ni sea
 la versión anterior protegida. Los enlaces ya conectados se conservan; el asistente

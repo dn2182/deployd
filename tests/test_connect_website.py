@@ -123,8 +123,9 @@ def test_reconnect_requires_our_restore_receipt(site):
     transaction.mkdir(mode=0o700)
     (transaction / "journal.json").write_text(json.dumps({"site": original.name}))
     (transaction / "complete.json").write_text("{}")
-    with pytest.raises(ValueError, match="no matching restore receipt"):
+    with pytest.raises(ValueError, match="Fix connection"):
         run("connect")
+    assert run("check") == {"status": "replaced", "backup": True}
     assert not original.is_symlink()
 
 
@@ -357,3 +358,26 @@ def test_changed_live_version_cannot_be_silently_rolled_back_by_retry(site, monk
     with pytest.raises(ValueError, match="live version changed"):
         detach()
     assert original.is_symlink()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="real Linux renameat2 exchange")
+def test_replaced_site_is_reported_and_repaired_without_deleting(site):
+    original, current, state = site
+    assert run("connect")["status"] == "connected"
+    original.unlink()
+    original.mkdir(mode=0o755)
+    (original / "index.html").write_text("manual copy")
+    assert run("check") == {"status": "replaced", "backup": True}
+    with pytest.raises(ValueError, match="Fix connection"):
+        run("connect")
+    result = run("repair")
+    assert result["status"] == "repaired"
+    assert original.is_symlink() and (original / "index.html").read_text() == "new website"
+    kept = [p for p in (state / "site").iterdir() if p.name.startswith("replaced-")]
+    assert len(kept) == 1 and (kept[0] / "index.html").read_text() == "manual copy"
+    assert run("check")["status"] == "connected"
+
+
+def test_repair_refuses_a_site_that_was_never_connected(site):
+    with pytest.raises(ValueError, match="never connected"):
+        run("repair")

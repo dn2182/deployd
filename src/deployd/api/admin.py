@@ -284,6 +284,24 @@ async def connect_website(request: Request, name: AppName, confirmation: Website
     return {"deploy_id": deploy_id, "status": "queued"}
 
 
+@router.post("/apps/{name}/website/repair", status_code=202)
+async def repair_website(request: Request, name: AppName, confirmation: WebsiteConfirmation):
+    if confirmation.confirm != name:
+        raise HTTPException(status_code=422, detail="type the app name to confirm the repair")
+    with config_lock():
+        spec = _release_app(request, name, idle=True)
+        try:
+            website.arguments(name, spec, "repair")
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        deploy_id = request.app.state.store.create_deploy(
+            name, "0" * 40, "local-website://repair", "0" * 64, f"repair:{name}", kind="connect"
+        )
+        request.app.state.queue.enqueue_connection(name, deploy_id, "repair")
+        _audit(request, "website.repair", name)
+    return {"deploy_id": deploy_id, "status": "queued"}
+
+
 def _secret_info(app_name: str) -> dict:
     secret = get_app_secret(app_name)
     return {
@@ -327,6 +345,7 @@ async def app_status(request: Request, name: AppName):
         "current_release": current_name,
         "last_deploy": store.last_deploy(name, kind="artifact"),
         "last_health": store.last_step(name, "health"),
+        "website": website.link_state(spec),
     }
 
 

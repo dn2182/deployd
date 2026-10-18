@@ -1,6 +1,7 @@
 """Fixed helper protocol; connection operations serialize with app deployments."""
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -69,17 +70,30 @@ async def inspect(name, spec):
     return json.loads(await invoke(name, spec, "check"))
 
 
-async def run_connection(store, app, deploy_id):
+async def run_connection(store, app, deploy_id, operation="connect"):
     store.set_status(deploy_id, "running")
-    store.add_step(deploy_id, "connect", "running")
+    store.add_step(deploy_id, operation, "running")
     try:
-        result = await invoke(app, get_app_registry()[app], "connect")
+        result = await invoke(app, get_app_registry()[app], operation)
     except Exception as exc:
-        store.add_step(deploy_id, "connect", "failed", output=runner._error_text(exc))
+        store.add_step(deploy_id, operation, "failed", output=runner._error_text(exc))
         store.set_status(deploy_id, "failed", finished=True)
         return
-    store.add_step(deploy_id, "connect", "succeeded", output=result)
+    store.add_step(deploy_id, operation, "succeeded", output=result)
     store.set_status(deploy_id, "succeeded", finished=True)
+
+
+def link_state(spec) -> str | None:
+    """linked, unlinked or missing for an app with a site path; None otherwise."""
+    if not spec.site_path:
+        return None
+    try:
+        if spec.site_path.is_symlink():
+            target = Path(os.readlink(spec.site_path))
+            return "linked" if target == spec.current_link else "unlinked"
+        return "unlinked" if spec.site_path.exists() else "missing"
+    except OSError:
+        return "missing"
 
 
 async def run_removal(store, app, deploy_id):

@@ -285,18 +285,59 @@ def protected_storage(web, state, root=WEB_ROOT):
             )
 
 
-def reconnect(operation, transaction, web, site, target):
+def repair(operation, transaction, web, site, target, owner):
+    """Re-link a connected site whose path was replaced by hand; the replacement is kept."""
+    existing = info(web, site)
+    if existing is None:
+        if operation == "check":
+            return {"status": "replaced", "backup": True}
+        os.symlink(target, site, dir_fd=web)
+        os.fsync(web)
+        return {"status": "repaired", "saved": None}
+    if operation == "check":
+        return {"status": "replaced", "backup": True}
+    saved = f"replaced-{time.time_ns()}"
+    if stat.S_ISDIR(existing.st_mode):
+        with directory(site, web) as replaced:
+            if mount_id(replaced) != mount_id(web) or mount_id(web) != mount_id(transaction):
+                raise ValueError(
+                    "replacement folder, site root and helper storage must share one mount"
+                )
+            scan(replaced, existing.st_dev)
+        rename(web, site, transaction, saved, 1)
+    elif stat.S_ISLNK(existing.st_mode):
+        rename(web, site, transaction, saved, 1)
+    else:
+        raise ValueError(
+            "site path is neither a directory nor a link; operator inspection required"
+        )
+    os.symlink(target, site, dir_fd=web)
+    os.fsync(web)
+    return {"status": "repaired", "saved": str(STATE_ROOT / "<app>" / saved)}
+
+
+def reconnect(operation, transaction, web, site, target, owner=None):
     restore_name = f"restore-{site}"
     if not info(transaction, restore_name):
-        raise ValueError("website was changed manually; no matching restore receipt exists")
+        if operation in {"check", "repair"}:
+            return repair(operation, transaction, web, site, target, owner)
+        raise ValueError(
+            "website was changed manually; use Fix connection to re-link it, the replacement is kept"
+        )
     with directory(restore_name, transaction) as restore:
         if not info(restore, "detach.json"):
+            if operation in {"check", "repair"}:
+                return repair(operation, transaction, web, site, target, owner)
             raise ValueError(
                 "website has no completed restore receipt; inspect before reconnecting"
             )
         receipt = read_json(restore, "detach.json")
         if receipt["site"] != site or identity(info(web, site)) != receipt["copied"]:
+            if operation in {"check", "repair"}:
+                return repair(operation, transaction, web, site, target, owner)
             raise ValueError("website changed after restore; refusing to replace it")
+        if operation == "repair":
+            operation = "connect"
         if len({mount_id(web), mount_id(restore)}) != 1:
             raise ValueError("website and helper recovery storage must share one mount")
         with directory(site, web) as original:
@@ -421,8 +462,8 @@ def disconnect(app, site, owner):
 
 
 def connect(operation, app, site, owner):
-    if operation not in {"check", "connect"} or not APP.fullmatch(app):
-        raise ValueError("expected check|connect, an app name, and a site path")
+    if operation not in {"check", "connect", "repair"} or not APP.fullmatch(app):
+        raise ValueError("expected check|connect|repair, an app name, and a site path")
     root, site = resolve_site(site)
     target = str(RELEASE_ROOT / app / "releases/current")
     with ExitStack() as stack:
@@ -449,6 +490,8 @@ def connect(operation, app, site, owner):
         linked = expected_link(web, site, target)
         if not journal_exists and linked:
             return {"status": "connected", "backup": False}
+        if not journal_exists and operation == "repair":
+            raise ValueError("this website was never connected by deployd; use Connect website")
         if not journal_exists:
             original = info(web, site)
             if not original or not stat.S_ISDIR(original.st_mode):
@@ -508,8 +551,10 @@ def connect(operation, app, site, owner):
             raise ValueError("this app already has a connection journal for a different website")
         if info(transaction, "complete.json"):
             if not linked:
-                return reconnect(operation, transaction, web, site, target)
+                return reconnect(operation, transaction, web, site, target, owner)
             return {"status": "connected", "backup": True}
+        if operation == "repair":
+            raise ValueError("finish the interrupted connection first; use Connect website")
         original_id = journal["original"]
         staged = info(transaction, "original")
         archived = info(releases, "b4deployd")

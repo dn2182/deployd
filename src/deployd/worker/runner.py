@@ -95,6 +95,8 @@ def steps_for(spec: AppSpec) -> list[str]:
     steps += ["cutover", "restart", "health"]
     if spec.hooks.after_health:
         steps.append("after_health")
+    if spec.site_path:
+        steps.append("website")
     return steps
 
 
@@ -190,7 +192,11 @@ async def _run_steps(
             store.add_step(deploy_id, step, "failed", output=_error_text(exc))
             log.warning("deploy %s: step %s failed: %s", deploy_id, step, _error_text(exc))
             return step
-        status = "skipped" if step == "health" and not spec.health.url else "succeeded"
+        status = "succeeded"
+        if (step == "health" and not spec.health.url) or (
+            step == "website" and ctx.get("website_unlinked")
+        ):
+            status = "skipped"
         store.add_step(deploy_id, step, status, output=output or "")
     return None
 
@@ -433,6 +439,21 @@ async def _step_after_health(spec: AppSpec, deploy: dict, ctx: dict) -> str:
         cwd=current_release_path(spec),
         timeout=spec.hooks.timeout_seconds,
         env=_deploy_env(spec, deploy, ctx),
+    )
+
+
+async def _step_website(spec: AppSpec, deploy: dict, ctx: dict) -> str:
+    # Never fails the deploy: it only makes a site path that no longer points at
+    # current impossible to miss in the step log and the status panel.
+    from .website import link_state
+
+    state = link_state(spec)
+    if state == "linked":
+        return f"{spec.site_path} -> {spec.current_link}"
+    ctx["website_unlinked"] = True
+    return (
+        f"WARNING: {spec.site_path} is not linked to current ({state}); the live site "
+        "is not serving this release. Use Fix connection in the Website tab."
     )
 
 
@@ -946,4 +967,5 @@ _STEP_FNS = {
     "restart": _step_restart,
     "health": _step_health,
     "after_health": _step_after_health,
+    "website": _step_website,
 }

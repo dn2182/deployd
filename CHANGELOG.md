@@ -10,6 +10,13 @@ Initial release.
   detects an existing installation and keeps its domain, management bind and
   port, login and token by default; `--reconfigure` asks again.
 
+### Website connection repair (October 2026)
+
+- Fix connection re-links a connected site whose path was replaced by a
+  folder or another link, keeping the replacement in helper storage. The
+  status card shows the site path state, every deploy records a `website`
+  step that warns when the path is not linked, and `deployd check` warns.
+
 ### Custom site roots (October 2026)
 
 - Website connection works for any directory listed in root-owned

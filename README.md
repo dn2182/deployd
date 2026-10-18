@@ -428,6 +428,13 @@ files become `releases/b4deployd`, available through **Manage versions → Activ
 Nginx configuration, including API proxy locations, is unchanged. No reload is needed
 for an unchanged Nginx document-root path.
 
+If the site path is later replaced by a real folder or another link (a manual
+copy, a stray config), the Website tab reports it as not connected and offers
+**Fix connection**: the replacement moves into `/var/lib/deployd-connect`
+(nothing is deleted) and the path becomes a symlink to `current` again. The
+status card shows the site path state, every deploy logs a `website` step that
+warns when the path is not linked, and `deployd check` warns as well.
+
 `b4deployd` is excluded from automatic cleanup and does not count against the
 normal version limit. You can delete it explicitly when it is neither active nor
 a protected previous version. Already-connected symlinks are left alone; the

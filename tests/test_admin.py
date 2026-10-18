@@ -97,6 +97,27 @@ def test_website_connection_requires_confirmation_and_idle_app(env, monkeypatch)
         assert client.post(f"/admin/deploys/{did}/redeploy", headers=ADMIN).status_code == 409
 
 
+def test_website_repair_is_queued_with_confirmation(env, monkeypatch):
+    monkeypatch.setattr(website, "arguments", lambda *args: ["unused"])
+    with TestClient(create_app()) as client:
+        base = "/admin/apps/app-x/website/repair"
+        assert client.post(base, headers=ADMIN, json={"confirm": "nope"}).status_code == 422
+        queued = []
+        monkeypatch.setattr(
+            client.app.state.queue, "enqueue_connection", lambda *args: queued.append(args)
+        )
+        response = client.post(base, headers=ADMIN, json={"confirm": "app-x"})
+        assert response.status_code == 202
+        did = response.json()["deploy_id"]
+        assert queued == [("app-x", did, "repair")]
+        row = client.app.state.store.get_deploy(did)
+        assert row["kind"] == "connect" and row["triggered_by"] == "repair:app-x"
+        audit = client.get("/admin/audit", headers=ADMIN).json()[0]
+        assert audit["action"] == "website.repair"
+        status = client.get("/admin/apps/app-x/status", headers=ADMIN).json()
+        assert status["website"] is None
+
+
 def test_baseline_can_activate_without_a_git_deployment(env, monkeypatch):
     with TestClient(create_app()) as client:
         spec = client.get("/admin/apps", headers=ADMIN).json()["app-x"]

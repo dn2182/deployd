@@ -34,10 +34,10 @@ export default function WebsiteConnection({ name, call, onChanged, revision = 0 
     return () => clearTimeout(timer)
   }, [load, revision])
 
-  const connect = async () => {
+  const operate = async (operation) => {
     setPending(true)
     try {
-      await call(`${base}/connect`, { method: 'POST', body: JSON.stringify({ confirm: name }) })
+      await call(`${base}/${operation}`, { method: 'POST', body: JSON.stringify({ confirm: name }) })
       setData({ status: 'busy' })
       setError(null)
       onChanged()
@@ -45,6 +45,8 @@ export default function WebsiteConnection({ name, call, onChanged, revision = 0 
       setPending(false)
     }
   }
+  const connect = () => operate('connect')
+  const repair = () => operate('repair')
 
   return (
     <section className="flex flex-col gap-3" aria-label={t('website.title')}>
@@ -62,6 +64,15 @@ export default function WebsiteConnection({ name, call, onChanged, revision = 0 
           confirmationLabel={t('website.confirm_name', { name })}
           confirmLabel={t('website.connect')}
           onConfirm={connect}
+        />}
+        {data?.status === 'replaced' && <ConfirmDialog
+          trigger={<Button variant="primary" disabled={pending}>{t('website.repair')}</Button>}
+          title={t('website.repair_title')}
+          description={t('website.repair_description')}
+          confirmationValue={name}
+          confirmationLabel={t('website.confirm_name', { name })}
+          confirmLabel={t('website.repair')}
+          onConfirm={repair}
         />}
         <Button disabled={pending || loading} onClick={load}>{t('website.refresh')}</Button>
       </div>

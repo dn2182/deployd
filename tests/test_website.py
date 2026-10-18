@@ -101,3 +101,37 @@ async def test_removal_unregisters_only_after_successful_restore(
     await website.run_removal(store, "site", did)
     assert removed == ([] if failure else ["site"])
     assert store.get_deploy(did)["status"] == ("failed" if failure else "succeeded")
+
+
+def test_link_state_reflects_the_site_path(spec, tmp_path):
+    spec.site_path = None
+    assert website.link_state(spec) is None
+    spec.site_path = tmp_path / "missing"
+    assert website.link_state(spec) == "missing"
+    spec.site_path = tmp_path / "folder"
+    spec.site_path.mkdir()
+    assert website.link_state(spec) == "unlinked"
+    spec.site_path = tmp_path / "link"
+    spec.site_path.symlink_to(spec.current_link)
+    assert website.link_state(spec) == "linked"
+    spec.site_path = tmp_path / "other"
+    spec.site_path.symlink_to("/elsewhere")
+    assert website.link_state(spec) == "unlinked"
+
+
+async def test_repair_runs_as_a_connection_operation(spec, monkeypatch, tmp_path):
+    store = Store(tmp_path / "store.sqlite3")
+    store.init()
+    did = store.create_deploy("site", "0" * 40, "local-website://repair", "0" * 64, "repair:site")
+    monkeypatch.setattr(website, "get_app_registry", lambda: {"site": spec})
+    seen = []
+
+    async def helper(args):
+        seen.append(args[-3])
+        return '{"status":"repaired"}'
+
+    monkeypatch.setattr(website.runner, "_run_cmd", helper)
+    await website.run_connection(store, "site", did, "repair")
+    row = store.get_deploy(did)
+    assert seen == ["repair"] and row["status"] == "succeeded"
+    assert row["steps"][-1]["step"] == "repair"

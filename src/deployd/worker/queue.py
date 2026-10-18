@@ -40,8 +40,8 @@ class DeployQueue:
     def enqueue_removal(self, app: str, deploy_id: str) -> None:
         self.enqueue(app, deploy_id, Job("remove"))
 
-    def enqueue_connection(self, app: str, deploy_id: str) -> None:
-        self.enqueue(app, deploy_id, Job("connect"))
+    def enqueue_connection(self, app: str, deploy_id: str, operation: str = "connect") -> None:
+        self.enqueue(app, deploy_id, Job("connect", operation))
 
     def enqueue_activation(self, app: str, deploy_id: str, release: str) -> None:
         self.enqueue(app, deploy_id, Job("activate", release))
@@ -112,7 +112,7 @@ class DeployQueue:
                 if job.kind == "remove":
                     await run_removal(self._store, app, deploy_id)
                 elif job.kind == "connect":
-                    await run_connection(self._store, app, deploy_id)
+                    await run_connection(self._store, app, deploy_id, job.release or "connect")
                 elif job.kind == "activate":
                     await runner.run_activation(self._store, app, deploy_id, job.release)
                 elif job.kind == "cleanup":

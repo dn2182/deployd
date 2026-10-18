@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .config import AppSpec, get_app_github_token, get_app_registry, get_app_secret, get_settings
 from .worker import directory_layout
+from .worker.website import link_state
 
 
 class Report:
@@ -73,6 +74,11 @@ def _check_app(name: str, spec: AppSpec, report: Report) -> None:
         )
     if spec.frozen:
         report.warn(f"{label}: frozen, CI deploys are rejected")
+    if spec.site_path and link_state(spec) != "linked":
+        report.warn(
+            f"{label}: site path {spec.site_path} is not linked to {spec.current_link}; "
+            "the live site is not served from deployd releases (Fix connection in the Website tab)"
+        )
 
 
 def run_checks() -> Report:

@@ -55,3 +55,22 @@ describe('website connection', () => {
     expect(screen.getByRole('alertdialog')).toHaveTextContent('b4deployd backup is unchanged')
   })
 })
+
+describe('website repair', () => {
+  it('offers Fix connection when the path was replaced and queues the repair', async () => {
+    const call = vi.fn().mockResolvedValue({ status: 'replaced', backup: true })
+    const onChanged = vi.fn()
+    renderWith(<WebsiteConnection name="site" call={call} onChanged={onChanged} />)
+    expect(await screen.findByText(/no longer points to current/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Connect website' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Fix connection' }))
+    const dialog = screen.getByRole('alertdialog')
+    expect(dialog).toHaveTextContent('nothing is deleted')
+    fireEvent.change(within(dialog).getByLabelText('Type site to confirm'), { target: { value: 'site' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Fix connection' }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
+    expect(call).toHaveBeenCalledWith('/admin/apps/site/website/repair', {
+      method: 'POST', body: JSON.stringify({ confirm: 'site' }),
+    })
+  })
+})

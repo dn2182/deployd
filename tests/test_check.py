@@ -127,6 +127,16 @@ apps:
     assert "frozen" in out
 
 
+def test_unlinked_site_path_is_a_warning(env, capsys, monkeypatch):
+    folder = env / "site"
+    folder.mkdir()
+    original = config.get_app_registry()["app-x"]
+    spec = original.model_copy(update={"site_path": folder})
+    monkeypatch.setattr(check, "get_app_registry", lambda: {"app-x": spec})
+    assert check.main([]) == 0
+    assert "is not linked to" in capsys.readouterr().out
+
+
 def test_broken_apps_config_is_an_error(env, capsys):
     (env / "apps.yaml").write_text("apps: []\n")
     config.get_app_registry.cache_clear()

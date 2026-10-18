@@ -78,6 +78,10 @@ const en = [
     a: 'On the server run /opt/deployd/deploy/update-ubuntu.sh. It pulls, runs the checks and build before stopping, refuses to stop while a deploy is running, backs up the state database, and restarts. deployd cannot deploy itself through its own queue; the restart would kill the deploy in progress.',
   },
   {
+    q: 'The site path was replaced by a folder again. What now?',
+    a: 'The Website tab reports it as not connected and offers Fix connection: the folder that replaced the link is moved into /var/lib/deployd-connect (nothing is deleted) and the path becomes a symlink to current again. The status card shows the website path state at all times, every deploy logs a website step that warns when the path is not linked, and deployd check warns too.',
+  },
+  {
     q: 'Can the website live outside /var/www?',
     a: 'Yes. The root helper connects direct children of the site roots listed in /etc/deployd/site-roots on the server; /var/www is always included. Add a line per extra root (for example /srv/sites), rerun the installer so it checks that root is root-owned and not group or world writable, then use the custom path in the app. The symlink layout is the same: /srv/sites/example.com becomes a link to the app release.',
   },
@@ -167,6 +171,10 @@ const es = [
   {
     q: 'Cómo actualizo deployd?',
     a: 'En el servidor ejecuta /opt/deployd/deploy/update-ubuntu.sh. Trae los cambios, corre las pruebas y el build antes de detener, se niega a detener mientras hay un deploy en ejecución, respalda la base de estado y reinicia. deployd no puede desplegarse a sí mismo por su propia cola; el restart mataría el deploy en curso.',
+  },
+  {
+    q: 'La ruta del sitio volvió a ser una carpeta. Qué hago?',
+    a: 'La pestaña Sitio lo reporta como sin conexión y ofrece Reparar conexión: la carpeta que reemplazó el enlace se mueve a /var/lib/deployd-connect (no se borra nada) y la ruta vuelve a ser un enlace a current. La tarjeta de estado muestra siempre el estado de la ruta del sitio, cada deploy registra un paso website que avisa cuando la ruta no está enlazada, y deployd check también avisa.',
   },
   {
     q: 'El sitio puede vivir fuera de /var/www?',
