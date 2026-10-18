@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
+import { copyText } from '../lib/clipboard.js'
 import { Check, Copy, KeyRound } from 'lucide-react'
 import { useT } from '../i18n/index.js'
 import { Modal } from './ConfirmDialog.jsx'
@@ -12,14 +13,10 @@ export default function SecretModal({ secret, onDismiss }) {
   useEffect(() => () => clearTimeout(timer.current), [])
 
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(secret.secret)
-      setCopied(true)
-      clearTimeout(timer.current)
-      timer.current = setTimeout(() => setCopied(false), 1800)
-    } catch {
-      setCopied(false)
-    }
+    const ok = await copyText(secret.secret)
+    setCopied(ok)
+    clearTimeout(timer.current)
+    if (ok) timer.current = setTimeout(() => setCopied(false), 1800)
   }
 
   return (

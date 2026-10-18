@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { copyText } from '../lib/clipboard.js'
 import { useT } from '../i18n/index.js'
 import { Button, Checkbox, ErrorMessage, Field, Help, Notice, inputClass } from './ui.jsx'
 
@@ -45,11 +46,9 @@ export default function GitHubSetup({ name, spec, call, onChanged }) {
     } catch (err) { setError(err.message) } finally { setPending(false) }
   }
   const copyWorkflow = async () => {
-    try {
-      await navigator.clipboard.writeText(workflow)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch { setCopied(false) }
+    const ok = await copyText(workflow)
+    setCopied(ok)
+    if (ok) setTimeout(() => setCopied(false), 2000)
   }
   const change = (key, value) => {
     setSaved(false)
