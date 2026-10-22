@@ -517,3 +517,19 @@ def test_dirty_checkout_blocks_only_updates(tmp_path, mode, ok):
     )
     assert ("continued" in result.stdout) is ok
     assert "pyproject.toml" in result.stderr
+
+
+def test_public_site_forwards_the_cloudflare_visitor_ip(tmp_path):
+    output = tmp_path / "site.conf"
+    result = run_function(
+        "install-ubuntu.sh",
+        f'render_nginx_config "{output}" /opt/deployd deployd.example.com 0.0.0.0 844',
+    )
+    assert result.returncode == 0, result.stderr
+    text = output.read_text()
+    assert "map $http_cf_connecting_ip $deployd_client_ip" in text
+    assert "limit_req_zone $deployd_client_ip" in text
+    public = text.split("server {")[1]
+    assert public.count("proxy_set_header X-Forwarded-For $deployd_client_ip;") == 3
+    management = text.split("server {")[2]
+    assert "proxy_add_x_forwarded_for" in management

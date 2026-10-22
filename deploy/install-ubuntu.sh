@@ -551,7 +551,13 @@ render_nginx_config() {
 
   # add_header does not inherit into locations that set their own, so the set is repeated per location.
   cat >"$output" <<EOF
-limit_req_zone \$binary_remote_addr zone=deployd_deploys:1m rate=10r/m;
+# Behind Cloudflare the connection comes from an edge node; the visitor is in
+# CF-Connecting-IP. Safe only while the firewall admits port 80 from Cloudflare alone.
+map \$http_cf_connecting_ip \$deployd_client_ip {
+    ""      \$remote_addr;
+    default \$http_cf_connecting_ip;
+}
+limit_req_zone \$deployd_client_ip zone=deployd_deploys:1m rate=10r/m;
 
 server {
     listen 80;
@@ -562,6 +568,8 @@ server {
     location = /healthz {
         proxy_pass http://127.0.0.1:8300;
         proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-For \$deployd_client_ip;
+        proxy_set_header X-Real-IP \$deployd_client_ip;
         add_header Cache-Control "no-store" always;
     }
 
@@ -571,7 +579,8 @@ server {
         limit_req_status 429;
         proxy_pass http://127.0.0.1:8300;
         proxy_set_header Host \$host;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For \$deployd_client_ip;
+        proxy_set_header X-Real-IP \$deployd_client_ip;
         proxy_set_header X-Forwarded-Proto \$scheme;
         add_header Cache-Control "no-store" always;
     }
@@ -580,7 +589,8 @@ server {
         limit_except GET { deny all; }
         proxy_pass http://127.0.0.1:8300;
         proxy_set_header Host \$host;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For \$deployd_client_ip;
+        proxy_set_header X-Real-IP \$deployd_client_ip;
         proxy_set_header X-Forwarded-Proto \$scheme;
         add_header Cache-Control "no-store" always;
     }
