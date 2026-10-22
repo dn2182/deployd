@@ -104,8 +104,9 @@ repository owner, not with `sudo`. It elevates only operations that require
 system access. Cloudflare Flexible mode is provided for testing only; keep the
 management port firewall-restricted and move to Full (strict) before production.
 The installer prompts for the public domain, management bind/port (default
-`127.0.0.1:844`), and Basic Auth username, then generates the admin token when
-needed. The token is never printed; the installer tells you where it lives.
+`0.0.0.0:844`, reachable on the LAN; the host firewall must keep that port off
+the WAN, or choose `127.0.0.1` and use an SSH tunnel), and Basic Auth username,
+then generates the admin token when needed. The token is never printed; the installer tells you where it lives.
 Every prompt reads an environment override for unattended runs:
 `DEPLOYD_INSTALL_DOMAIN`, `DEPLOYD_INSTALL_ADMIN_BIND`,
 `DEPLOYD_INSTALL_ADMIN_PORT`, `DEPLOYD_INSTALL_ADMIN_USER`,

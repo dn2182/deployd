@@ -18,8 +18,9 @@ response within a few days.
   Cloudflare Access. Treat that token as command-execution authority because
   administrators can configure migration and restart commands.
 - The testing installer serves management on a separate Basic Auth port. Its
-  default all-interface bind is safe only when the host firewall restricts that
-  port; choose `127.0.0.1` when access through an SSH tunnel is sufficient.
+  default all-interface bind (`0.0.0.0:844`) is meant for LAN access and is safe
+  only when the host firewall keeps that port off the WAN; choose `127.0.0.1`
+  when access through an SSH tunnel is sufficient.
 - Use HTTPS or an SSH tunnel when entering credentials in management. A firewall
   allowlist or HTTP Basic Auth alone does not encrypt the connection.
 - Prefer per-app GitHub tokens limited to **Contents: read** on the specific

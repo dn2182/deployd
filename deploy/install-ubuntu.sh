@@ -829,7 +829,7 @@ main() {
     printf 'Updating in place: %s, management on %s:%s\n' "$domain" "$admin_bind" "$admin_port"
   else
     domain=$(prompt_default DEPLOYD_INSTALL_DOMAIN "Public deployd domain" "${domain:-deployd.example.com}")
-    admin_bind=$(prompt_default DEPLOYD_INSTALL_ADMIN_BIND "Management bind address" "${admin_bind:-127.0.0.1}")
+    admin_bind=$(prompt_default DEPLOYD_INSTALL_ADMIN_BIND "Management bind address" "${admin_bind:-0.0.0.0}")
     admin_port=$(prompt_default DEPLOYD_INSTALL_ADMIN_PORT "Management port" "${admin_port:-844}")
   fi
   if admin_username=$(existing_basic_auth_user); then

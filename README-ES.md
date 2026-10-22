@@ -113,8 +113,9 @@ las operaciones que necesitan acceso al sistema. El modo Flexible de
 Cloudflare es solo para pruebas; restringe el puerto de administración con el
 firewall y usa Full (strict) antes de producción.
 El instalador solicita el dominio público, bind/puerto de administración (por
-defecto `127.0.0.1:844`) y usuario de Basic Auth, y genera el token de
-administración cuando hace falta. El token nunca se imprime; el instalador
+defecto `0.0.0.0:844`, accesible en la LAN; el firewall del host debe mantener
+ese puerto fuera de la WAN, o elige `127.0.0.1` y usa un túnel SSH) y usuario de
+Basic Auth, y genera el token de administración cuando hace falta. El token nunca se imprime; el instalador
 indica dónde quedó. Cada pregunta acepta una variable de entorno para
 ejecuciones desatendidas: `DEPLOYD_INSTALL_DOMAIN`,
 `DEPLOYD_INSTALL_ADMIN_BIND`, `DEPLOYD_INSTALL_ADMIN_PORT`,
