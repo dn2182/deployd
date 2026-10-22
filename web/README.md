@@ -1,6 +1,6 @@
 # deployd admin UI
 
-React/Vite administration console for app registration, secret rotation,
+React/Vite admin console for app registration, secret rotation,
 deployment history, redeploys, rollbacks, cancellation, freezing, and step
 status on demand.
 
