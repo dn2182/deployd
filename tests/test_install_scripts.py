@@ -389,7 +389,7 @@ def test_nginx_config_hardens_api_location_and_rate_limits_deploys(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     text = output.read_text()
-    assert "limit_req_zone $binary_remote_addr zone=deployd_deploys:1m rate=10r/m;" in text
+    assert "limit_req_zone $deployd_client_ip zone=deployd_deploys:1m rate=10r/m;" in text
     deploys = text[text.index("location = /deploys {") : text.index("location ~*")]
     assert "limit_req zone=deployd_deploys burst=5 nodelay;" in deploys
     api = text[text.index("location /api/ {") : text.rindex("location / {")]
