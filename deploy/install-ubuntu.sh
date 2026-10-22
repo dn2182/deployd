@@ -223,16 +223,28 @@ install_prerequisites() {
   ensure_pnpm
 }
 
+# A dirty tree only blocks upgrades, where it means the running service would be
+# rebuilt from something that is not in git. A first install just reports it.
 check_checkout() {
-  local repo_root=$1
+  local repo_root=$1 mode=${2:-install}
   [[ $repo_root == "$REPO_ROOT" ]] || die "clone deployd at $REPO_ROOT before running"
   [[ ! -L $repo_root ]] || die "the checkout must not be a symbolic link"
   [[ -f "$repo_root/pyproject.toml" && -f "$repo_root/web/package.json" ]] ||
     die "installer must run from the deployd repository"
   [[ $(stat -c '%u' "$repo_root") -eq ${EUID} ]] ||
     die "$repo_root must be owned by the user running the installer"
-  [[ -z $(git -C "$repo_root" status --porcelain --untracked-files=no) ]] ||
-    die "tracked repository changes detected; commit or restore them first"
+  require_clean_for_update "$repo_root" "$mode"
+}
+
+require_clean_for_update() {
+  local repo_root=$1 mode=$2 changes
+  changes=$(git -C "$repo_root" status --porcelain --untracked-files=no)
+  [[ -n $changes ]] || return 0
+  if [[ $mode == update ]]; then
+    printf '%s\n' "$changes" >&2
+    die "tracked repository changes detected; restore them (git checkout -- .) before updating"
+  fi
+  printf 'Warning: tracked files differ from git; installing anyway:\n%s\n' "$changes" >&2
 }
 
 # Listeners on 80 and the management port must be nginx; 8300 must be free unless deployd holds it.
@@ -821,7 +833,7 @@ main() {
   admin_port=$((10#$admin_port))
   [[ $admin_username =~ ^[a-zA-Z0-9._-]{1,64}$ ]] || die "invalid Basic Auth username"
 
-  check_checkout "$repo_root"
+  check_checkout "$repo_root" "$mode"
   install_prerequisites
   create_service_user
   if sudo test -f "$HELPER_SUDOERS"; then

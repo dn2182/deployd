@@ -490,3 +490,30 @@ def test_uninstall_detects_configured_apps_without_running_checkout_code(
     """,
     )
     assert (result.returncode == 0) is configured
+
+
+@pytest.mark.parametrize(("mode", "ok"), [("install", True), ("update", False)])
+def test_dirty_checkout_blocks_only_updates(tmp_path, mode, ok):
+    import os
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pyproject.toml").write_text("")
+    (repo / "web").mkdir()
+    (repo / "web" / "package.json").write_text("{}")
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@x",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@x",
+    }
+    for args in (["init", "-q"], ["add", "."], ["commit", "-q", "-m", "init"]):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, env=env)
+    (repo / "pyproject.toml").write_text("changed")
+    result = run_function(
+        "install-ubuntu.sh",
+        f'require_clean_for_update "{repo}" {mode}; echo continued',
+    )
+    assert ("continued" in result.stdout) is ok
+    assert "pyproject.toml" in result.stderr
