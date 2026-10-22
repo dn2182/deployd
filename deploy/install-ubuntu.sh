@@ -194,10 +194,10 @@ corepack_pnpm() {
   command -v corepack >/dev/null 2>&1 || return 1
   # Shims from an earlier install make corepack enable fail with EEXIST.
   local shim
-  for shim in pnpm pnpx; do
+  for shim in pnpm pnpx yarn yarnpkg; do
     [[ ! -L "$TOOL_BIN_DIR/$shim" ]] || rm -f -- "$TOOL_BIN_DIR/$shim"
   done
-  corepack enable --install-directory "$TOOL_BIN_DIR" &&
+  corepack enable pnpm --install-directory "$TOOL_BIN_DIR" &&
     corepack prepare "pnpm@${PNPM_VERSION}" --activate
 }
 
