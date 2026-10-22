@@ -533,3 +533,44 @@ def test_public_site_forwards_the_cloudflare_visitor_ip(tmp_path):
     assert public.count("proxy_set_header X-Forwarded-For $deployd_client_ip;") == 3
     management = text.split("server {")[2]
     assert "proxy_add_x_forwarded_for" in management
+
+
+def test_public_site_listens_on_443_with_the_origin_certificate(tmp_path):
+    output = tmp_path / "site.conf"
+    result = run_function(
+        "install-ubuntu.sh",
+        f'render_nginx_config "{output}" /opt/deployd deployd.example.com 0.0.0.0 844',
+    )
+    assert result.returncode == 0, result.stderr
+    text = output.read_text()
+    public = text.split("server {")[1]
+    assert "listen 443 ssl;" in public and "listen 80;" not in public
+    redirect = text.split("server {")[3]
+    assert "listen 80;" in redirect and "return 301 https://$host$request_uri;" in redirect
+    assert "ssl_certificate /etc/deployd/tls/deployd.crt;" in public
+    assert "ssl_certificate_key /etc/deployd/tls/deployd.key;" in public
+    assert "ssl_protocols TLSv1.2 TLSv1.3;" in public
+    management = output.read_text().split("server {")[2]
+    assert "ssl" not in management
+
+
+def test_origin_certificate_is_generated_once_and_renewed_on_domain_change(tmp_path):
+    tls = tmp_path / "tls"
+    cert, key = tls / "deployd.crt", tls / "deployd.key"
+    body = f"""
+      sudo() {{ case "$1" in install) mkdir -p "${{@: -1}}" ;; chown) : ;; *) "$@" ;; esac; }}
+      run() {{ ensure_origin_certificate "$1" "{tls}" "{cert}" "{key}"; }}
+      run deploy.example.com
+      first=$(openssl x509 -in "{cert}" -noout -serial)
+      run deploy.example.com
+      [[ $(openssl x509 -in "{cert}" -noout -serial) == "$first" ]] && echo kept
+      run other.example.com
+      openssl x509 -in "{cert}" -noout -subject -ext subjectAltName
+      stat -c '%a' "{key}" 2>/dev/null || stat -f '%Lp' "{key}"
+    """
+    result = run_function("install-ubuntu.sh", body)
+    assert result.returncode == 0, result.stderr
+    assert "kept" in result.stdout
+    assert "CN=other.example.com" in result.stdout.replace(" = ", "=")
+    assert "DNS:other.example.com" in result.stdout
+    assert result.stdout.strip().endswith("600")

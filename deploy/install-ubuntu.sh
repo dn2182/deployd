@@ -255,7 +255,7 @@ require_clean_for_update() {
 # Listeners on 80 and the management port must be nginx; 8300 must be free unless deployd holds it.
 check_ports() {
   local admin_port=$1 port listener
-  for port in 80 "$admin_port"; do
+  for port in 80 443 "$admin_port"; do
     listener=$(sudo ss -Hltnp "sport = :${port}")
     [[ -z $listener || $listener == *'"nginx"'* ]] ||
       die "port ${port} is used by another service: ${listener}"
@@ -530,6 +530,33 @@ install_password_helper() {
   sudo mv -T -- "$rule" "$PASSWORD_SUDOERS"
 }
 
+# A self-signed certificate for the public domain, kept across upgrades and
+# regenerated only when the domain changes or expiry is near. A certificate from
+# another issuer at the same paths is left alone.
+ensure_origin_certificate() {
+  local domain=$1 dir=${2:-$TLS_DIR} cert=${3:-$TLS_CERT} key=${4:-$TLS_KEY} subject
+  sudo install -d -o root -g root -m 0700 "$dir"
+  if sudo test -f "$cert" && sudo test -f "$key"; then
+    subject=$(sudo openssl x509 -in "$cert" -noout -subject 2>/dev/null || true)
+    if [[ $subject == *"CN = ${domain}"* || $subject == *"CN=${domain}"* ]] &&
+      sudo openssl x509 -in "$cert" -noout -checkend 2592000 >/dev/null 2>&1; then
+      return 0
+    fi
+    if [[ $subject != *"deployd self-signed"* ]]; then
+      printf 'Keeping the existing origin certificate in %s (not deployd-generated).\n' "$dir"
+      return 0
+    fi
+  fi
+  printf 'Generating a self-signed origin certificate for %s\n' "$domain"
+  sudo openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 3650 \
+    -subj "/CN=${domain}/O=deployd self-signed" \
+    -addext "subjectAltName=DNS:${domain}" \
+    -keyout "$key" -out "$cert" >/dev/null 2>&1 || die "could not generate the origin certificate"
+  sudo chown root:root "$key" "$cert"
+  sudo chmod 0600 "$key"
+  sudo chmod 0644 "$cert"
+}
+
 render_security_headers() {
   cat <<'EOF'
         add_header X-Content-Type-Options "nosniff" always;
@@ -560,7 +587,13 @@ map \$http_cf_connecting_ip \$deployd_client_ip {
 limit_req_zone \$deployd_client_ip zone=deployd_deploys:1m rate=10r/m;
 
 server {
-    listen 80;
+    # Self-signed origin certificate: enough for Cloudflare "Full". Drop a Cloudflare
+    # Origin CA pair at the same paths for "Full (strict)". Port 80 only redirects.
+    listen 443 ssl;
+    ssl_certificate ${TLS_CERT};
+    ssl_certificate_key ${TLS_KEY};
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
     server_name ${domain};
     server_tokens off;
     client_max_body_size 64k;
@@ -625,6 +658,13 @@ ${headers}
         try_files \$uri \$uri/ /index.html;
 ${headers}
     }
+}
+
+server {
+    listen 80;
+    server_name ${domain};
+    server_tokens off;
+    return 301 https://\$host\$request_uri;
 }
 EOF
 }
@@ -724,8 +764,11 @@ verify_installation() {
   done
   [[ $ready == "true" ]] ||
     die "deployd failed its health check; run: sudo journalctl -u deployd -n 60 --no-pager"
-  curl --fail --silent --show-error --max-time 5 \
-    -H "Host: ${domain}" http://127.0.0.1/healthz >/dev/null
+  curl --fail --silent --show-error --max-time 5 --insecure \
+    -H "Host: ${domain}" https://127.0.0.1/healthz >/dev/null
+  [[ $(curl --silent --max-time 5 --output /dev/null --write-out '%{http_code}' \
+    -H "Host: ${domain}" http://127.0.0.1/healthz) == "301" ]] ||
+    die "port 80 did not redirect to https"
 
   local admin_status
   admin_status=$(curl --silent --connect-timeout 2 --max-time 5 --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:${admin_port}/")
@@ -874,6 +917,7 @@ main() {
   install_password_helper "$repo_root"
   install_website_helper "$repo_root"
   install_service "$repo_root"
+  ensure_origin_certificate "$domain"
   write_nginx_config "$repo_root" "$domain" "$admin_bind" "$admin_port"
   verify_installation "$domain" "$admin_port"
   sudo rm -f -- "$LEGACY_HTPASSWD_FILE"
@@ -883,7 +927,7 @@ main() {
   else
     printf '\nInstallation complete.\n'
   fi
-  printf 'Public API: https://%s (Cloudflare proxy to origin port 80)\n' "$domain"
+  printf 'Public API: https://%s (Cloudflare proxy; origin answers on 443 with a self-signed certificate, 80 redirects)\n' "$domain"
   printf 'Management UI: http://%s:%s\n' "$admin_bind" "$admin_port"
   printf 'Firewall management: not modified; keep port %s restricted.\n' "$admin_port"
   if [[ $token_state == generated ]]; then
@@ -891,8 +935,8 @@ main() {
   else
     printf 'Existing admin token preserved in %s/.env.\n' "$repo_root"
   fi
-  printf '\nSet Cloudflare SSL mode to Flexible only for this test setup.\n'
-  printf 'Upgrade to Full (strict) before production use.\n'
+  printf '\nSet Cloudflare SSL mode to Full: the origin speaks TLS on 443 with the self-signed certificate.\n'
+  printf 'For Full (strict), place a Cloudflare Origin CA certificate and key at %s and %s.\n' "$TLS_CERT" "$TLS_KEY"
 }
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then

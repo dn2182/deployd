@@ -101,8 +101,13 @@ cd /opt/deployd
 
 Run [`deploy/install-ubuntu.sh`](deploy/install-ubuntu.sh) as the normal
 repository owner, not with `sudo`. It elevates only operations that require
-system access. Cloudflare Flexible mode is provided for testing only; keep the
-management port firewall-restricted and move to Full (strict) before production.
+system access. The origin answers only on 443, with a self-signed certificate
+the installer generates for the public domain (kept across upgrades,
+regenerated when the domain changes); port 80 redirects to HTTPS. Set
+Cloudflare's SSL mode to **Full**. For **Full (strict)** place a Cloudflare Origin CA certificate and
+key at `/etc/deployd/tls/deployd.crt` and `deployd.key`; the installer leaves a
+certificate it did not generate alone. Keep the management port
+firewall-restricted.
 The installer prompts for the public domain, management bind/port (default
 `0.0.0.0:844`, reachable on the LAN; the host firewall must keep that port off
 the WAN, or choose `127.0.0.1` and use an SSH tunnel), and Basic Auth username,

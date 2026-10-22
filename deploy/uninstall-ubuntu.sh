@@ -310,6 +310,7 @@ restore_websites() {
 purge_retained_data() {
   remove_tree "$CONNECT_STATE_DIR" "/var/lib/deployd-connect"
   remove_tree "$RELEASE_ROOT" "/srv/deployd"
+  remove_tree "$TLS_DIR" "/etc/deployd/tls"
 }
 
 purge_tooling() {

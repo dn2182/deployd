@@ -109,9 +109,14 @@ cd /opt/deployd
 
 Ejecuta [`deploy/install-ubuntu.sh`](deploy/install-ubuntu.sh) con el usuario
 normal propietario del repositorio, no con `sudo`. El script eleva únicamente
-las operaciones que necesitan acceso al sistema. El modo Flexible de
-Cloudflare es solo para pruebas; restringe el puerto de administración con el
-firewall y usa Full (strict) antes de producción.
+las operaciones que necesitan acceso al sistema. El origen responde solo en el
+443, con un certificado autofirmado que el instalador genera para el dominio
+público (se conserva entre actualizaciones y se regenera si el dominio cambia);
+el puerto 80 redirige a HTTPS. Configura el modo SSL de Cloudflare en **Full**. Para
+**Full (strict)** coloca un certificado y clave de Cloudflare Origin CA en
+`/etc/deployd/tls/deployd.crt` y `deployd.key`; el instalador no toca un
+certificado que no generó. Mantén el puerto de administración restringido con
+el firewall.
 El instalador solicita el dominio público, bind/puerto de administración (por
 defecto `0.0.0.0:844`, accesible en la LAN; el firewall del host debe mantener
 ese puerto fuera de la WAN, o elige `127.0.0.1` y usa un túnel SSH) y usuario de

@@ -10,6 +10,13 @@ Initial release.
   detects an existing installation and keeps its domain, management bind and
   port, login and token by default; `--reconfigure` asks again.
 
+### Origin TLS (October 2026)
+
+- The installer generates a self-signed certificate for the public domain;
+  the public site serves only on 443 and port 80 redirects, so Cloudflare runs
+  in Full mode. A Cloudflare Origin CA pair at the same paths enables Full
+  (strict).
+
 ### Website connection repair (October 2026)
 
 - Fix connection re-links a connected site whose path was replaced by a
