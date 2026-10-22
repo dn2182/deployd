@@ -192,6 +192,11 @@ ensure_uv() {
 
 corepack_pnpm() {
   command -v corepack >/dev/null 2>&1 || return 1
+  # Shims from an earlier install make corepack enable fail with EEXIST.
+  local shim
+  for shim in pnpm pnpx; do
+    [[ ! -L "$TOOL_BIN_DIR/$shim" ]] || rm -f -- "$TOOL_BIN_DIR/$shim"
+  done
   corepack enable --install-directory "$TOOL_BIN_DIR" &&
     corepack prepare "pnpm@${PNPM_VERSION}" --activate
 }
@@ -291,6 +296,12 @@ prepare_application() {
     printf 'Skipping lint, tests and audit; CI runs them in dedicated jobs.\n'
   else
     make -C "$repo_root" check
+    # A new advisory in a transitive package must not leave a server without its
+    # deploy agent; the finding is printed and the install goes on.
+    if ! make -C "$repo_root" check-audit; then
+      warn "dependency audit reported findings (see above); update deployd soon. Set DEPLOYD_INSTALL_STRICT_AUDIT=1 to stop here instead."
+      [[ ${DEPLOYD_INSTALL_STRICT_AUDIT:-} != 1 ]] || die "dependency audit failed"
+    fi
   fi
   make -C "$repo_root" build
 }

@@ -44,8 +44,11 @@ check:
 	$(UVRUN) ruff check $(PY_SOURCES)
 	$(UVRUN) ruff format --check $(PY_SOURCES)
 	$(UVRUN) pytest -q
+	cd web && pnpm lint && pnpm test
+
+check-audit:
 	$(UVRUN) --with pip-audit==2.10.1 pip-audit
-	cd web && pnpm lint && pnpm test && pnpm audit --prod
+	cd web && pnpm audit --prod
 
 update:
 	$(UV) lock --upgrade
