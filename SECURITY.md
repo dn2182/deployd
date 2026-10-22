@@ -13,6 +13,12 @@ response within a few days.
 
 - Bind to `127.0.0.1` and expose only through a reverse proxy / Cloudflare;
   never expose the port directly.
+- The public API is served only over TLS. The installer generates a self-signed
+  certificate for the public domain in root-only `/etc/deployd/tls/` and port 80
+  answers with a redirect, so Cloudflare runs in Full mode and nothing between
+  Cloudflare and the origin is plaintext. For Full (strict), replace the pair
+  with a Cloudflare Origin CA certificate and key at the same paths; the
+  installer never overwrites a certificate it did not generate.
 - `/admin` has its own token auth and is disabled until `DEPLOYD_ADMIN_TOKEN`
   is set. Keep it reachable only from localhost, a VPN/tailnet, or behind
   Cloudflare Access. Treat that token as command-execution authority because
