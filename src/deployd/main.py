@@ -104,6 +104,37 @@ async def lifespan(app: FastAPI):
         instance_lock.release()
 
 
+# Nginx is the only direct client. Behind Cloudflare the visitor is in
+# CF-Connecting-IP; a plain reverse proxy sends X-Real-IP or X-Forwarded-For.
+# Headers from any other connection are ignored.
+TRUSTED_PROXIES = frozenset({"127.0.0.1", "::1"})
+
+
+class VisitorAddress:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] in ("http", "websocket") and scope.get("client"):
+            if scope["client"][0] in TRUSTED_PROXIES:
+                headers = {name: value for name, value in scope["headers"]}
+                visitor = (
+                    (
+                        headers.get(b"cf-connecting-ip")
+                        or headers.get(b"x-real-ip")
+                        or headers.get(b"x-forwarded-for", b"").split(b",")[0]
+                    )
+                    .decode("latin1")
+                    .strip()
+                )
+                if visitor:
+                    scope["client"] = (visitor, 0)
+                proto = headers.get(b"x-forwarded-proto", b"").decode("latin1").strip()
+                if proto in {"http", "https"}:
+                    scope["scheme"] = proto
+        await self.app(scope, receive, send)
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="deployd", docs_url=None, redoc_url=None, lifespan=lifespan)
 
@@ -140,9 +171,10 @@ def run() -> None:
 
     settings = get_settings()
     uvicorn.run(
-        app,
+        VisitorAddress(app),
         host=settings.bind_host,
         port=settings.bind_port,
         workers=1,
+        proxy_headers=False,
         timeout_graceful_shutdown=settings.drain_timeout_seconds + 30,
     )

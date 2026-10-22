@@ -288,3 +288,44 @@ def test_setup_accepts_new_spec_fields(env):
         assert saved["migrate"]["timeout_seconds"] == 1200
         spec["health"]["expect_header"] = "no colon"
         assert client.put("/admin/apps/app-x", headers=ADMIN, json=spec).status_code == 422
+
+
+async def test_visitor_address_comes_from_cloudflare_header_behind_local_proxy():
+    from deployd.main import VisitorAddress
+
+    seen = {}
+
+    async def inner(scope, receive, send):
+        seen["client"] = scope["client"]
+        seen["scheme"] = scope.get("scheme")
+
+    def scope(client, headers):
+        return {
+            "type": "http",
+            "client": client,
+            "scheme": "http",
+            "headers": [(k.encode(), v.encode()) for k, v in headers.items()],
+        }
+
+    middleware = VisitorAddress(inner)
+    await middleware(
+        scope(
+            ("127.0.0.1", 40000),
+            {
+                "cf-connecting-ip": "198.51.100.7",
+                "x-forwarded-for": "104.22.55.137",
+                "x-forwarded-proto": "https",
+            },
+        ),
+        None,
+        None,
+    )
+    assert seen == {"client": ("198.51.100.7", 0), "scheme": "https"}
+    await middleware(
+        scope(("127.0.0.1", 40000), {"x-forwarded-for": "203.0.113.9, 10.0.0.1"}), None, None
+    )
+    assert seen["client"] == ("203.0.113.9", 0)
+    await middleware(scope(("10.0.0.5", 40000), {"cf-connecting-ip": "198.51.100.7"}), None, None)
+    assert seen["client"] == ("10.0.0.5", 40000)
+    await middleware(scope(("127.0.0.1", 40000), {}), None, None)
+    assert seen["client"] == ("127.0.0.1", 40000)
