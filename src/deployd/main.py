@@ -115,23 +115,23 @@ class VisitorAddress:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] in ("http", "websocket") and scope.get("client"):
-            if scope["client"][0] in TRUSTED_PROXIES:
-                headers = {name: value for name, value in scope["headers"]}
-                visitor = (
-                    (
-                        headers.get(b"cf-connecting-ip")
-                        or headers.get(b"x-real-ip")
-                        or headers.get(b"x-forwarded-for", b"").split(b",")[0]
-                    )
-                    .decode("latin1")
-                    .strip()
+        client = scope.get("client") if scope["type"] in ("http", "websocket") else None
+        if client and client[0] in TRUSTED_PROXIES:
+            headers = dict(scope["headers"])
+            visitor = (
+                (
+                    headers.get(b"cf-connecting-ip")
+                    or headers.get(b"x-real-ip")
+                    or headers.get(b"x-forwarded-for", b"").split(b",")[0]
                 )
-                if visitor:
-                    scope["client"] = (visitor, 0)
-                proto = headers.get(b"x-forwarded-proto", b"").decode("latin1").strip()
-                if proto in {"http", "https"}:
-                    scope["scheme"] = proto
+                .decode("latin1")
+                .strip()
+            )
+            if visitor:
+                scope["client"] = (visitor, 0)
+            proto = headers.get(b"x-forwarded-proto", b"").decode("latin1").strip()
+            if proto in {"http", "https"}:
+                scope["scheme"] = proto
         await self.app(scope, receive, send)
 
 
