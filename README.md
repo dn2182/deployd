@@ -145,7 +145,11 @@ with the management configuration.
 
 That pulls the latest release and runs the installer with `--update`, which
 keeps the domain, management bind and port, Basic Auth login and admin token
-without asking. Rerunning `install-ubuntu.sh` by hand does the same: it detects
+without asking. The checkout is treated as git-managed: if tracked files differ
+locally, the script prints the list and discards those changes before pulling,
+so an edited README or a stray tool can never block an update. Your settings
+live outside the tracked tree (`.env`, `/var/lib/deployd`), so nothing of yours
+is lost. Rerunning `install-ubuntu.sh` by hand does the same: it detects
 the existing installation and offers to keep its settings (the default, also
 when stdin is closed); answer `n`, or pass `--reconfigure`, to change them.
 `DEPLOYD_INSTALL_MODE=update|reconfigure` sets the choice for unattended runs.

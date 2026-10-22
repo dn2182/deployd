@@ -155,7 +155,11 @@ opcional y los elimina junto con la configuración de administración.
 
 Eso trae el último release y ejecuta el instalador con `--update`, que conserva
 el dominio, el bind y puerto de administración, el acceso Basic Auth y el token
-de administración sin preguntar. Ejecutar `install-ubuntu.sh` a mano hace lo
+de administración sin preguntar. El checkout se trata como administrado por git:
+si hay archivos rastreados con cambios locales, el script imprime la lista y
+descarta esos cambios antes de traer, así un README editado o una herramienta
+extraviada nunca bloquean una actualización. Tus ajustes viven fuera del árbol
+rastreado (`.env`, `/var/lib/deployd`), así que no se pierde nada tuyo. Ejecutar `install-ubuntu.sh` a mano hace lo
 mismo: detecta la instalación existente y ofrece conservar sus ajustes (es la
 opción por defecto, también con stdin cerrado); responde `n`, o pasa
 `--reconfigure`, para cambiarlos. `DEPLOYD_INSTALL_MODE=update|reconfigure`
