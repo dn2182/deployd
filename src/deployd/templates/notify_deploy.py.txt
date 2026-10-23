@@ -41,8 +41,13 @@ def sign(secret: str, timestamp: str, nonce: str, body: bytes) -> str:
     return hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
 
 
+USER_AGENT = "deployd-notify/1.0 (+https://github.com/dn2182/deployd)"
+
+
 def request(url: str, *, body: bytes | None = None, headers: dict | None = None) -> dict:
-    req = urllib.request.Request(url, data=body, headers=headers or {})
+    # Explicit User-Agent: CDNs such as Cloudflare block the default "Python-urllib" agent
+    # with a 403 (error 1010) before the request ever reaches deployd.
+    req = urllib.request.Request(url, data=body, headers={"User-Agent": USER_AGENT, **(headers or {})})
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             return json.loads(resp.read())
