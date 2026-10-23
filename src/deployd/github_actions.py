@@ -259,13 +259,13 @@ def _fan_out(workflow: dict, targets: list[str]) -> None:
     workflow["jobs"]["deploy"] = {
         "needs": ["build", "publish"],
         "if": "success()",
-        "runs-on": "ubuntu-latest",
+        "runs-on": "ubuntu-24.04",
         "timeout-minutes": 25,
         "permissions": {"contents": "read"},
         "strategy": {"fail-fast": False, "matrix": {"target": list(targets)}},
         "steps": [
             {
-                "uses": "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+                "uses": "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
                 "with": {"persist-credentials": False},
             },
             notify,
