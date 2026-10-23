@@ -162,7 +162,7 @@ def render_workflow(name: str, settings: GitHubActionsSettings, *, static_site: 
         build_steps.extend(
             [
                 {
-                    "uses": "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+                    "uses": "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
                     "with": {"node-version": settings.node_version},
                 },
                 {
