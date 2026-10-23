@@ -285,6 +285,13 @@ def test_targets_fan_out_to_a_matrix_deploy_job():
         == "${{ secrets[format('DEPLOYD_SECRET_{0}', matrix.target)] }}"
     )
     assert notify["env"]["ARTIFACT_URL"] == "${{ needs.publish.outputs.url }}"
+    check = next(
+        step
+        for step in workflow["jobs"]["build"]["steps"]
+        if step.get("name") == "Check deployment settings"
+    )
+    assert check["env"]["DEPLOYD_URL"] == "${{ vars.DEPLOYD_URL_NODE_1 }}"
+    assert check["env"]["DEPLOYD_SECRET"] == "${{ secrets.DEPLOYD_SECRET_NODE_1 }}"
     archive, _ = bundle(targets=["node-1", "node-2"])
     instructions = archive.read("DEPLOYD-SETUP.md").decode()
     assert "DEPLOYD_URL_NODE_1 and secret DEPLOYD_SECRET_NODE_1" in instructions

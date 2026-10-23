@@ -244,13 +244,17 @@ def _fan_out(workflow: dict, targets: list[str]) -> None:
     # must look at the first target's variable and secret instead, or every run fails early.
     first = targets[0]
     check = next(
-        (step for step in workflow["jobs"]["build"]["steps"] if step.get("name") == "Check deployment settings"),
+        (
+            step
+            for step in workflow["jobs"]["build"]["steps"]
+            if step.get("name") == "Check deployment settings"
+        ),
         None,
     )
     if check is not None:
         check["env"] = {
-            "DEPLOYD_URL": "${{ vars.DEPLOYD_URL_%s }}" % first,
-            "DEPLOYD_SECRET": "${{ secrets.DEPLOYD_SECRET_%s }}" % first,
+            "DEPLOYD_URL": f"${{{{ vars.DEPLOYD_URL_{first} }}}}",
+            "DEPLOYD_SECRET": f"${{{{ secrets.DEPLOYD_SECRET_{first} }}}}",
         }
     workflow["jobs"]["deploy"] = {
         "needs": ["build", "publish"],
