@@ -240,6 +240,18 @@ def _fan_out(workflow: dict, targets: list[str]) -> None:
         "ARTIFACT_URL": "${{ needs.publish.outputs.url }}",
         "ARTIFACT_SHA256": "${{ needs.build.outputs.sha256 }}",
     }
+    # The settings check in the build job reads the single-target names; with targets it
+    # must look at the first target's variable and secret instead, or every run fails early.
+    first = targets[0]
+    check = next(
+        (step for step in workflow["jobs"]["build"]["steps"] if step.get("name") == "Check deployment settings"),
+        None,
+    )
+    if check is not None:
+        check["env"] = {
+            "DEPLOYD_URL": "${{ vars.DEPLOYD_URL_%s }}" % first,
+            "DEPLOYD_SECRET": "${{ secrets.DEPLOYD_SECRET_%s }}" % first,
+        }
     workflow["jobs"]["deploy"] = {
         "needs": ["build", "publish"],
         "if": "success()",
