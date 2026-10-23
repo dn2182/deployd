@@ -1,600 +1,281 @@
-# deployd — agente de despliegue estilo pull sobre HTTPS
+# deployd — agente de deploy tipo pull sobre HTTPS
 
 [![CI](https://github.com/dn2182/deployd/actions/workflows/ci.yml/badge.svg)](https://github.com/dn2182/deployd/actions/workflows/ci.yml)
-[![Licencia](https://img.shields.io/github/license/dn2182/deployd)](LICENSE)
+[![License](https://img.shields.io/github/license/dn2182/deployd)](LICENSE)
 
-*Read this in [English](README.md).*
+*Read it in [English](README.md).*
 
-> **Estado:** versión preliminar. El núcleo está probado, pero `0.1.0` seguirá
-> sin publicar hasta completar el primer despliegue en producción y una prueba
-> de rollback.
+Despliega artefactos de tus aplicaciones en tus propios servidores desde
+GitHub Actions **sin SSH ni FTP entrante y sin toolchain de build ni
+contenedores en el servidor**. CI compila y publica un release asset y envía
+una sola petición firmada con HMAC; deployd la descarga, la verifica, la pone
+en producción de forma atómica, reinicia la app, comprueba su salud y hace
+rollback solo si algo falla.
 
-Despliega artefactos de aplicaciones a tus propios servidores desde GitHub
-Actions **sin SSH ni FTP entrante y sin toolchain de compilación ni
-contenedores en la ruta de despliegue**. Un solo endpoint HTTPS con un contrato
-fijo firmado por HMAC es toda la superficie de ataque.
+> **Estado:** versión preliminar. `0.1.0` se etiqueta tras el primer deploy en
+> producción y un simulacro de rollback.
 
-## Características
+## Contenido
 
-- **Despliegues firmados** — HMAC-SHA256 por aplicación sobre timestamp,
-  nonce y cuerpo; protección atómica y persistente contra replay
-- **Basado en artefactos** — CI compila y publica; el servidor descarga y
-  verifica el SHA256; las aplicaciones desplegadas nunca se compilan en el
-  servidor
-- **Cutover seguro, rollback local** — carpeta real `releases/current/` con
-  intercambio atómico de directorios, o el modo anterior de intentos inmutables en
-  `releases/<sha>-<deploy_id>/` más un symlink `current` (atómico en Linux) o
-  un cambio controlado de junction (Windows); si el health check falla, el
-  rollback es automático
-- **Migraciones que condicionan el release** — migraciones SQL forward-only
-  con checksum (`deployd-migrate`, SQL Server vía pyodbc o PostgreSQL vía
-  psycopg) corren antes del cutover bajo un lock a nivel de base de datos y
-  detienen el despliegue en seco si fallan
-- **Hooks y aserciones de salud** — comandos opcionales `before_cutover` y
-  `after_health`, y health checks que pueden exigir el SHA desplegado en el
-  cuerpo o en un header de la respuesta, para que un proceso viejo no pase
-- **UI de administración** — registro de aplicaciones, rotación de secretos
-  en un clic (se muestran una sola vez), historial con log por paso, redeploy,
-  cancelar, congelar, rollback, estado por app, bitácora de auditoría y
-  actualización manual
-- **Nativo en bare-host** — systemd en Linux; un solo
-  servicio Python con un archivo de estado SQLite, el comando `deployd check`
-  y soporte para el watchdog de systemd
-- **Cola consciente de reinicios** — los deploys en cola se recuperan; un push
-  más nuevo reemplaza a los que seguían en cola; los pasos desde migrate en
-  adelante terminan aunque el servicio se detenga, y el trabajo interrumpido
-  antes de ese punto se reanuda al reiniciar
-- **Comandos contenidos** — los procesos de migrate, restart y hooks reciben un
-  entorno depurado; los secretos del servicio nunca llegan al código del
-  artefacto
+1. [Cómo funciona](#cómo-funciona)
+2. [Instalación en Ubuntu](#instalación-en-ubuntu)
+3. [Registrar una aplicación](#registrar-una-aplicación)
+4. [Conectar GitHub Actions](#conectar-github-actions)
+5. [Salir a producción: conectar el sitio web](#salir-a-producción-conectar-el-sitio-web)
+6. [Operación](#operación)
+7. [Referencia](#referencia)
+8. [Desarrollo local](#desarrollo-local)
 
 ## Cómo funciona
 
 ```
-GitHub Actions (build + publicación del artefacto)
-      |
-      |  HTTPS + HMAC (timestamp + nonce, secreto por app)
+GitHub Actions (build + publicación del release asset)
+      |  HTTPS + HMAC (timestamp, nonce, secret por app)
       v
-API de despliegue (FastAPI)  -- valida, encola, 202 + deploy_id
+API de deployd ---- valida, encola, 202 + deploy_id
       |
       v
-Worker de despliegue (cola serializada por app)
-      +--> descarga el artefacto + verifica SHA256  (hash en streaming, con reintentos)
-      +--> desempaqueta en release único            (límites + path traversal seguro)
-      +--> ejecuta migraciones                      (forward-only, se detiene si falla)
-      +--> hook before_cutover                      (opcional)
-      +--> cutover                                  (intercambio de directorios o enlaces)
-      +--> restart + health check                   (falla => rollback automático)
-      +--> hook after_health                        (opcional, falla => rollback automático)
-      +--> registra estado y log por paso          (CI consulta GET /deploys/{id})
+worker (una cola por app, apps en paralelo)
+      download + SHA256 -> unpack -> migrate -> hook before_cutover
+      -> cutover atómico -> restart -> health (+ hook after_health)
+      fallo tras el cutover => rollback automático
 ```
 
-Todo lo que va desde `migrate` en adelante es la fase de commit: una vez que
-empieza, detener el servicio espera a que termine (hasta
-`DEPLOYD_DRAIN_TIMEOUT_SECONDS`). Una parada durante descarga, verificación o
-desempaquetado devuelve el deploy a la cola y se reanuda al reiniciar.
-
-### Decisiones de diseño
-
-- **Artefactos, no código fuente.** Lo que se firmó es lo que corre;
-  producción no necesita SDKs.
-- **Se despliega por SHA de commit, nunca por nombre de rama.**
-- **API y worker separados.** La API solo valida y encola; los despliegues
-  de una misma app se serializan, apps distintas corren en paralelo.
-- **Un contrato fijo reduce el radio de impacto.** El workflow no puede
-  reemplazar comandos de deploy ni apuntar a una app no registrada. Un build
-  comprometido todavía puede empacar código malicioso, así que cada app debe
-  ejecutarse con una identidad propia de privilegios mínimos.
-- **Sin base de datos externa.** La configuración es YAML + env; el estado
-  de runtime es SQLite. Un agente de despliegue no debe depender de
-  infraestructura que él mismo podría estar desplegando.
+- **Artefactos, no código fuente.** Lo que CI firmó es lo que corre; producción
+  no necesita SDKs. Cada deploy se fija a un commit SHA, nunca a una rama.
+- **Un contrato fijo.** El workflow no elige comandos ni rutas; solo puede
+  disparar una app que registraste. Un build comprometido sigue enviando lo
+  que construyó, así que cada app corre bajo su propia identidad con mínimos
+  privilegios.
+- **Nada más se administra.** deployd nunca escribe el sitio de Nginx, la
+  unidad de systemd ni la configuración de tu app. Eso existe antes del primer
+  deploy.
+- **Sin base de datos externa.** La configuración es YAML más env; el estado
+  en runtime es SQLite.
 
 ## Instalación en Ubuntu
 
-Git es la única dependencia inicial. El instalador guiado instala los demás
-requisitos del sistema y del proyecto, ejecuta las validaciones y configura el
-servicio, Nginx, el estado y la interfaz de administración. Node 22 y `uv` se
-descargan como tarballs oficiales, se verifican contra sus checksums publicados
-y quedan bajo el checkout (`.node`) y `~/.local/bin`; nada se canaliza desde la
-red a un shell.
+Git es la única dependencia de arranque; el instalador descarga Node 24, uv y
+pnpm como builds oficiales verificados por checksum y configura el servicio,
+Nginx, los directorios de estado y la UI de administración. Ejecútalo con tu
+usuario normal, no con `sudo`; eleva solo lo que necesita root.
 
 ```bash
-sudo apt update
-sudo apt install -y git
+sudo apt update && sudo apt install -y git
 sudo install -d -m 0755 -o "$(id -un)" -g "$(id -gn)" /opt/deployd
 git clone https://github.com/dn2182/deployd.git /opt/deployd
-cd /opt/deployd
-./deploy/install-ubuntu.sh
+/opt/deployd/deploy/install-ubuntu.sh
 ```
 
-Ejecuta [`deploy/install-ubuntu.sh`](deploy/install-ubuntu.sh) con el usuario
-normal propietario del repositorio, no con `sudo`. El script eleva únicamente
-las operaciones que necesitan acceso al sistema. El origen responde solo en el
-443, con un certificado autofirmado que el instalador genera para el dominio
-público (se conserva entre actualizaciones y se regenera si el dominio cambia);
-el puerto 80 redirige a HTTPS. Configura el modo SSL de Cloudflare en **Full**. Para
-**Full (strict)** coloca un certificado y clave de Cloudflare Origin CA en
-`/etc/deployd/tls/deployd.crt` y `deployd.key`; el instalador no toca un
-certificado que no generó. Mantén el puerto de administración restringido con
-el firewall.
-El instalador solicita el dominio público, bind/puerto de administración (por
-defecto `0.0.0.0:844`, accesible en la LAN; el firewall del host debe mantener
-ese puerto fuera de la WAN, o elige `127.0.0.1` y usa un túnel SSH) y usuario de
-Basic Auth, y genera el token de administración cuando hace falta. El token nunca se imprime; el instalador
-indica dónde quedó. Cada pregunta acepta una variable de entorno para
-ejecuciones desatendidas: `DEPLOYD_INSTALL_DOMAIN`,
-`DEPLOYD_INSTALL_ADMIN_BIND`, `DEPLOYD_INSTALL_ADMIN_PORT`,
-`DEPLOYD_INSTALL_ADMIN_USER`, `DEPLOYD_INSTALL_ADMIN_PASSWORD` y
-`DEPLOYD_INSTALL_YES=1` para las confirmaciones. Los puertos 80 y el de
-administración se verifican antes de tocar Nginx. El sitio de administración
-generado reenvía el usuario de Basic Auth a deployd como `X-Remote-User` para
-la bitácora de auditoría, aplica los headers de seguridad también a `/api/` y
-limita la tasa de `POST /deploys` en el sitio público.
-Repara rutas de desarrollo ausentes o sin datos en un `.env` existente,
-conserva tokens y rutas absolutas, y respalda `.env` antes de modificarlo.
-Si una ruta de desarrollo contiene datos, se detiene con instrucciones de
-migración. Valida las rutas y la configuración de aplicaciones con el usuario
-del servicio antes de iniciarlo.
+Te pregunta:
 
-### Cambiar la contraseña de administración
+| Pregunta | Default | Override desatendido |
+|---|---|---|
+| Dominio público de deployd | `deployd.example.com` | `DEPLOYD_INSTALL_DOMAIN` |
+| Dirección de bind de administración | `0.0.0.0` (LAN) | `DEPLOYD_INSTALL_ADMIN_BIND` |
+| Puerto de administración | `844` | `DEPLOYD_INSTALL_ADMIN_PORT` |
+| Usuario Basic Auth | `deployd-admin` | `DEPLOYD_INSTALL_ADMIN_USER` |
+| Contraseña Basic Auth | se pide | `DEPLOYD_INSTALL_ADMIN_PASSWORD` |
+| Confirmaciones | se piden | `DEPLOYD_INSTALL_YES=1` |
 
-Usa el botón de llave del encabezado, **Cambiar contraseña de administración**.
-Ingresa tu contraseña actual y confirma la nueva. Solo cambia el acceso Basic Auth
-de Nginx; el token de administración y los secretos de las aplicaciones no cambian.
-El navegador puede pedirte que ingreses de nuevo con la nueva contraseña. Usa
-HTTPS o un túnel SSH para administrar, nunca HTTP público.
+Lo que obtienes:
 
-En instalaciones existentes, ejecuta primero el instalador actualizado. Conserva
-el acceso y traslada los hashes de `/etc/nginx/deployd.htpasswd` a
-`/var/lib/deployd-auth/htpasswd`, propiedad de root. Un helper con permisos sudo
-limitados verifica la contraseña actual y reemplaza el hash de forma atómica;
-deployd no puede leer ni escribir ese archivo directamente. No agrega servicios ni
-puertos. La desinstalación incluye las credenciales y el helper en el respaldo
-opcional y los elimina junto con la configuración de administración.
+- **API pública** en `https://<dominio>` (puerto 443, certificado self-signed
+  en `/etc/deployd/tls/`; el puerto 80 redirige). Pon Cloudflare en modo
+  **Full**. Para **Full (strict)** reemplaza el par certificado y clave por un
+  certificado Origin CA de Cloudflare en las mismas rutas; el instalador nunca
+  sobrescribe un certificado que no generó.
+- **UI de administración** en `http://<bind>:844` tras Basic Auth. El bind por
+  defecto es alcanzable en la LAN; mantén ese puerto fuera de la WAN con el
+  firewall del host, o elige `127.0.0.1` y usa un túnel SSH.
+- **Token de administración** generado en `/opt/deployd/.env` (se imprime la
+  ruta, no el valor). Léelo con `sudo grep DEPLOYD_ADMIN_TOKEN /opt/deployd/.env`.
+- Un usuario de sistema `deployd` dueño de `/var/lib/deployd` (estado,
+  registro de apps, secrets) y `/srv/deployd` (releases).
 
-## Actualización en Ubuntu
+Opcional al instalar: el **helper de conexión de sitios web** (un programa
+propiedad de root tras una sola regla de sudo) que puede cambiar un sitio
+estático existente bajo `/var/www` o cualquier raíz listada en
+`/etc/deployd/site-roots` a los releases de deployd. Ver
+[Salir a producción](#salir-a-producción-conectar-el-sitio-web).
+
+### Actualización
 
 ```bash
 /opt/deployd/deploy/update-ubuntu.sh
 ```
 
-Eso trae el último release y ejecuta el instalador con `--update`, que conserva
-el dominio, el bind y puerto de administración, el acceso Basic Auth y el token
-de administración sin preguntar. El checkout se trata como administrado por git:
-si hay archivos rastreados con cambios locales, el script imprime la lista y
-descarta esos cambios antes de traer, así un README editado o una herramienta
-extraviada nunca bloquean una actualización. Tus ajustes viven fuera del árbol
-rastreado (`.env`, `/var/lib/deployd`), así que no se pierde nada tuyo. Ejecutar `install-ubuntu.sh` a mano hace lo
-mismo: detecta la instalación existente y ofrece conservar sus ajustes (es la
-opción por defecto, también con stdin cerrado); responde `n`, o pasa
-`--reconfigure`, para cambiarlos. `DEPLOYD_INSTALL_MODE=update|reconfigure`
-fija la decisión en ejecuciones desatendidas.
+Hace pull, corre lint, tests y el build web **antes** de detener el servicio,
+se niega a detenerlo mientras hay un deploy en curso, respalda el estado
+SQLite en `/var/lib/deployd/backups/` (conserva los cinco más recientes) y
+reinicia. Todos los ajustes se conservan. Los cambios locales a archivos
+versionados en el servidor se imprimen y se descartan primero; tu
+configuración vive fuera del árbol versionado. Los hallazgos del audit de
+dependencias se reportan, no detienen (`DEPLOYD_INSTALL_STRICT_AUDIT=1` para
+que detengan). Ejecutar `install-ubuntu.sh` a mano sobre una instalación
+existente ofrece la misma actualización in-place; `--reconfigure` vuelve a
+hacer las preguntas.
 
-Volver a ejecutar el instalador es la ruta de actualización soportada: refresca
-la unidad de systemd, los sitios de Nginx, el helper root de sitios y los
-permisos, cosas que `make install` por sí solo no hace. La actualización corre
-lint, pruebas, auditoría de dependencias y el build web **antes** de detener el
-servicio, se niega a detenerlo mientras haya deploys en cola o en ejecución
-(espera hasta `DEPLOYD_INSTALL_WAIT_SECONDS`, 600 por defecto), escribe un
-respaldo en línea de la base de estado en `/var/lib/deployd/backups/` (conserva
-los cinco más recientes) y se detiene solo para sincronizar dependencias y
-reiniciar. Para cambios únicamente del frontend basta con ejecutar
-`git pull --ff-only origin main` y `make build`; después refresca el navegador.
-
-## Desinstalación en Ubuntu
-
-Para reinstalar desde cero, usa el desinstalador normal sin `--purge`, acepta el
-respaldo y restaura los sitios conectados a carpetas reales primero. Después clona
-e instala nuevamente. La desinstalación elimina configuración, tokens y estado de
-deployd; sin restaurar el respaldo tendrás que registrar las apps y actualizar sus
-secretos en GitHub. Las carpetas de releases no reconstruyen su historial.
+### Desinstalación
 
 ```bash
-cd /opt/deployd
-./deploy/uninstall-ubuntu.sh            # agrega --purge para eliminar también /srv/deployd,
-                                        # /var/lib/deployd-connect, herramientas y logs
+/opt/deployd/deploy/uninstall-ubuntu.sh          # --purge también elimina releases,
+                                                 # datos de recuperación, TLS y tooling
 ```
 
-[`deploy/uninstall-ubuntu.sh`](deploy/uninstall-ubuntu.sh) ofrece un respaldo
-con permisos restringidos y exige confirmación explícita. Elimina el servicio
-deployd, la configuración de Nginx, las credenciales, el estado estándar y el
-repositorio. Conserva los paquetes compartidos y las aplicaciones desplegadas.
-Si quedan datos de aplicaciones, conserva también la cuenta de servicio para
-mantener su propietario. Las rutas de estado personalizadas fuera del checkout y
-`/var/lib/deployd` no se respaldan ni eliminan; respáldalas por separado.
-La desinstalación se detiene si no puede parar el servicio y restaura los cambios
-de Nginx si su validación o recarga falla.
+Ofrece un backup, pregunta si los sitios conectados deben restaurarse a
+carpetas reales o conservar sus symlinks, y elimina el servicio, los sitios de
+Nginx, las credenciales y el estado. Las aplicaciones desplegadas se conservan.
 
-El instalador repara permisos del estado estándar y verifica el acceso del
-usuario de servicio antes de reiniciar. Python
-administrado se instala en `.python` dentro del checkout para que `ProtectHome`
-no lo oculte. Si una `.venv` existente apunta al directorio personal, debe
-recrearse. Si falla una actualización tras detener el servicio, corrige el error
-indicado y ejecuta el instalador otra vez. CI prueba instalación nueva,
-reinstalación, respaldo y desinstalación con systemd y Nginx reales en Ubuntu.
+### Cambiar la contraseña de administración
 
-## Desarrollo local
+Icono de llave en la barra superior de la UI una vez autenticado. Cambia la
+contraseña Basic Auth de Nginx mediante un helper root restringido; el token
+de administración y los secrets de las apps no cambian, y el navegador vuelve
+a pedir login.
 
-Instala Python 3.11+, `uv`, Node.js 22.19+ y pnpm 11.20.0 para tu sistema
-operativo. Luego ejecuta:
+## Registrar una aplicación
 
-```bash
-make install                                   # dependencias Python y frontend
-cp .env.example .env                           # ajusta las rutas y define el token
-cp config/apps.example.yaml config/apps.yaml   # registra tus aplicaciones
-make dev                                       # API en 127.0.0.1:8300
-make dev-web                                   # interfaz Vite de administración
-```
+Abre la UI de administración, ingresa el token de administración y pulsa
+**Add application**. El botón **Help** (barra superior, disponible antes del
+login) responde las preguntas habituales en inglés y español.
 
-Antes de `make dev`, define `DEPLOYD_DB_PATH=deployd.sqlite3`,
-`DEPLOYD_APPS_CONFIG=config/apps.yaml` y
-`DEPLOYD_SECRETS_FILE=config/secrets.env` en `.env`. El ejemplo usa las rutas
-del servicio Ubuntu bajo `/var/lib/deployd`.
+| Campo | Notas |
+|---|---|
+| Name | minúsculas, dígitos, guiones; se convierte en `/srv/deployd/<name>/` |
+| GitHub repository | `OWNER/REPO`; fija el allowlist de artefactos automáticamente |
+| Public deployd URL | `https://<dominio>`, lo usa el workflow generado |
+| Kind | **Static site** (verifica `index.html`) o **Service** (tu comando de restart) |
+| Local site path | solo sitios estáticos; la ruta que Nginx ya sirve, bajo una raíz permitida |
+| Restart command | lista argv, sin shell; en servicios suele ser `sudo systemctl restart <unit>` |
+| Health URL | opcional; si el restart o el health fallan tras el cutover, hay rollback |
+| Expected body / header | opcional, placeholder `{commit_sha}`: un proceso viejo no puede pasar |
+| Hooks | `before_cutover` (directorio del release nuevo) y `after_health` (release activo, rollback si falla) |
+| Environment passthrough | variables del servicio reenviadas a los comandos, por ejemplo un DSN |
+| Retention | versiones previas conservadas para rollback (default 1) |
+| Signing secret | se genera y se muestra una sola vez; va a CI como `DEPLOYD_SECRET_<APP>` |
+| GitHub access token | opcional, `Contents: read` en ese repo, necesario para repos privados |
 
-## Configuración guiada de aplicaciones
+Prerrequisitos en el servidor, por app, que deployd no crea:
 
-Abre la interfaz por HTTPS o un túnel SSH e ingresa el token de administración.
-El botón **Ayuda** de la barra superior (disponible antes de iniciar sesión)
-responde las preguntas habituales en ambos idiomas: una app o dos, servicios sin
-sitio, hooks, disparadores, secretos, rollback, actualizaciones.
-Busca por nombre, repositorio o ruta local. La lista muestra diez aplicaciones
-por página y solo los detalles de la seleccionada. **Conexión del sitio**,
-**Administrar versiones** y **Configuración de GitHub Actions** son pestañas: solo
-una está activa. Las rutas están en **Carpetas de la aplicación**. Cada tarjeta
-tiene un panel de estado con el release actual, la cantidad en cola, el último
-deploy y el último health check, más **Congelar** / **Descongelar**. El último
-deploy corresponde a un despliegue de artefacto; la limpieza y otras operaciones
-locales quedan en actividad sin reemplazar ese resultado. La zona de
-actividad y la auditoría se actualizan solas cada dos minutos mientras la
-pestaña está visible; el botón **Actualizar** de la barra superior (o la tecla
-`r`) actualiza de inmediato. Al actualizar, muestra avisos de resultados recién
-detectados. **Deploys recientes** muestra los últimos diez, filtra por app y
-estado, busca por prefijo de commit, pagina con **Cargar más** y ofrece
-cancelar, redeploy y enlaces al commit
-y a la comparación por fila. El rollback se hace eligiendo la versión exacta en
-**Administrar versiones**. **Auditoría** lista las acciones administrativas con
-el usuario que las hizo. GitHub Actions sigue consultando su propio despliegue
-hasta terminar.
+- Una unidad de systemd (o pool de IIS en Windows) para servicios, y esta línea
+  de sudoers para el usuario deployd:
+  `deployd ALL=(root) NOPASSWD: /usr/bin/systemctl restart <unit>`.
+- El sitio de Nginx sirviendo `/srv/deployd/<app>/releases/current`
+  directamente, o un document root existente que conectarás en
+  [Salir a producción](#salir-a-producción-conectar-el-sitio-web).
+- La configuración y los secrets propios de la app, donde sea que los lea.
 
-En **Agregar aplicación** puedes configurar:
+Los comandos corren con un entorno limpio más `DEPLOYD_APP`,
+`DEPLOYD_DEPLOY_ID`, `DEPLOYD_COMMIT_SHA`, `DEPLOYD_RELEASE_DIR`,
+`DEPLOYD_CURRENT` y las variables listadas en **Environment passthrough**; los
+secrets del propio servicio nunca les llegan. Un script que necesita root corre
+como `/usr/bin/sudo <script>` con una línea `NOPASSWD` de sudoers equivalente.
 
-- Nombre, repositorio de GitHub (`PROPIETARIO/REPO` o su URL) y URL pública de
-  la API de deployd, distinta de la URL del sitio que se despliega.
-- Sitio estático (HTML directo o React/Vite compilado) o servicio, ruta local,
-  URL de salud y retención. Las rutas internas se asignan automáticamente. Los
-  archivos activos están en `/srv/deployd/<app>/releases/current` y se conserva
-  una versión anterior. El modo estático verifica `index.html`; Nginx sigue
-  siendo el servidor web.
-- Un secreto de firma aleatorio (se muestra una sola vez), o uno propio de al
-  menos 32 bytes.
-- Un token de GitHub opcional por aplicación, de solo lectura, para artefactos
-  de repositorios privados.
+Un repositorio con frontend y backend son dos aplicaciones, cada una con su
+secret y su workflow. Un token de GitHub puesto en el formulario de la app
+aplica sin reiniciar y tiene prioridad sobre el fallback global
+`DEPLOYD_GITHUB_TOKEN` en `.env` (que sí requiere reinicio al cambiar).
 
-**Editar** usa el mismo formulario. Los campos de credenciales vacíos conservan
-los valores existentes; reemplazar el secreto de firma requiere confirmación.
-No hay editor JSON ni controles para cambiar rutas internas o diseño de carpetas.
-La ruta local del sitio (por ejemplo `/var/www/bluedatos.com`) queda fija al
-guardar. La ficha de la app y el resumen muestran las rutas en modo de solo
-lectura. Las apps existentes conservan sus carpetas y comandos de migración;
-no se trasladan automáticamente.
+## Conectar GitHub Actions
 
-La URL de salud es opcional. Déjala vacía para omitir la comprobación HTTP en
-despliegues, activaciones y rollback; el registro la muestra como omitida. Los
-sitios estáticos siguen requiriendo un `current/index.html` no vacío. Sin URL de
-salud, los fallos de disponibilidad HTTP no activan rollback automático. Las
-URLs existentes se siguen comprobando salvo que se borren explícitamente.
+En la tarjeta de la app abre **GitHub Actions setup**:
 
-Para un frontend y una API, registra dos aplicaciones aunque compartan repositorio
-y dominio. Cada una tiene su artefacto, secreto de firma, versiones y rollback, y
-cada una recibe su propio workflow generado. Un servicio sin sitio (API, worker,
-binario .NET o Go) sigue el mismo flujo con **Servicio** seleccionado: un comando
-de restart como `sudo systemctl restart shop-api`, una URL de salud y un comando
-de build personalizado cuya carpeta de salida contiene los archivos a desplegar.
-deployd nunca escribe sitios de Nginx, unidades de systemd ni configuración de la
-app; eso existe en el servidor antes del primer deploy.
+1. Elige el preset de build (pnpm, npm, HTML plano, o un comando propio como
+   `dotnet publish -c Release -o dist` o `go build -o dist/api ./cmd/api`), la
+   carpeta del proyecto (`.` o `frontend`) y la carpeta de salida.
+2. Elige el **trigger**: pushes a una rama, o tags de Git que coincidan con un
+   patrón (`v*`, `web-v*`). El checkbox de abajo decide automático versus
+   manual: marcado, el push o el tag despliega solo; desmarcado, corres el
+   workflow desde Actions y eliges la rama o el tag.
+3. **Deployment targets** opcionales (`web-01, web-02`) para nodos espejo,
+   cada uno con su propio deployd y la app registrada.
+4. **Preview workflow** para leerlo, **Save settings and download ZIP** para
+   obtener `.github/workflows/deployd.yml`, `scripts/notify_deploy.py` y
+   `DEPLOYD-SETUP.md`. Descomprime en la raíz del repositorio.
 
-Las credenciales se guardan separadas en `DEPLOYD_SECRETS_FILE`, con modo `0600`.
-La API nunca devuelve los tokens de GitHub. Las variables de entorno por app
-(`DEPLOYD_SECRET_<APP_NAME_UPPER_SNAKE>` y
-`DEPLOYD_GITHUB_TOKEN_<APP_NAME_UPPER_SNAKE>`) tienen prioridad y no se modifican
-desde la UI. En estas claves, los guiones del nombre se sustituyen por guiones
-bajos y el nombre se convierte a mayúsculas.
+Ajustes del repositorio (Settings, Secrets and variables, Actions):
 
-La pantalla de confirmación y cada tarjeta ofrecen **Configuración de GitHub Actions**.
-Elige pnpm/npm, HTML simple (sin compilación) o un comando personalizado; indica
-la carpeta del repositorio, el comando, la carpeta de salida y el disparador:
-pushes a una rama de despliegue, o tags de Git que coincidan con un patrón como
-`v*` o `web-v*` para que solo salgan a producción los commits que etiquetes,
-desde cualquier rama.
-Los presets de Node instalan dependencias desde el lockfile; los comandos
-personalizados deben instalar sus propias herramientas.
-**Previsualizar workflow** genera el workflow desde el formulario, con botón
-de copiar, sin guardar nada. **Guardar ajustes y descargar ZIP** guarda estos
-datos y genera `.github/workflows/deployd.yml`, `scripts/notify_deploy.py` e
-instrucciones. Un repositorio con API y frontend registra dos apps y descarga
-dos ZIP; renombra cada workflow por app (`deployd-api.yml`, `deployd-web.yml`),
-usa prefijos de tag distintos en modo tag y mantén un secreto `DEPLOYD_SECRET_*`
-por app.
-El ZIP no contiene valores secretos. Copia los archivos a la raíz del repositorio
-y revisa los workflows existentes para evitar ejecuciones duplicadas.
+| | Un solo servidor | Deployment targets |
+|---|---|---|
+| Variable | `DEPLOYD_URL` | `DEPLOYD_URL_WEB_01`, `DEPLOYD_URL_WEB_02` |
+| Secret | `DEPLOYD_SECRET_<APP>` (fallback a `DEPLOYD_SECRET`) | `DEPLOYD_SECRET_WEB_01`, `DEPLOYD_SECRET_WEB_02` |
 
-Por defecto, el workflow es manual. Súbelo a la rama predeterminada y usa
-**Actions → Deploy APP → Run workflow**, seleccionando la rama de despliegue.
-Después de una prueba exitosa puedes habilitar despliegues automáticos al hacer
-push o al subir un tag que coincida, descargar otra vez y subir el workflow
-actualizado. Guardar aquí no modifica GitHub.
-Solo se empaqueta la carpeta seleccionada, con permisos de lectura para Nginx.
-Se excluyen metadatos de Git y se rechazan enlaces, carpetas de dependencias,
-claves privadas comunes y dotfiles de credenciales (`.env*`, `.ssh`, `.npmrc`,
-`.netrc` y similares); los dotfiles que un sitio necesita, como `.well-known`,
-`.htaccess` y `.nojekyll`, sí se permiten. Revisa si hay otro contenido privado.
+Varias apps en un repositorio: renombra el workflow por app
+(`deployd-api.yml`, `deployd-web.yml`), usa prefijos de tag distintos en modo
+tag, un secret por app. El script notificador es compartido.
 
-Guardar configura deployd; **no** agrega secretos ni workflows a GitHub,
-prueba el token, modifica Nginx ni despliega la aplicación. Copia el secreto de
-firma a `DEPLOYD_SECRET`, define la variable `DEPLOYD_URL` en Actions y agrega el
-workflow generado. Configura la raíz de Nginx o el enlace fijo por
-separado. La comprobación HTTP confirma disponibilidad, no la versión activa;
-verifica el primer despliegue antes de cambiar la ruta de un sitio existente.
+Qué hace el workflow: un job `build` de solo lectura empaqueta la carpeta de
+salida (dotfiles permitidos, archivos de credenciales y `node_modules`
+rechazados) y lo sube; un job `publish` vuelve a verificar el checksum, crea el
+release `deploy-<app>-<sha>`, notifica a deployd y poda esos releases más allá
+de los diez más recientes. Con targets, un job matriz `deploy` notifica a cada
+nodo tras una sola publicación. `workflow_dispatch` tiene un input `dry_run`;
+descomenta la línea `environment:` para exigir revisores. Las actions y los
+runners están fijados por versión.
 
-## Integración con CI
+El notificador firma la petición, consulta `GET /deploys/{id}` y falla el run
+en `failed`, `rolled_back`, `superseded` (un push más nuevo lo reemplazó en la
+cola) o `cancelled`. CI ve nombres y estados de los pasos; la salida de los
+comandos solo se ve en la UI de administración.
 
-Usa el ZIP generado o adapta [`examples/github-actions-deploy.yml`](examples/github-actions-deploy.yml)
-al repo de tu aplicación e incorpora
-[`examples/notify_deploy.py`](examples/notify_deploy.py) como
-`scripts/notify_deploy.py`. El repo necesita una variable (`DEPLOYD_URL`) y un
-secreto por app, `DEPLOYD_SECRET_<APP>` (`DEPLOYD_SECRET` sigue sirviendo de
-respaldo en un repositorio de una sola app). Las descargas públicas no necesitan una credencial
-de GitHub en el servidor.
+## Salir a producción: conectar el sitio web
 
-El workflow tiene dos jobs: un `build` de solo lectura que empaqueta y sube el
-artefacto, y un `publish` con `contents: write` que vuelve a verificar el
-checksum, crea el release `deploy-<app>-<sha>`, notifica a deployd y elimina los
-releases y tags de deploy anteriores más allá de los diez más recientes. Para
-espejos o nodos idénticos, llena **Destinos de despliegue** en la pestaña de
-configuración (`node1, node2`): el artefacto se publica una sola vez y un tercer
-job matriz `deploy` notifica a cada nodo usando `DEPLOYD_URL_NODE1` /
-`DEPLOYD_SECRET_NODE1` y así sucesivamente, con la app registrada en cada nodo
-bajo su propio secreto. La
-entrada `dry_run` de `workflow_dispatch` compila y empaqueta sin publicar.
-Descomenta la línea `environment:` para exigir revisores antes de los pushes a
-producción. El notificador reintenta errores HTTP transitorios (429, 502 a 504,
-520 a 524) con espera creciente y trata `superseded` y `cancelled` como fallos
-con un mensaje claro.
+Para sitios estáticos que un server block de Nginx ya sirve desde una carpeta
+(`/var/www/example.com`, `/srv/sites/example.com`):
 
-Para un repositorio privado, agrega en el formulario un token granular con
-**Contents: read** para ese repositorio; no requiere reiniciar el servicio.
-`DEPLOYD_GITHUB_TOKEN` en el `.env` protegido sigue siendo el respaldo global
-cuando no hay token por app (reinicia después de cambiar `.env`). Eliminar el
-token de una app vuelve a usar ese respaldo. Estos tokens son distintos del
-token de administración y del secreto HMAC. El workflow publica con su
-`github.token` incorporado.
+1. Despliega una vez para que exista `/srv/deployd/<app>/releases/current`.
+2. En la tarjeta de la app abre **Website connection**, revisa el estado,
+   pulsa **Connect website** y escribe el nombre de la app.
 
-El workflow de referencia envía la URL de API del artefacto:
-`https://api.github.com/repos/OWNER/REPO/releases/assets/ASSET_ID`.
-El formulario configura `artifact.allowed_url_prefix` con el prefijo del repo,
-`https://api.github.com/repos/OWNER/REPO/releases/assets/`, y agrega
-`release-assets.githubusercontent.com` a `artifact.allowed_redirect_hosts`.
-Deployd solicita el archivo binario y envía el token solo en la solicitud HTTPS
-inicial a esa API; nunca lo reenvía en redirecciones. Los repositorios públicos
-pueden usar las mismas URLs sin `DEPLOYD_GITHUB_TOKEN`.
+La carpeta se intercambia atómicamente por un symlink a `releases/current`;
+los archivos originales se conservan como la versión `b4deployd`, disponible
+para activar. La configuración de Nginx no se toca. Si más adelante la ruta es
+reemplazada por una carpeta real u otro enlace, la pestaña lo reporta y
+**Fix connection** vuelve a enlazarla, guardando el reemplazo bajo
+`/var/lib/deployd-connect`. Cada deploy registra un paso `website` que avisa
+cuando la ruta no está enlazada, y la tarjeta de estado lo muestra.
 
-El contrato del request:
+Las raíces de sitio permitidas son `/var/www` más cada línea de
+`/etc/deployd/site-roots` (propiedad de root); el instalador verifica que cada
+raíz sea de root y no tenga escritura de grupo ni de otros
+(`DEPLOYD_INSTALL_SITE_ROOTS=/srv/sites` agrega una de forma desatendida).
+Detalles, recuperación y el flujo de restauración al eliminar:
+[docs/website-connection.md](docs/website-connection.md).
 
-```
-POST /deploys
-X-Deploy-Timestamp: <epoch unix en segundos>
-X-Deploy-Nonce: <uuid4>
-X-Deploy-Signature: sha256=<hmac hex de "{timestamp}.{nonce}.{cuerpo crudo}">
+Si prefieres apuntar tú mismo el `root` de Nginx a `releases/current`, hazlo y
+omite el conector.
 
-{
-  "app": "example-api",
-  "commit_sha": "<sha git de 40 hex>",
-  "artifact_url": "https://...",
-  "artifact_sha256": "<64-hex>",
-  "triggered_by": "github-actions:<run_id>"
-}
-```
+## Operación
 
-`202 {deploy_id}` → consulta `GET /deploys/{deploy_id}` para
-`queued | running | succeeded | failed | rolled_back | superseded | cancelled`
-más la línea de tiempo por paso. La salida de los comandos solo se incluye
-cuando el request lleva el token de administración; CI ve nombres y estados de
-los pasos. Si se pierde la respuesta `202`, reintenta exactamente el mismo
-request firmado y nonce; deployd devuelve el `deploy_id` original sin
-duplicarlo. Un push que llega mientras un deploy anterior de la misma app sigue
-en cola marca ese anterior como `superseded`; una app congelada responde `423`.
+- **Tarjeta de estado** por app: release actual, cantidad en cola, último
+  deploy, último health, estado del enlace del sitio, **Freeze** (los deploys
+  de CI responden `423` hasta descongelar; el rollback sigue funcionando).
+- **Recent deploys**: los últimos diez, filtros, búsqueda por commit, cancelar
+  deploys en cola, redeploy, enlaces a commit y compare. La lista y el
+  **Audit log** se refrescan cada dos minutos mientras la pestaña está
+  visible; el Refresh de la barra superior o la tecla `r` actualizan ya.
+- **Manage versions**: activar una versión conservada (mismo camino de
+  cutover, restart y health; sin download ni migración, así que el código
+  viejo debe seguir funcionando con la base de datos actual), borrar archivos
+  conservados, cambiar la retención.
+- **Rollback** es automático ante un restart o health fallido tras el cutover,
+  y manual mediante Manage versions.
+- **`deployd check`** valida ajustes, base de estado, secrets y su modo de
+  archivo, rutas y ejecutables, y avisa de rutas de sitio sin enlazar o apps
+  congeladas. Ejecútalo tras editar configuración a mano.
+- **`/healthz`** responde `ok` solo cuando la base de estado es escribible y
+  el worker está vivo. Detrás de Cloudflare el access log muestra la dirección
+  del visitante.
+- **Actualizar deployd** es `update-ubuntu.sh`; deployd no puede desplegarse a
+  sí mismo por su propia cola, porque el restart mataría el deploy en curso.
 
-## Administración de versiones
+### Migraciones de base de datos
 
-Abre **Administrar versiones** en una aplicación para ver versiones locales,
-activar una anterior o eliminar sus archivos con confirmación. La activación
-usa la misma cola por aplicación, reinicia y verifica la salud. No descarga
-artefactos ni ejecuta migraciones; el código anterior debe ser compatible con
-la base de datos actual. Si falla, intenta restaurar la versión previa. Las
-activaciones interrumpidas se marcan como fallidas y no se repiten al reiniciar;
-revisa la versión activa antes de reintentar.
-
-### Carpeta current real
-
-Las nuevas aplicaciones de la UI usan **Carpeta current real (Linux/macOS)**.
-Al introducir el nombre se completan `/srv/deployd/<app>/releases` y su ruta
-`current`. Configura los artefactos permitidos, el comando de reinicio y la URL
-de salud antes de guardar. El servicio crea las carpetas y verifica que ese
-sistema de archivos soporte el intercambio atómico; no configura Nginx.
-
-```text
-/srv/deployd/bluedatos/releases/
-  current/                         # archivos activos reales, no un enlace
-  <sha-anterior>-<id-despliegue>/   # carpeta anterior conservada
-```
-
-Usa `release_layout: directory` y
-`current_link: /srv/deployd/bluedatos/releases/current`. El nombre histórico
-`current_link` identifica la ruta activa en ambos modos. El primer despliegue
-desde GitHub crea `current`; los siguientes intercambian las carpetas de forma
-atómica y archivan la anterior con su identidad original. No queda una segunda
-carpeta de la versión activa. **Activar** usa el mismo intercambio y las pruebas
-de salud; **Eliminar archivos** solo borra versiones anteriores permitidas.
-Se siguen guardando por defecto la activa y una anterior.
-
-Nginx puede servir `releases/current` directamente o mediante un enlace fijo
-como `/var/www/bluedatos.com`. Ese enlace nunca cambia y se puede configurar desde
-**Conexión del sitio → Conectar sitio** cuando la primera versión esté lista.
-Guardar una app nunca cambia el sitio en producción.
-
-### Conectar un sitio existente
-
-Ejecuta de nuevo `bash deploy/install-ubuntu.sh` como usuario normal y habilita
-el asistente de conexión. Se instala un programa Python aislado, propiedad de root,
-y una regla sudo limitada. Autoriza a deployd a conectar sitios directamente bajo
-`/var/www`, no rutas arbitrarias ni comandos de shell. Las actualizaciones conservan
-esta autorización.
-El instalador verifica que `/var/www` sea de root y no permita escritura al grupo
-ni a otros. Informa de permisos inseguros sin cambiarlos automáticamente. Para un
-padre compartido `root:services` con modo `2775`, el administrador puede revisar
-`sudo chmod go-w /var/www`: conserva el grupo y setgid, pero restringe crear o
-renombrar sus hijos directos. No apliques permisos recursivamente a los sitios.
-
-Tras un despliegue exitoso, abre **Conexión del sitio**, comprueba las rutas y escribe
-el nombre de la app para confirmar el cambio en producción. La carpeta original
-se intercambia atómicamente con un enlace fijo a `releases/current`. Los archivos
-originales quedan en `releases/b4deployd`, disponible para **Activar** desde la gestión
-de versiones. No se modifica Nginx, incluidas sus rutas proxy de API. Si la raíz
-configurada en Nginx no cambia, no hace falta recargarlo.
-
-Si más adelante la ruta del sitio es reemplazada por una carpeta real u otro
-enlace (una copia manual, una configuración extraviada), la pestaña Sitio lo
-reporta como sin conexión y ofrece **Reparar conexión**: el reemplazo se mueve a
-`/var/lib/deployd-connect` (no se borra nada) y la ruta vuelve a ser un enlace a
-`current`. La tarjeta de estado muestra el estado de la ruta, cada deploy
-registra un paso `website` que avisa cuando la ruta no está enlazada, y
-`deployd check` también avisa.
-
-`b4deployd` queda excluido de la limpieza automática y no cuenta dentro del límite
-normal de versiones. Puedes eliminarlo explícitamente cuando no esté activo ni sea
-la versión anterior protegida. Los enlaces ya conectados se conservan; el asistente
-no puede reconstruir un sitio original movido manualmente.
-
-La conexión automática requiere Linux, carpetas de versiones administradas, un sitio
-estático existente directamente bajo una raíz de sitios permitida (`/var/www`, más
-cualquier directorio listado en `/etc/deployd/site-roots`, propiedad de root, que
-el instalador crea y verifica; `DEPLOYD_INSTALL_SITE_ROOTS=/srv/sites:/opt/www`
-agrega raíces sin preguntar) y el mismo sistema de archivos para
-sitio, versiones y almacenamiento del asistente. Solo admite archivos normales y
-directorios: sin enlaces simbólicos, enlaces duros ni archivos especiales. Los
-archivos deben ser legibles públicamente y las carpetas accesibles. Límite: 2 GiB y
-100.000 entradas. Las carpetas respaldadas pasan a ser de deployd con modo `0755`;
-los archivos conservan propietario y permisos. Detén cualquier proceso que escriba
-en el sitio original antes de conectarlo. Es para archivos estáticos publicados,
-no para uploads, secretos ni datos de una aplicación en ejecución.
-
-Si el proceso se interrumpe, el original permanece en `releases/b4deployd` o en
-`/var/lib/deployd-connect/<app>/original`, accesible solo por root. Reintenta
-**Conectar sitio** para continuar; cambios inesperados de rutas o metadatos dañados
-requieren revisión del administrador. No borres esos datos durante la recuperación.
-Desinstalar elimina el asistente y su regla sudo, pero conserva las versiones y los
-datos de recuperación. Pregunta si debe restaurar carpetas reales o mantener los enlaces.
-
-### Eliminar una app o desinstalar sin dejar el enlace del sitio
-
-Al volver a registrar la misma app y ruta, puedes confirmar una reconexión si la
-carpeta coincide con el comprobante de restauración de deployd. La carpeta restaurada,
-incluidas sus ediciones, se conserva en
-`/var/lib/deployd-connect/<app>/restore-<sitio>/reconnected-files`; en la siguiente
-eliminación ese directorio de recuperación pasa a `saved-<timestamp>`. Estas copias
-privadas son para recuperación manual: no se limpian automáticamente ni se activan
-desde la gestión de versiones. `b4deployd` no cambia. Carpetas reemplazadas o
-comprobantes ausentes requieren revisión del administrador, no un cambio automático.
-
-Al eliminar una app web eliges **Restaurar los archivos actuales como carpeta real**
-o **Mantener conectado el enlace del sitio**, y confirmas escribiendo su nombre.
-Restaurar copia la versión activa a un área privada, la verifica y reemplaza
-atómicamente solo su enlace `/var/www/<sitio>` por una carpeta real. **No** vuelve
-a `b4deployd`. La app se elimina del registro únicamente si la restauración termina
-bien; se rechazan nuevos despliegues mientras la eliminación esté pendiente o en curso.
-
-El desinstalador también pregunta **restaurar / mantener / cancelar** cuando encuentra
-enlaces estándar bajo `/var/www`, incluidos los de apps eliminadas con **Mantener**.
-Primero detiene deployd y crea el respaldo solicitado. Restaura los sitios antes de
-eliminar el servicio y la configuración; si falla alguno, detiene la desinstalación.
-Los sitios restaurados antes de un fallo posterior permanecen restaurados y seguros.
-
-Ejecuta primero el instalador actualizado para actualizar el asistente de root.
-Detén procesos externos que escriban archivos. Se mantienen las comprobaciones de
-archivos estáticos y del mismo montaje; hace falta espacio para otra copia del sitio.
-Los enlaces ajenos y las rutas fuera de `/var/www` requieren manejo manual. Se conservan
-las versiones activas y anteriores, `b4deployd`, los registros de recuperación y la
-cuenta deployd. Los archivos restaurados pertenecen a deployd: se restaura la ruta,
-no los propietarios Unix históricos. No se modifican las rutas de Nginx.
-
-El instalador de Ubuntu crea `/srv/deployd` con propietario `deployd`. Para
-instalaciones existentes actualizadas sin ejecutar el instalador, corre una vez:
-
-```bash
-sudo install -d -o deployd -g deployd -m 0755 /srv/deployd
-```
-
-Las rutas personalizadas también deben permitir escritura al servicio. En POSIX,
-los directorios de nuevas extracciones, incluida la raíz de la versión, reciben
-permisos `0755` antes de publicarse. Se conservan `UMask=0077`, el directorio padre
-privado de preparación y los permisos de archivos. Para sitios estáticos usa tar
-con archivos `0644` y verifica su lectura como usuario de Nginx; los archivos ZIP
-siguen la umask del servicio. No incluyas secretos en archivos públicos.
-Esto no modifica versiones existentes ni retenidas. Sus directorios con permisos
-restrictivos requieren una corrección limitada a esa versión antes de activarla;
-reiniciar deployd no cambia esos permisos.
-
-Se requiere intercambio atómico en el mismo sistema de archivos: Linux
-`renameat2(RENAME_EXCHANGE)` o macOS `renamex_np(RENAME_SWAP)`. No hay alternativa
-de copia sobre archivos activos ni de dos renombrados. Windows conserva el modo
-de enlaces/junctions. Esto no hace atómicos los cambios de base de datos ni la
-caché de archivos del navegador.
-
-Cada carpeta contiene `.deployd-release.json`, un archivo de identidad reservado
-que no puede venir en el artefacto. Consérvalo si mueves una versión manualmente.
-Al iniciar, deployd corrige los nombres de directorios tras un proceso interrumpido
-sin eliminar versiones. Identidades inválidas o duplicadas bloquean los cambios
-de versión de esa app; la API de administración sigue disponible para diagnóstico.
-Para cambios manuales, detén deployd y usa un intercambio atómico, no copies sobre
-el sitio activo. Reinicia deployd para reconciliar nombres y verifica la salud.
-Los cambios manuales no generan eventos en el historial; usa la UI para un rollback
-registrado. Los intentos fallidos después del cambio conservan sus archivos hasta
-una limpieza manual o la retención de un despliegue exitoso posterior.
-
-Las apps sin `release_layout` conservan el modo `symlink`. No se permite cambiar
-las rutas ni el modo mientras existan versiones: usa una app nueva o planifica
-una migración fuera de línea. Los enlaces existentes no se convierten solos.
-
-Por defecto se conservan dos versiones en total: la activa y una anterior para
-rollback. La configuración se guarda por aplicación y se puede cambiar:
-
-- `keep_previous: 1` (predeterminado): guarda la activa **más una versión anterior**.
-- `keep_previous: 3`: guarda la versión activa **más tres versiones anteriores**.
-- `keep_previous: 0`: conserva solo la activa después de la limpieza automática;
-  después no habrá rollback local disponible.
-- `auto_cleanup: true` (predeterminado): elimina el exceso después de desplegar
-  correctamente un artefacto nuevo. Usa `false` para limpiar solo manualmente.
-
-Guardar la configuración no elimina archivos inmediatamente. Durante un despliegue,
-la versión previa sigue disponible para rollback automático aunque la retención
-esté desactivada. La versión activa siempre está protegida. Si se guardan versiones,
-la inmediatamente anterior también está protegida. Las demás
-se pueden eliminar manualmente; su historial permanece en SQLite. En modo de
-carpeta real, los metadatos de `current` identifican la versión anterior. El modo
-de enlaces usa `current.previous`; no uses esa ruta para otros archivos. Los
-sitios importados fuera del directorio administrado nunca se eliminan.
-
-Las configuraciones existentes con `keep_releases` siguen funcionando: el total
-se convierte a `keep_previous = keep_releases - 1`, conservando su política.
-Por ejemplo, `keep_releases: 5` equivale a `keep_previous: 4`.
-Un valor anterior `keep_previous: null` ahora usa el valor predeterminado de una versión anterior.
-
-## Migraciones de base de datos
-
-`deployd-migrate` aplica archivos `NNN_nombre.sql` de un directorio en orden
-numérico, registra el SHA256 de cada archivo en `deploy_migrations` y se niega a
-correr cuando un archivo ya aplicado cambió. Úsalo como `migrate.command` de la
-app para que una migración fallida detenga el deploy antes del cutover.
+`deployd-migrate` aplica archivos `NNN_name.sql` en orden numérico, registra el
+SHA256 de cada archivo y se niega a correr cuando un archivo aplicado cambió.
+Úsalo como comando migrate de la app para que una migración fallida detenga el
+deploy antes del cutover.
 
 ```bash
 deployd-migrate --dir migrations --dialect mssql --dsn-env DEPLOYD_MIGRATE_DSN
@@ -602,105 +283,94 @@ deployd-migrate --dir migrations --dialect postgres --dsn-file /etc/app/dsn --dr
 deployd-migrate --dir migrations status
 ```
 
-Pasa el DSN con `--dsn-env` (por defecto `DEPLOYD_MIGRATE_DSN`) o `--dsn-file`;
-`--dsn` funciona pero es visible para otros usuarios en `ps`. Los comandos corren
-con un entorno depurado, así que una variable de DSN definida en el entorno del
-servicio debe listarse en `env_passthrough` de la app para llegar a
-`deployd-migrate`; `--dsn-file` no necesita passthrough. En SQL Server cada
-archivo corre con `SET XACT_ABORT ON` dentro de una transacción, se drenan todos
-los result sets para que un error después de un `PRINT` siga fallando el
-archivo, y un archivo que maneja sus propias transacciones se rechaza. Los
-runners que comparten una base se serializan con `sp_getapplock` (SQL Server) o
-`pg_advisory_xact_lock` (PostgreSQL). Instala el driver con
-`pip install 'deployd[mssql]'` o `'deployd[postgres]'`.
+Pasa el DSN con `--dsn-env` (lista esa variable en el environment passthrough
+de la app) o `--dsn-file`; `--dsn` es visible en `ps`. SQL Server ejecuta cada
+archivo en una transacción con `SET XACT_ABORT ON`, drena cada result set para
+que los errores tras un `PRINT` también fallen, y rechaza archivos que manejan
+sus propias transacciones; los runners que comparten base se serializan con
+`sp_getapplock` (SQL Server) o un advisory lock (PostgreSQL). Instala el
+driver con `pip install 'deployd[mssql]'` o `'deployd[postgres]'`.
 
-## Operación
+## Referencia
 
-- **Congelar** una app desde su panel de estado (o
-  `POST /admin/apps/{name}/freeze`) rechaza los deploys de CI con `423` durante
-  un incidente o una ventana de mantenimiento. La activación local y el
-  rollback siguen funcionando congelada.
-- **Cancelar** un deploy en cola desde el historial
-  (`POST /admin/deploys/{id}/cancel`). Los deploys en ejecución no se cancelan;
-  un push más nuevo reemplaza automáticamente a los que están en cola.
-- **Rollback** desde **Administrar versiones**: selecciona la versión guardada
-  exacta y actívala por el mismo camino de cutover, restart y health check.
-- **Limpieza** desde **Administrar versiones**: se pone en la misma cola de la
-  app que los despliegues y queda registrada en actividad. Actualiza para ver
-  el resultado. Se vuelve a comprobar la protección de la versión antes de borrarla.
-- **Hooks**: `hooks.before_cutover` corre en el directorio del release nuevo
-  después de las migraciones; `hooks.after_health` corre en el release vivo
-  cuando el health check pasó y hace rollback si falla. Ambos son listas argv
-  con su propio `timeout_seconds`, igual que `migrate` y `restart`. Los comandos
-  reciben `DEPLOYD_APP`, `DEPLOYD_DEPLOY_ID`, `DEPLOYD_COMMIT_SHA`,
-  `DEPLOYD_RELEASE_DIR` y `DEPLOYD_CURRENT`, más las variables del servicio
-  listadas en `env_passthrough` de la app (nunca los secretos de
-  administración, GitHub o firma), y nada más del entorno del servicio.
-- **Aserciones de salud**: `health.expect_body` (subcadena) y
-  `health.expect_header` (`Nombre: valor`) aceptan el marcador `{commit_sha}`.
-  Expón el SHA en ejecución desde tu app y configura una de las dos; un restart
-  que dejó al proceso viejo sirviendo falla y hace rollback.
-- **Bitácora de auditoría**: cada mutación administrativa registra al usuario
-  de Basic Auth que actuó (desde `X-Remote-User`, fijado por el sitio Nginx de
-  administración) en **Auditoría** y en `GET /admin/audit`.
-- **Historial**: se conserva, incluidos los registros necesarios para activar
-  versiones guardadas. La retención de archivos sigue siendo configurable por app.
-  El mantenimiento horario solo elimina nonces vencidos; las descargas huérfanas
-  bajo `releases/.incoming` se eliminan al arrancar.
-- **`deployd check`** es de solo lectura: inspecciona configuración, permisos de
-  las rutas de estado, secretos, metadatos de versiones y ejecutables. No crea ni
-  migra la base, no prueba escrituras ni repara carpetas. No garantiza la integridad
-  de la base ni que una escritura tenga éxito. Ejecútalo tras editar la configuración.
-  Si reporta recuperación pendiente, reinicia el servicio de forma controlada
-  cuando termine cualquier operación en curso.
-- **`/healthz`** devuelve `{"status": "ok"}` solo cuando la base de estado es
-  escribible y todas las tareas worker están vivas; si no, `degraded` con el
-  chequeo que falla.
-
-## Notas de despliegue
-
-- **Linux:** [`deploy/deployd.service`](deploy/deployd.service) — unidad de
-  systemd, usuario dedicado, reglas sudoers por app para los restarts.
-- **Windows:** [`deploy/windows.md`](deploy/windows.md) — servicio NSSM,
-  physical path de IIS sobre un junction, `Restart-WebAppPool`.
-- **Endurecimiento:** enlaza a localhost detrás de un reverse proxy, mantén
-  `/admin` fuera del internet público — checklist completo en
-  [`SECURITY.md`](SECURITY.md).
-
-Ejecuta exactamente un proceso deployd por base de estado; ese proceso es
-dueño de las colas durables por app. Compila `web/`, sirve `web/dist` desde el
-reverse proxy y redirige `/api/*` a deployd removiendo el prefijo `/api`.
-Para cambios de base de datos usa migraciones expand/contract, manteniendo la
-versión anterior compatible si hace falta un rollback de aplicación.
-
-## Estructura
+### Contrato de la petición
 
 ```
-src/deployd/
-  main.py                  factory de la app FastAPI + lifespan (worker, mantenimiento, watchdog)
-  config.py                settings, registro de apps, secretos
-  security.py              verificación HMAC (firma, ventana, nonce)
-  models.py                esquemas de request/response
-  check.py                 validador de configuración `deployd check`
-  api/routes.py            POST /deploys, GET /deploys/{id}, GET /healthz
-  api/admin.py             /admin: registro, secretos, historial, cancelar, congelar, estado, auditoría
-  worker/queue.py          cola asyncio serializada por app, con supervisión y drenado
-  worker/runner.py         el pipeline de despliegue (pasos preparatorios, fase de commit protegida)
-  worker/directory_layout.py  intercambio de carpeta current real e identidades de release
-  worker/website.py        protocolo del helper de conexión de sitios
-  migrate.py               CLI deployd-migrate
-  store/db.py              store de estado SQLite versionado
-web/                       UI de administración en React (Vite + Tailwind)
-examples/                  workflow de CI + script de notificación para incorporar
-deploy/                    instaladores, unidad systemd, helper root, guía de Windows
-tests/                     pytest (API/worker/instalador) — web/ usa vitest
+POST /deploys
+X-Deploy-Timestamp: <unix epoch seconds>        (±5 minutos)
+X-Deploy-Nonce: <uuid4>                         (un solo uso por app)
+X-Deploy-Signature: sha256=<hex hmac de "{timestamp}.{nonce}.{raw body}">
+
+{"app": "...", "commit_sha": "<40 hex>", "artifact_url": "https://...",
+ "artifact_sha256": "<64 hex>", "triggered_by": "github-actions:<run_id>"}
 ```
 
-## Contribuir
+`202 {deploy_id}` y luego `GET /deploys/{deploy_id}` reporta
+`queued | running | succeeded | failed | rolled_back | superseded | cancelled`
+con la línea de tiempo de pasos. Reintentar exactamente la misma petición
+firmada devuelve el id original. Apps desconocidas responden `401`, apps
+congeladas `423`, URLs de artefacto no permitidas `403`.
 
-Ver [`CONTRIBUTING.md`](CONTRIBUTING.md). Reportes de seguridad:
-[`SECURITY.md`](SECURITY.md).
+### Rutas
 
-## Licencia
+| Ruta | Contenido |
+|---|---|
+| `/opt/deployd` | checkout de git, `.venv`, `.node`, `.env` (root:deployd 0640) |
+| `/var/lib/deployd` | `apps.yaml`, `secrets.env` (0600), `deployd.sqlite3`, `backups/` |
+| `/srv/deployd/<app>/releases/` | `current/` más versiones conservadas `<sha>-<deploy_id>/` |
+| `/etc/deployd/site-roots` | raíces permitidas para la conexión de sitios |
+| `/etc/deployd/tls/` | certificado y clave de origen |
+| `/var/lib/deployd-connect` | datos de recuperación de sitios, solo root |
+| `/var/lib/deployd-auth/htpasswd` | login de administración |
 
-Apache-2.0 — ver [`LICENSE`](LICENSE) y [`NOTICE`](NOTICE).
+### `.env`
+
+`DEPLOYD_ADMIN_TOKEN`, `DEPLOYD_GITHUB_TOKEN` (fallback para repos privados),
+`DEPLOYD_BIND_HOST` / `DEPLOYD_BIND_PORT` (`127.0.0.1:8300`, solo Nginx le
+habla), `DEPLOYD_DRAIN_TIMEOUT_SECONDS` (cuánto espera un stop por un cutover
+en curso, default 600; el timeout de stop de systemd está por encima),
+`DEPLOYD_DB_PATH`, `DEPLOYD_APPS_CONFIG`, `DEPLOYD_SECRETS_FILE`. Los overrides
+por app `DEPLOYD_SECRET_<APP>` y `DEPLOYD_GITHUB_TOKEN_<APP>` tienen prioridad
+sobre la UI y no se pueden cambiar desde ella. Los cambios en `.env` requieren
+reiniciar el servicio.
+
+### `apps.yaml`
+
+Todo lo que la UI edita vive en `/var/lib/deployd/apps.yaml`;
+[config/apps.example.yaml](config/apps.example.yaml) documenta cada clave,
+incluidos límites de tamaño de artefacto, timeouts, hooks, aserciones de health
+y `env_passthrough`. El almacenamiento de releases, la activación y la
+retención se describen en [docs/release-layout.md](docs/release-layout.md).
+
+### Windows
+
+Servicio NSSM, physical path de IIS sobre un junction, `Restart-WebAppPool`:
+[deploy/windows.md](deploy/windows.md) (script instalador sin probar en
+Windows real). Propiedades de seguridad y checklist de hardening:
+[SECURITY.md](SECURITY.md).
+
+## Desarrollo local
+
+Python 3.11.4+, uv, Node 24, pnpm 11.
+
+```bash
+make install                                   # dependencias Python + web
+cp .env.example .env                           # define DEPLOYD_ADMIN_TOKEN y las rutas locales
+cp config/apps.example.yaml config/apps.yaml
+make dev                                       # API en 127.0.0.1:8300
+make dev-web                                   # UI Vite, hace proxy de /api a la API
+make check                                     # ruff, pytest, oxlint, vitest
+make check-audit                               # pip-audit y pnpm audit
+```
+
+```
+src/deployd/        app FastAPI, pipeline del worker, store SQLite, CLIs migrate y check
+web/                UI de administración React (Vite + Tailwind)
+deploy/             instalador/actualizador/desinstalador Ubuntu, unidad systemd, helpers root, guía Windows
+examples/           workflow de referencia generado + notificador vendorizable
+docs/               conexión de sitios y layout de releases en detalle
+tests/              pytest (API, worker, instalador); web/ usa vitest
+```
+
+Ver [CONTRIBUTING.md](CONTRIBUTING.md). Reportes de seguridad: [SECURITY.md](SECURITY.md).
+Apache-2.0, ver [LICENSE](LICENSE) y [NOTICE](NOTICE).
