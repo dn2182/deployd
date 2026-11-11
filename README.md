@@ -197,9 +197,10 @@ one secret per app. The notifier script is shared.
 
 What the workflow does: a read-only `build` job packages the output folder
 (dotfiles allowed, credential files and `node_modules` rejected) and uploads
-it; a `publish` job re-verifies the checksum, creates the
-`deploy-<app>-<sha>` release, notifies deployd and prunes those releases beyond
-the newest ten. With targets, a `deploy` matrix job notifies every node after
+it; a `publish` job re-verifies the checksum, attaches the artifact to a
+release (on the pushed tag for tag triggers, otherwise a `deploy-<app>-<sha>`
+release it creates), notifies deployd and prunes the `deploy-<app>-*` releases
+beyond the newest ten. With targets, a `deploy` matrix job notifies every node after
 one publish. `workflow_dispatch` has a `dry_run` input; uncomment the
 `environment:` line to require reviewers. Actions and runners are pinned.
 

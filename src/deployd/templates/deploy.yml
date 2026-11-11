@@ -114,18 +114,32 @@ jobs:
             echo "Downloaded artifact does not match the build checksum." >&2
             exit 1
           fi
-          tag="deploy-${APP_NAME}-${GITHUB_SHA}"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            # Deploying a pushed tag: publish the artifact on that tag. Nothing creates a tag, so the token
+            # never trips GitHub's workflow-scope check on commits whose workflow files differ from the default branch.
+            tag="$GITHUB_REF_NAME"
+            title="$APP_NAME $tag"
+            target=()
+          else
+            tag="deploy-${APP_NAME}-${GITHUB_SHA}"
+            title="$APP_NAME ${GITHUB_SHA:0:12}"
+            target=(--target "$GITHUB_SHA")
+          fi
           if gh release view "$tag" >/dev/null 2>&1; then
             existing=$(mktemp -d "$RUNNER_TEMP/deployd-existing.XXXXXX")
-            gh release download "$tag" --pattern deployd-artifact.tar.gz --dir "$existing"
-            existing_sha=$(sha256sum "$existing/deployd-artifact.tar.gz" | cut -d' ' -f1)
-            if [ "$existing_sha" != "$ARTIFACT_SHA256" ]; then
-              echo "Release $tag already contains a different artifact; it will not be overwritten." >&2
-              exit 1
+            if gh release download "$tag" --pattern deployd-artifact.tar.gz --dir "$existing" 2>/dev/null; then
+              existing_sha=$(sha256sum "$existing/deployd-artifact.tar.gz" | cut -d' ' -f1)
+              if [ "$existing_sha" != "$ARTIFACT_SHA256" ]; then
+                echo "Release $tag already contains a different artifact; it will not be overwritten." >&2
+                exit 1
+              fi
+            else
+              # The release exists without an artifact (for example written by hand with release notes): attach it.
+              gh release upload "$tag" "$RUNNER_TEMP/deployd-artifact.tar.gz"
             fi
           else
-            gh release create "$tag" "$RUNNER_TEMP/deployd-artifact.tar.gz" --target "$GITHUB_SHA" --latest=false \
-              --title "$APP_NAME ${GITHUB_SHA:0:12}" --notes "Deployment artifact for $APP_NAME."
+            gh release create "$tag" "$RUNNER_TEMP/deployd-artifact.tar.gz" "${target[@]}" --latest=false \
+              --title "$title" --notes "Deployment artifact for $APP_NAME."
           fi
           asset_url=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$tag" \
             --jq '.assets[] | select(.name == "deployd-artifact.tar.gz") | .url')
