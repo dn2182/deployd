@@ -15,7 +15,10 @@ CONTENT = "# database\nDB_URL=postgres://localhost/app\nexport API_KEY='abc'\n"
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     root = tmp_path / "apps"
-    (root / "api").mkdir(parents=True, mode=0o755)
+    (root / "api").mkdir(parents=True)
+    # Explicit modes: the helper refuses a group-writable root, whatever the umask is.
+    root.chmod(0o755)
+    (root / "api").chmod(0o755)
     roots = tmp_path / "env-roots"
     roots.write_text(f"# allowed\n{root}\n")
     roots.chmod(0o644)
