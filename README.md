@@ -27,6 +27,8 @@ What that gives you:
 - **Simple to host.** One command installs it on an Ubuntu server. It needs no
   database server and no other services.
 
+![The deployd management UI: applications, versions and recent deploys](docs/screenshot.webp)
+
 > **Status:** stable and in production use. deployd ships real client
 > applications on several production servers, and every change is tested with
 > a full install, update and uninstall on Ubuntu 24.04. The Windows setup is

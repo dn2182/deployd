@@ -29,6 +29,8 @@ Lo que obtienes:
 - **Fácil de alojar.** Un comando lo instala en un servidor Ubuntu. No
   necesita servidor de base de datos ni otros servicios.
 
+![La UI de administración de deployd: aplicaciones, versiones y deploys recientes](docs/screenshot.webp)
+
 > **Estado:** estable y en uso en producción. deployd publica aplicaciones
 > reales de clientes en varios servidores de producción, y cada cambio se
 > prueba con una instalación, actualización y desinstalación completas en
