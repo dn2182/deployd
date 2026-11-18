@@ -39,15 +39,15 @@ response within a few days.
   refuses hard links, and never touches deployd's own configuration. Saves are
   atomic and keep owner, group and mode; earlier versions live in root-only
   `/var/lib/deployd-env`. The audit log records reads and the names of changed
-  keys, never values. Two trade-offs to accept before enabling it: anyone
-  holding the admin token can then read every app secret reachable through an
-  app's env file path, and with the default `/etc` entry in `env-roots` the
-  service sandbox no longer mounts `/etc` read-only for the root commands
-  deployd starts (`ProtectSystem=yes` instead of `full`; systemd cannot grant
-  write access to `/etc` itself any other way). Replace `/etc` in `env-roots`
-  with the directories you use (for example `/etc/myapp`) and rerun the
-  installer: the rest of `/etc` is then read-only again and only those
-  directories are writable.
+  keys, never values. The default list holds only `/etc/apps-env`, so the
+  editor reaches nothing else and the rest of `/etc` stays read-only inside
+  the service sandbox. Two things to know before enabling it: anyone holding
+  the admin token can then read every app secret reachable through an app's
+  env file path, and each folder you add to `env-roots` becomes writable for
+  the root commands deployd starts. Add specific folders such as `/etc/myapp`.
+  Listing `/etc` itself removes the read-only `/etc` altogether
+  (`ProtectSystem=yes` instead of `full`), because systemd cannot grant write
+  access to `/etc` itself any other way.
 - Prefer per-app GitHub tokens limited to **Contents: read** on the specific
   repository. The UI stores them in `DEPLOYD_SECRETS_FILE` (0600), not app YAML;
   API responses and validation errors do not include their values. The global

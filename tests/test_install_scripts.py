@@ -610,7 +610,7 @@ def test_env_editor_is_opt_in_and_declining_installs_nothing():
     assert "view and edit app .env files" in result.stdout
 
 
-def test_env_roots_default_to_etc_and_opt_and_accept_additions(tmp_path):
+def test_env_roots_default_to_the_apps_env_folder_and_accept_additions(tmp_path):
     roots = tmp_path / "env-roots"
     body = f"""
       sudo() {{
@@ -625,7 +625,7 @@ def test_env_roots_default_to_etc_and_opt_and_accept_additions(tmp_path):
       DEPLOYD_INSTALL_ENV_ROOTS=relative configure_env_roots "{roots}"
     """
     result = run_function("install-ubuntu.sh", body)
-    assert result.stdout.split() == ["/etc", "/opt", "/srv/apps"]
+    assert result.stdout.split() == ["/etc/apps-env", "/srv/apps", "/etc"]
     assert result.returncode != 0 and "must be an absolute path" in result.stderr
 
 

@@ -221,7 +221,7 @@ export default function AppEditor({ name: existingName, initialSpec, call, onSav
         onChange={(event) => change('automatic', event.target.checked)} />
 
       <Field label={t('setup.env_file')} help={t('setup.env_file_help')}>
-        <input className={`${inputClass} font-mono`} value={form.envFile} placeholder="/etc/myapp/myapp.env"
+        <input className={`${inputClass} font-mono`} value={form.envFile} placeholder="/etc/apps-env/myapp/myapp.env"
           spellCheck={false} autoComplete="off" onChange={(event) => change('envFile', event.target.value)} />
       </Field>
 

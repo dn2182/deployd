@@ -330,7 +330,7 @@ export default {
   'env.restored': 'Previous version restored.',
   'deploy.kind_restart': 'Restart',
   'setup.env_file': 'Environment file path (optional)',
-  'setup.env_file_help': "Absolute path of this app's .env file, for example /etc/myapp/myapp.env. It adds an Environment file tab to view and edit it. The file must already exist, be named .env, .env.<name> or <name>.env, and sit under a directory listed in /etc/deployd/env-roots on the server (/etc and /opt by default). Keep it outside the release folder.",
+  'setup.env_file_help': "Absolute path of this app's .env file, for example /etc/apps-env/myapp/myapp.env. It adds an Environment file tab to view and edit it. The file must already exist, be named .env, .env.<name> or <name>.env, and sit under a directory listed in /etc/deployd/env-roots on the server (/etc/apps-env by default; add other folders there). Keep it outside the release folder.",
   'deploy.kind_remove': 'Restore website and remove app',
   'deploy.duration': 'Duration',
   'deploy.open_commit': 'Open commit on GitHub',

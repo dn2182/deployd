@@ -330,7 +330,7 @@ export default {
   'env.restored': 'Versión anterior restaurada.',
   'deploy.kind_restart': 'Reinicio',
   'setup.env_file': 'Ruta del archivo de entorno (opcional)',
-  'setup.env_file_help': 'Ruta absoluta del archivo .env de esta app, por ejemplo /etc/myapp/myapp.env. Agrega una pestaña Archivo de entorno para verlo y editarlo. El archivo ya debe existir, llamarse .env, .env.<name> o <name>.env, y estar bajo un directorio listado en /etc/deployd/env-roots en el servidor (/etc y /opt por defecto). Mantenlo fuera de la carpeta de releases.',
+  'setup.env_file_help': 'Ruta absoluta del archivo .env de esta app, por ejemplo /etc/apps-env/myapp/myapp.env. Agrega una pestaña Archivo de entorno para verlo y editarlo. El archivo ya debe existir, llamarse .env, .env.<name> o <name>.env, y estar bajo un directorio listado en /etc/deployd/env-roots en el servidor (/etc/apps-env por defecto; agrega otras carpetas ahí). Mantenlo fuera de la carpeta de releases.',
   'deploy.kind_remove': 'Restaurar sitio y eliminar app',
   'deploy.duration': 'Duración',
   'deploy.open_commit': 'Abrir el commit en GitHub',

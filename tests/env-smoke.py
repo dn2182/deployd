@@ -40,7 +40,7 @@ def request(path, body=None, method=None):
         return exc.code, json.loads(exc.read() or b"null")
 
 
-folder = Path("/etc/deployd-smoke")
+folder = Path("/etc/apps-env/env-smoke")
 env_file = folder / "app.env"
 assert not folder.exists()
 folder.mkdir(mode=0o750)

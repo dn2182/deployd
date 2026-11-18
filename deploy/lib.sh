@@ -24,6 +24,8 @@ readonly ENV_HELPER="/usr/local/libexec/deployd/env-file"
 readonly ENV_SUDOERS="/etc/sudoers.d/deployd-env"
 readonly ENV_ROOTS_FILE="/etc/deployd/env-roots"
 readonly ENV_STATE_DIR="/var/lib/deployd-env"
+# Default home of app .env files: /etc/apps-env/<app>/<app>.env
+readonly APPS_ENV_DIR="/etc/apps-env"
 readonly ENV_DROPIN="${SERVICE_DROPIN}/env-roots.conf"
 readonly TLS_DIR="/etc/deployd/tls"
 readonly TLS_CERT="${TLS_DIR}/deployd.crt"

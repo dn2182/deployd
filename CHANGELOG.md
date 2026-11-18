@@ -9,7 +9,8 @@ Initial release.
 - An app can name its `.env` file; the Environment file tab then shows it with
   hidden values, saves it atomically with the same owner and mode, keeps
   earlier versions for restore and can restart the app with its health check.
-  It is opt-in at install time and limited to `/etc/deployd/env-roots`.
+  It is opt-in at install time and limited to the folders in
+  `/etc/deployd/env-roots`, by default `/etc/apps-env/<app>/`.
 - The management site now serves only TLS on its port, with the installer's
   certificate; plain HTTP on that port redirects to `https://`.
 

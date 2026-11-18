@@ -27,7 +27,7 @@ apps:
     # optional: this app's .env file on the server, editable from the UI when the
     # installer's .env editor is enabled. Must exist, be named .env, .env.<name> or
     # <name>.env, live under a directory in /etc/deployd/env-roots, outside releases.
-    env_file: null                                 # e.g. /etc/example-api/example-api.env
+    env_file: null                                 # e.g. /etc/apps-env/example-api/example-api.env
     # service environment variables forwarded to migrate, restart and hooks; commands
     # otherwise run with a clean environment and never see deployd's own secrets
     env_passthrough: []                            # e.g. [DEPLOYD_MIGRATE_DSN]

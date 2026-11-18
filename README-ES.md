@@ -279,17 +279,25 @@ omite el conector.
 
 ### Editar el archivo .env de una app
 
-Mantén el `.env` de cada app fuera de la carpeta de releases, por ejemplo
-`/etc/<app>/<app>.env` con dueño `root:<appuser>`, modo `0640` y cargado por el
-`EnvironmentFile=` de la unidad. Un deploy nunca lo toca. Con el editor de .env
-habilitado al instalar también puedes cambiarlo desde la UI:
+Mantén el `.env` de cada app fuera de la carpeta de releases; un deploy nunca
+lo toca. El lugar recomendado es `/etc/apps-env/<app>/<app>.env`, cargado por
+el `EnvironmentFile=` de la unidad:
+
+```bash
+sudo install -d -m 0750 -o root -g <appuser> /etc/apps-env/<app>
+sudo install -m 0640 -o root -g <appuser> /dev/null /etc/apps-env/<app>/<app>.env
+```
+
+Con el editor de .env habilitado al instalar puedes cambiarlo desde la UI:
 
 1. Edita la app y define **Environment file path**. El archivo ya debe
    existir, llamarse `.env`, `.env.<name>` o `<name>.env`, y estar como máximo
    tres carpetas debajo de un directorio listado en `/etc/deployd/env-roots`
-   (propiedad de root; `/etc` y `/opt` por defecto;
-   `DEPLOYD_INSTALL_ENV_ROOTS=/srv/apps` agrega uno, luego vuelve a ejecutar el
-   instalador).
+   (propiedad de root; `/etc/apps-env` por defecto, creado por el instalador).
+   Los archivos guardados en otro lugar también funcionan: agrega su carpeta,
+   por ejemplo `/etc/myapp` o `/opt/myapp`, como una línea en ese archivo y
+   vuelve a ejecutar `update-ubuntu.sh`
+   (`DEPLOYD_INSTALL_ENV_ROOTS=/etc/myapp:/opt/myapp` lo hace desatendido).
 2. Abre la pestaña **Environment file** y pulsa **Open file**. Los valores
    están ocultos hasta que muestres uno; **Edit as text** muestra el archivo
    crudo.

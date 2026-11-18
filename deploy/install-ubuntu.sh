@@ -886,7 +886,7 @@ configure_env_roots() {
   local file=$1 root
   sudo install -d -o root -g root -m 0755 "$(dirname -- "$file")"
   if ! sudo test -f "$file"; then
-    printf '# Directories that may hold app .env files editable from the management UI, one per line.\n# A file may sit up to three folders below a directory listed here.\n/etc\n/opt\n' |
+    printf '# Directories that may hold app .env files editable from the management UI, one per line.\n# A file may sit up to three folders below a directory listed here. Add your own\n# (for example /etc/myapp or /opt/myapp) and rerun the installer.\n%s\n' "$APPS_ENV_DIR" |
       sudo install -o root -g root -m 0644 /dev/stdin "$file"
   fi
   local -a extra=()
@@ -943,13 +943,17 @@ install_env_helper() {
   if ! sudo test -f "$ENV_SUDOERS"; then
     printf '%s\n' \
       'Optional: allow the management UI to view and edit app .env files.' \
-      "This grants deployd a restricted root helper for files named .env, .env.<name> or <name>.env under the directories in $ENV_ROOTS_FILE (default /etc and /opt)." \
+      "This grants deployd a restricted root helper for files named .env, .env.<name> or <name>.env under the directories in $ENV_ROOTS_FILE (default $APPS_ENV_DIR, one folder per app)." \
       'Only an app that has an env file path set can use it; each save keeps the previous version in root-only storage.' \
-      'Listing /etc lifts the read-only /etc of the service sandbox; list specific folders such as /etc/myapp to keep it.'
+      'Other folders can be added to that list later; listing /etc itself lifts the read-only /etc of the service sandbox.'
     confirm 'Enable the .env editor?' || return 0
   fi
   configure_env_roots "$ENV_ROOTS_FILE"
   mapfile -t roots < <(env_roots "$ENV_ROOTS_FILE")
+  # Only the default folder is created; any other listed directory is the administrator's.
+  if printf '%s\n' "${roots[@]}" | grep -qx -- "$APPS_ENV_DIR" && ! sudo test -e "$APPS_ENV_DIR"; then
+    sudo install -d -o root -g root -m 0755 "$APPS_ENV_DIR"
+  fi
   check_env_roots "${roots[@]}"
   for path in /usr/local /usr/local/libexec /usr/local/libexec/deployd "$ENV_STATE_DIR"; do
     sudo test ! -L "$path" || die "helper path must not be a symlink: $path"

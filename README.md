@@ -264,16 +264,24 @@ that and skip the connector.
 
 ### Edit an app's .env file
 
-Keep each app's `.env` outside the release folder, for example
-`/etc/<app>/<app>.env` owned by `root:<appuser>` with mode `0640` and loaded by
-the unit's `EnvironmentFile=`. A deploy never touches it. With the .env editor
-enabled at install time you can also change it from the UI:
+Keep each app's `.env` outside the release folder; a deploy never touches it.
+The recommended place is `/etc/apps-env/<app>/<app>.env`, loaded by the unit's
+`EnvironmentFile=`:
+
+```bash
+sudo install -d -m 0750 -o root -g <appuser> /etc/apps-env/<app>
+sudo install -m 0640 -o root -g <appuser> /dev/null /etc/apps-env/<app>/<app>.env
+```
+
+With the .env editor enabled at install time you can change it from the UI:
 
 1. Edit the app and set **Environment file path**. The file must already
    exist, be named `.env`, `.env.<name>` or `<name>.env`, and sit at most three
    folders below a directory listed in root-owned `/etc/deployd/env-roots`
-   (`/etc` and `/opt` by default; `DEPLOYD_INSTALL_ENV_ROOTS=/srv/apps` adds
-   one, then rerun the installer).
+   (`/etc/apps-env` by default, created by the installer). Files kept
+   elsewhere work too: add their folder, for example `/etc/myapp` or
+   `/opt/myapp`, as a line in that file and rerun `update-ubuntu.sh`
+   (`DEPLOYD_INSTALL_ENV_ROOTS=/etc/myapp:/opt/myapp` does it unattended).
 2. Open the **Environment file** tab and press **Open file**. Values are
    hidden until you reveal one; **Edit as text** shows the raw file.
 3. **Save file** replaces it atomically with the same owner, group and mode,

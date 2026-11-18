@@ -36,8 +36,9 @@ sudo env GITHUB_ACTIONS=true python3 "$checkout/tests/password-smoke.py"
 [[ $(sudo stat -c '%U:%G:%a' /usr/local/libexec/deployd/env-file) == root:root:755 ]]
 [[ $(sudo stat -c '%U:%G:%a' /etc/sudoers.d/deployd-env) == root:root:440 ]]
 [[ $(sudo stat -c '%U:%G:%a' /var/lib/deployd-env) == root:root:700 ]]
-grep -qx 'ProtectSystem=yes' /etc/systemd/system/deployd.service.d/env-roots.conf
-[[ $(systemctl show deployd -p ProtectSystem --value) == yes ]]
+[[ $(sudo stat -c '%U:%G:%a' /etc/apps-env) == root:root:755 ]]
+grep -qx 'ReadWritePaths=-/etc/apps-env' /etc/systemd/system/deployd.service.d/env-roots.conf
+[[ $(systemctl show deployd -p ProtectSystem --value) == full ]]
 sudo -u deployd test ! -r /var/lib/deployd-env
 sudo env GITHUB_ACTIONS=true python3 "$checkout/tests/env-smoke.py"
 [[ $(sudo stat -c '%U:%G:%a' /var/lib/deployd-auth/htpasswd) == root:www-data:640 ]]
@@ -76,6 +77,7 @@ printf 'y\nREMOVE deployd\nr\n' | /opt/deployd/deploy/uninstall-ubuntu.sh
 [[ ! -e /etc/sudoers.d/deployd-password && ! -e /usr/local/libexec/deployd/change-password ]]
 [[ ! -e /etc/sudoers.d/deployd-env && ! -e /usr/local/libexec/deployd/env-file ]]
 sudo test ! -e /var/lib/deployd-env
+[[ -d /etc/apps-env ]]
 [[ ! -e /var/lib/deployd-auth && ! -e /etc/nginx/deployd.htpasswd ]]
 [[ -d /var/www/deployd-smoke.example && ! -L /var/www/deployd-smoke.example ]]
 [[ -f /srv/deployd/website-smoke/releases/b4deployd/index.html ]]
