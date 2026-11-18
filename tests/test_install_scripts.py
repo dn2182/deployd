@@ -579,15 +579,20 @@ def test_installed_settings_survive_the_tls_listen_flag():
 
 
 def test_env_dropin_grants_write_access_only_where_the_sandbox_blocks_it():
-    result = run_function(
-        "install-ubuntu.sh", "render_env_dropin /etc /opt /srv/apps /etc/globalgo /usr/local/etc"
+    nested = run_function(
+        "install-ubuntu.sh", "render_env_dropin /opt /srv/apps /etc/globalgo /usr/local/etc"
     )
-    assert result.returncode == 0, result.stderr
-    assert "[Service]" in result.stdout
-    assert "ReadWritePaths=-/etc -/etc/globalgo -/usr/local/etc\n" in result.stdout
-    assert "/opt" not in result.stdout.split("[Service]")[1]
+    assert nested.returncode == 0, nested.stderr
+    assert "ReadWritePaths=-/etc/globalgo -/usr/local/etc\n" in nested.stdout
+    assert (
+        "ProtectSystem" not in nested.stdout and "/opt" not in nested.stdout.split("[Service]")[1]
+    )
+    # systemd keeps /etc read-only when it is listed as both, so /etc lifts the protection.
+    whole = run_function("install-ubuntu.sh", "render_env_dropin /etc /opt /usr")
+    assert "ProtectSystem=yes\n" in whole.stdout and "ReadWritePaths" not in whole.stdout
+    assert "/usr stays read-only" in whole.stderr
     empty = run_function("install-ubuntu.sh", "render_env_dropin /opt")
-    assert "ReadWritePaths" not in empty.stdout and "[Service]" in empty.stdout
+    assert empty.stdout.strip().endswith("[Service]")
 
 
 def test_env_editor_is_opt_in_and_declining_installs_nothing():

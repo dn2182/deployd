@@ -1,6 +1,7 @@
 #!/usr/bin/python3 -I
 """Privileged reader and writer for one app's .env file. No imports from the deployd checkout."""
 
+import errno
 import fcntl
 import grp
 import hashlib
@@ -236,16 +237,17 @@ def stored(folder):
 
 
 def keep(folder, data):
-    fd = os.open(
-        f"{time.time_ns():020d}.env",
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-        0o600,
-        dir_fd=folder,
-    )
+    name = f"{time.time_ns():020d}.env"
+    fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=folder)
     with os.fdopen(fd, "wb") as handle:
         handle.write(data)
         handle.flush()
         os.fsync(handle.fileno())
+    os.fsync(folder)
+    return name
+
+
+def prune(folder):
     for name in stored(folder)[:-KEEP_BACKUPS]:
         os.unlink(name, dir_fd=folder)
     os.fsync(folder)
@@ -293,8 +295,19 @@ def save(directory, name, folder, current, metadata, data):
     result = {"saved": current != data, "sha256": digest(data)}
     result.update(difference(parse(decode(current))[0], parse(decode(data))[0]))
     if result["saved"]:
-        keep(folder, current)
-        replace(directory, name, data, metadata)
+        kept = keep(folder, current)
+        try:
+            replace(directory, name, data, metadata)
+        except OSError as exc:
+            # Nothing was replaced, so the copy just stored is not an earlier version.
+            os.unlink(kept, dir_fd=folder)
+            if exc.errno == errno.EROFS:
+                raise ValueError(
+                    "the folder is read-only for the deployd service; list it in "
+                    f"{ENV_ROOTS_FILE} and rerun the installer"
+                ) from None
+            raise
+        prune(folder)
     result["backups"] = len(stored(folder))
     return result
 

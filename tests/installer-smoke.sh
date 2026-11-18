@@ -36,7 +36,8 @@ sudo env GITHUB_ACTIONS=true python3 "$checkout/tests/password-smoke.py"
 [[ $(sudo stat -c '%U:%G:%a' /usr/local/libexec/deployd/env-file) == root:root:755 ]]
 [[ $(sudo stat -c '%U:%G:%a' /etc/sudoers.d/deployd-env) == root:root:440 ]]
 [[ $(sudo stat -c '%U:%G:%a' /var/lib/deployd-env) == root:root:700 ]]
-grep -qx 'ReadWritePaths=-/etc' /etc/systemd/system/deployd.service.d/env-roots.conf
+grep -qx 'ProtectSystem=yes' /etc/systemd/system/deployd.service.d/env-roots.conf
+[[ $(systemctl show deployd -p ProtectSystem --value) == yes ]]
 sudo -u deployd test ! -r /var/lib/deployd-env
 sudo env GITHUB_ACTIONS=true python3 "$checkout/tests/env-smoke.py"
 [[ $(sudo stat -c '%U:%G:%a' /var/lib/deployd-auth/htpasswd) == root:www-data:640 ]]

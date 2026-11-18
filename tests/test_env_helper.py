@@ -191,3 +191,14 @@ def test_writable_root_directory_is_refused(env):
             helper.run("read", "api", str(env))
     finally:
         env.parent.parent.chmod(0o755)
+
+
+def test_failed_write_leaves_no_stray_backup_and_explains_a_read_only_folder(env, monkeypatch):
+    def read_only(*args, **kwargs):
+        raise OSError(helper.errno.EROFS, "Read-only file system")
+
+    monkeypatch.setattr(helper, "replace", read_only)
+    with pytest.raises(ValueError, match="read-only for the deployd service"):
+        write(env, "A=1\n")
+    assert env.read_text() == CONTENT
+    assert helper.run("check", "api", str(env))["backups"] == 0

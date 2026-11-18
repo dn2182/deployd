@@ -900,18 +900,25 @@ configure_env_roots() {
   done
 }
 
-# The service sandbox mounts /etc and /usr read-only (ProtectSystem=full) and the
-# helper runs inside it, so directories there need an explicit write grant.
+# The helper runs inside the service sandbox, where ProtectSystem=full mounts /etc
+# and /usr read-only. A directory below them gets its own write grant. /etc itself
+# cannot: systemd keeps a path read-only when it is listed both ways, so the whole
+# protection of /etc is lifted instead (ProtectSystem=yes still covers /usr and /boot).
 render_env_dropin() {
-  local root
+  local root relax_etc=false
   local -a writable=()
   for root in "$@"; do
     case $root in
-      /etc | /etc/* | /usr | /usr/*) writable+=("-$root") ;;
+      /etc) relax_etc=true ;;
+      /etc/* | /usr/*) writable+=("-$root") ;;
+      /usr) warn "/usr stays read-only for the deployd service; .env files directly under it can be viewed but not saved" ;;
     esac
   done
   printf '# Written by the deployd installer from %s; edit that file and rerun the installer.\n' "$ENV_ROOTS_FILE"
   printf '[Service]\n'
+  if [[ $relax_etc == true ]]; then
+    printf 'ProtectSystem=yes\n'
+  fi
   if ((${#writable[@]})); then
     printf 'ReadWritePaths=%s\n' "${writable[*]}"
   fi
@@ -937,7 +944,8 @@ install_env_helper() {
     printf '%s\n' \
       'Optional: allow the management UI to view and edit app .env files.' \
       "This grants deployd a restricted root helper for files named .env, .env.<name> or <name>.env under the directories in $ENV_ROOTS_FILE (default /etc and /opt)." \
-      'Only an app that has an env file path set can use it; each save keeps the previous version in root-only storage.'
+      'Only an app that has an env file path set can use it; each save keeps the previous version in root-only storage.' \
+      'Listing /etc lifts the read-only /etc of the service sandbox; list specific folders such as /etc/myapp to keep it.'
     confirm 'Enable the .env editor?' || return 0
   fi
   configure_env_roots "$ENV_ROOTS_FILE"
