@@ -137,6 +137,22 @@ class RestartSpec(BaseModel):
 
 
 _ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
+_ENV_FILE_NAME_RE = re.compile(
+    r"(?:\.env(?:\.[A-Za-z0-9_-]{1,32})?|[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.env)\Z"
+)
+# deployd's own configuration and state are not app environment files.
+_ENV_FILE_DENY = tuple(
+    Path(path)
+    for path in (
+        "/opt/deployd",
+        "/etc/deployd",
+        "/var/lib/deployd",
+        "/var/lib/deployd-auth",
+        "/var/lib/deployd-connect",
+        "/var/lib/deployd-env",
+        "/srv/deployd",
+    )
+)
 # Service secrets never travel to commands, whatever the app asks for.
 _ENV_PASSTHROUGH_DENY = ("DEPLOYD_ADMIN_TOKEN", "DEPLOYD_GITHUB_TOKEN", "DEPLOYD_SECRET_")
 
@@ -209,6 +225,9 @@ class AppSpec(BaseModel):
     github_repository: str | None = None
     deploy_url: str | None = None
     site_path: Path | None = None
+    # Optional app .env file, edited from the UI through the root helper. The helper
+    # enforces the allowed directories; this only rejects what can never be valid.
+    env_file: Path | None = None
     releases_dir: Path
     current_link: Path
     release_layout: Literal["symlink", "directory"] = "symlink"
@@ -293,6 +312,20 @@ class AppSpec(BaseModel):
                 raise ValueError(
                     "site path must be an absolute app-specific path, such as /var/www/example.com"
                 )
+        return value
+
+    @field_validator("env_file")
+    @classmethod
+    def validate_env_file(cls, value):
+        if value is None:
+            return None
+        if not value.is_absolute():
+            raise ValueError("env file must be an absolute path, such as /etc/myapp/myapp.env")
+        value = Path(os.path.abspath(value))
+        if not _ENV_FILE_NAME_RE.fullmatch(value.name):
+            raise ValueError("env file must be named .env, .env.<name> or <name>.env")
+        if any(value.is_relative_to(denied) for denied in _ENV_FILE_DENY):
+            raise ValueError("deployd's own files cannot be an app env file")
         return value
 
     @model_validator(mode="after")

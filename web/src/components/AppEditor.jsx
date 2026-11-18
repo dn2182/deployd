@@ -26,6 +26,7 @@ function fields(spec = {}) {
     repository: spec.github_repository || spec.artifact?.allowed_url_prefix?.match(/^https:\/\/api\.github\.com\/repos\/([^/]+\/[^/]+)\/releases\/assets\/$/)?.[1] || '',
     deployUrl: spec.deploy_url || '',
     sitePath: spec.site_path || '',
+    envFile: spec.env_file || '',
     kind: !restart.length || (restart.length === 3 && restart[0] === '/usr/bin/test' && restart[1] === '-s' && restart[2] === `${spec.current_link}/index.html`) ? 'static' : 'service',
     ...commandFields(restart),
     restartTimeout: spec.restart?.timeout_seconds ?? DEFAULT_TIMEOUT,
@@ -108,6 +109,7 @@ export default function AppEditor({ name: existingName, initialSpec, call, onSav
       github_repository: repository || null,
       deploy_url: form.deployUrl.trim() || null,
       site_path: form.sitePath.trim() || null,
+      env_file: form.envFile.trim() || null,
       release_layout: base.release_layout || (existingName ? 'symlink' : 'directory'),
       releases_dir: root,
       current_link: current,
@@ -217,6 +219,11 @@ export default function AppEditor({ name: existingName, initialSpec, call, onSav
       </Field>
       <Checkbox label={t('releases.automatic')} checked={form.automatic}
         onChange={(event) => change('automatic', event.target.checked)} />
+
+      <Field label={t('setup.env_file')} help={t('setup.env_file_help')}>
+        <input className={`${inputClass} font-mono`} value={form.envFile} placeholder="/etc/myapp/myapp.env"
+          spellCheck={false} autoComplete="off" onChange={(event) => change('envFile', event.target.value)} />
+      </Field>
 
       <Section title={t('setup.health_section')} help={t('setup.health_help')}>
         <Field label={t('setup.health_url')}>

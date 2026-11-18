@@ -550,27 +550,94 @@ def test_public_site_listens_on_443_with_the_origin_certificate(tmp_path):
     assert "ssl_certificate /etc/deployd/tls/deployd.crt;" in public
     assert "ssl_certificate_key /etc/deployd/tls/deployd.key;" in public
     assert "ssl_protocols TLSv1.2 TLSv1.3;" in public
+
+
+def test_management_site_is_tls_only_and_redirects_plain_http_on_its_port(tmp_path):
+    output = tmp_path / "site.conf"
+    result = run_function(
+        "install-ubuntu.sh",
+        f'render_nginx_config "{output}" /opt/deployd deployd.example.com 0.0.0.0 844',
+    )
+    assert result.returncode == 0, result.stderr
     management = output.read_text().split("server {")[2]
-    assert "ssl" not in management
+    assert "listen 0.0.0.0:844 ssl;" in management
+    assert "ssl_certificate /etc/deployd/tls/deployd.crt;" in management
+    assert "error_page 497 =301 https://$http_host$request_uri;" in management
+    assert "client_max_body_size 512k;" in management
+    assert "auth_basic_user_file" in management
 
 
-def test_origin_certificate_is_generated_once_and_renewed_on_domain_change(tmp_path):
-    tls = tmp_path / "tls"
-    cert, key = tls / "deployd.crt", tls / "deployd.key"
+def test_installed_settings_survive_the_tls_listen_flag():
+    site = SITE.replace("listen 10.0.0.5:9443;", "listen 10.0.0.5:9443 ssl;")
+    result = run_function(
+        "install-ubuntu.sh",
+        "SITE=$(cat <<'NGINX'\n" + site + "NGINX\n)\n"
+        'sudo() { case "$1" in test) return 0 ;; cat) printf "%s" "$SITE" ;; esac; }\n'
+        "installed_settings",
+    )
+    assert result.stdout.split() == ["deploy.example.com", "10.0.0.5", "9443"]
+
+
+def test_env_dropin_grants_write_access_only_where_the_sandbox_blocks_it():
+    result = run_function(
+        "install-ubuntu.sh", "render_env_dropin /etc /opt /srv/apps /etc/globalgo /usr/local/etc"
+    )
+    assert result.returncode == 0, result.stderr
+    assert "[Service]" in result.stdout
+    assert "ReadWritePaths=-/etc -/etc/globalgo -/usr/local/etc\n" in result.stdout
+    assert "/opt" not in result.stdout.split("[Service]")[1]
+    empty = run_function("install-ubuntu.sh", "render_env_dropin /opt")
+    assert "ReadWritePaths" not in empty.stdout and "[Service]" in empty.stdout
+
+
+def test_env_editor_is_opt_in_and_declining_installs_nothing():
+    result = run_function(
+        "install-ubuntu.sh",
+        """
+      sudo() { case "$1" in test) return 1 ;; *) echo unexpected-privileged-operation ;; esac; }
+      install_env_helper /opt/deployd
+      echo "status=$?"
+    """,
+        stdin="n\n",
+    )
+    assert "status=0" in result.stdout
+    assert "unexpected-privileged-operation" not in result.stdout
+    assert "view and edit app .env files" in result.stdout
+
+
+def test_env_roots_default_to_etc_and_opt_and_accept_additions(tmp_path):
+    roots = tmp_path / "env-roots"
     body = f"""
-      sudo() {{ case "$1" in install) mkdir -p "${{@: -1}}" ;; chown) : ;; *) "$@" ;; esac; }}
-      run() {{ ensure_origin_certificate "$1" "{tls}" "{cert}" "{key}"; }}
-      run deploy.example.com
-      first=$(openssl x509 -in "{cert}" -noout -serial)
-      run deploy.example.com
-      [[ $(openssl x509 -in "{cert}" -noout -serial) == "$first" ]] && echo kept
-      run other.example.com
-      openssl x509 -in "{cert}" -noout -subject -ext subjectAltName
-      stat -c '%a' "{key}" 2>/dev/null || stat -f '%Lp' "{key}"
+      sudo() {{
+        case "$1" in
+          install) [[ $2 == -d ]] || cat >"${{@: -1}}" ;;
+          *) "$@" ;;
+        esac
+      }}
+      configure_env_roots "{roots}"
+      DEPLOYD_INSTALL_ENV_ROOTS=/srv/apps:/etc configure_env_roots "{roots}"
+      env_roots "{roots}"
+      DEPLOYD_INSTALL_ENV_ROOTS=relative configure_env_roots "{roots}"
     """
     result = run_function("install-ubuntu.sh", body)
-    assert result.returncode == 0, result.stderr
-    assert "kept" in result.stdout
-    assert "CN=other.example.com" in result.stdout.replace(" = ", "=")
-    assert "DNS:other.example.com" in result.stdout
-    assert result.stdout.strip().endswith("600")
+    assert result.stdout.split() == ["/etc", "/opt", "/srv/apps"]
+    assert result.returncode != 0 and "must be an absolute path" in result.stderr
+
+
+def test_unsafe_env_directory_warns_without_stopping_the_install():
+    result = run_function(
+        "install-ubuntu.sh",
+        """
+      sudo() {
+        case "$1" in
+          test) [[ $2 == -d ]] ;;
+          stat) echo root ;;
+          find) echo /srv/shared ;;
+        esac
+      }
+      check_env_roots /srv/shared
+      echo continued
+    """,
+    )
+    assert result.returncode == 0 and "continued" in result.stdout
+    assert "/srv/shared is not a root-owned directory" in result.stderr

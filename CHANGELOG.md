@@ -4,6 +4,15 @@
 
 Initial release.
 
+### Env file editor and management TLS (November 2026)
+
+- An app can name its `.env` file; the Environment file tab then shows it with
+  hidden values, saves it atomically with the same owner and mode, keeps
+  earlier versions for restore and can restart the app with its health check.
+  It is opt-in at install time and limited to `/etc/deployd/env-roots`.
+- The management site now serves only TLS on its port, with the installer's
+  certificate; plain HTTP on that port redirects to `https://`.
+
 ### In-place updates (October 2026)
 
 - `deploy/update-ubuntu.sh` pulls and upgrades without prompts. The installer

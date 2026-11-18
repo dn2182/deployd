@@ -81,9 +81,11 @@ What you get:
   **Full (strict)** replace the certificate pair with a Cloudflare Origin CA
   certificate and key at the same paths; the installer never overwrites a
   certificate it did not generate.
-- **Management UI** on `http://<bind>:844` behind Basic Auth. The default bind
-  is reachable on the LAN; keep that port off the WAN with the host firewall,
-  or choose `127.0.0.1` and use an SSH tunnel.
+- **Management UI** on `https://<bind>:844` behind Basic Auth, with the same
+  self-signed certificate (the browser asks you to accept it once). Plain
+  `http://` on that port redirects to `https://`. The default bind is reachable
+  on the LAN; keep that port off the WAN with the host firewall, or choose
+  `127.0.0.1` and use an SSH tunnel.
 - **Admin token** generated into `/opt/deployd/.env` (printed path, not value).
   Read it with `sudo grep DEPLOYD_ADMIN_TOKEN /opt/deployd/.env`.
 - A `deployd` system user that owns `/var/lib/deployd` (state, app registry,
@@ -91,8 +93,10 @@ What you get:
 
 Optional at install time: the **website connection helper** (a root-owned
 program behind one sudo rule) that can switch an existing static site under
-`/var/www` or any root listed in `/etc/deployd/site-roots` to deployd releases.
-See [Go live](#go-live-connect-the-website).
+`/var/www` or any root listed in `/etc/deployd/site-roots` to deployd releases
+(see [Go live](#go-live-connect-the-website)), and the **.env editor** (see
+[Edit an app's .env file](#edit-an-apps-env-file)). Both are asked once; an
+update keeps your answer and offers whatever is not enabled yet.
 
 ### Update
 
@@ -144,6 +148,7 @@ questions in English and Spanish.
 | Expected body / header | optional, `{commit_sha}` placeholder: a stale process cannot pass |
 | Hooks | `before_cutover` (new release dir) and `after_health` (live release, rolls back on failure) |
 | Environment passthrough | service variables forwarded to commands, for example a DSN |
+| Environment file path | optional; the app's `.env` on this server, adds the Environment file tab |
 | Retention | previous versions kept for rollback (default 1) |
 | Signing secret | generated and shown once; this goes to CI as `DEPLOYD_SECRET_<APP>` |
 | GitHub access token | optional, `Contents: read` on that repo, needed for private repos |
@@ -257,6 +262,31 @@ that and skip the connector.
 - **Updating deployd** is `update-ubuntu.sh`; deployd cannot deploy itself
   through its own queue, since the restart would kill the deploy in progress.
 
+### Edit an app's .env file
+
+Keep each app's `.env` outside the release folder, for example
+`/etc/<app>/<app>.env` owned by `root:<appuser>` with mode `0640` and loaded by
+the unit's `EnvironmentFile=`. A deploy never touches it. With the .env editor
+enabled at install time you can also change it from the UI:
+
+1. Edit the app and set **Environment file path**. The file must already
+   exist, be named `.env`, `.env.<name>` or `<name>.env`, and sit at most three
+   folders below a directory listed in root-owned `/etc/deployd/env-roots`
+   (`/etc` and `/opt` by default; `DEPLOYD_INSTALL_ENV_ROOTS=/srv/apps` adds
+   one, then rerun the installer).
+2. Open the **Environment file** tab and press **Open file**. Values are
+   hidden until you reveal one; **Edit as text** shows the raw file.
+3. **Save file** replaces it atomically with the same owner, group and mode,
+   and can restart the app and run its health check right after.
+
+Every save keeps the previous version in root-only `/var/lib/deployd-env`
+(newest ten per file), so **Restore previous version** undoes it. Reading and
+writing are recorded in the audit log with the key names that changed, never
+the values. A save is refused when the file changed on the server after you
+opened it. deployd's own files (`/opt/deployd/.env`, `secrets.env`) cannot be
+edited this way. With several nodes, each server has its own file: repeat the
+change on every node.
+
 ### Database migrations
 
 `deployd-migrate` applies `NNN_name.sql` files in numeric order, records each
@@ -304,7 +334,9 @@ id. Unknown apps answer `401`, frozen apps `423`, disallowed artifact URLs `403`
 | `/var/lib/deployd` | `apps.yaml`, `secrets.env` (0600), `deployd.sqlite3`, `backups/` |
 | `/srv/deployd/<app>/releases/` | `current/` plus retained `<sha>-<deploy_id>/` versions |
 | `/etc/deployd/site-roots` | allowed parents for website connection |
-| `/etc/deployd/tls/` | origin certificate and key |
+| `/etc/deployd/tls/` | certificate and key for the public API and the management UI |
+| `/etc/deployd/env-roots` | directories that may hold app `.env` files for the editor |
+| `/var/lib/deployd-env` | root-only earlier versions of edited `.env` files |
 | `/var/lib/deployd-connect` | root-only website recovery data |
 | `/var/lib/deployd-auth/htpasswd` | management login |
 

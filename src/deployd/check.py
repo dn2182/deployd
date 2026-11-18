@@ -6,6 +6,7 @@ import shutil
 import sys
 from pathlib import Path
 
+from . import envfile
 from .config import AppSpec, get_app_github_token, get_app_registry, get_app_secret, get_settings
 from .worker import directory_layout
 from .worker.website import link_state
@@ -81,6 +82,14 @@ def _check_app(name: str, spec: AppSpec, report: Report) -> None:
         )
 
 
+def _check_env_file(label: str, spec: AppSpec, report: Report) -> None:
+    if spec.env_file and sys.platform == "linux" and not envfile.HELPER.is_file():
+        report.warn(
+            f"{label}: env file {spec.env_file} is configured but the .env editor is not "
+            "enabled; rerun the installer to enable it"
+        )
+
+
 def run_checks() -> Report:
     report = Report()
     try:
@@ -110,6 +119,7 @@ def run_checks() -> Report:
         report.warn("no applications registered")
     for name, spec in registry.items():
         _check_app(name, spec, report)
+        _check_env_file(f"app {name}", spec, report)
     return report
 
 

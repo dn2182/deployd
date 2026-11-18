@@ -55,7 +55,8 @@ show_scope() {
     "  $STATE_DIR (database, backups, app registry, and signing secrets)" \
     "  system user and group: deployd (only when no app data is retained)" \
     "  $REPO_ROOT (source, .env, dependencies, tooling, and built frontend)" \
-    "  website connection and password helpers with their installer-owned sudo rules" \
+    "  website connection, password and .env helpers with their installer-owned sudo rules" \
+    "  $ENV_STATE_DIR (earlier versions of app .env files saved by the editor)" \
     "" \
     "Shared packages, deployed application releases, firewall rules, DNS, and" \
     "user-created sudoers rules are not removed." \
@@ -99,6 +100,9 @@ create_backup() {
     "${HELPER_BIN#/}" \
     "${PASSWORD_HELPER#/}" \
     "${PASSWORD_SUDOERS#/}" \
+    "${ENV_HELPER#/}" \
+    "${ENV_SUDOERS#/}" \
+    "${ENV_STATE_DIR#/}" \
     "${AUTH_DIR#/}" \
     "${LEGACY_HTPASSWD_FILE#/}" \
     "${SERVICE_FILE#/}" \
@@ -233,7 +237,7 @@ stop_service_safely() {
 
 check_removal_targets() {
   local path mounts target
-  local -a targets=("$REPO_ROOT" "$STATE_DIR" "$AUTH_DIR" "$SERVICE_FILE" "$SERVICE_DROPIN" "$NGINX_SITE" "$HTPASSWD_FILE" "$LEGACY_HTPASSWD_FILE")
+  local -a targets=("$REPO_ROOT" "$STATE_DIR" "$AUTH_DIR" "$SERVICE_FILE" "$SERVICE_DROPIN" "$NGINX_SITE" "$HTPASSWD_FILE" "$LEGACY_HTPASSWD_FILE" "$ENV_STATE_DIR")
   if [[ $purge == "true" ]]; then
     targets+=("$RELEASE_ROOT" "$CONNECT_STATE_DIR")
   fi
@@ -311,6 +315,7 @@ purge_retained_data() {
   remove_tree "$CONNECT_STATE_DIR" "/var/lib/deployd-connect"
   remove_tree "$RELEASE_ROOT" "/srv/deployd"
   remove_tree "$TLS_DIR" "/etc/deployd/tls"
+  remove_file "$ENV_ROOTS_FILE"
 }
 
 purge_tooling() {
@@ -365,6 +370,10 @@ main() {
   remove_file "$HELPER_BIN"
   remove_file "$PASSWORD_SUDOERS"
   remove_file "$PASSWORD_HELPER"
+  remove_file "$ENV_SUDOERS"
+  remove_file "$ENV_HELPER"
+  # Earlier versions of app .env files hold secrets and must not outlive the editor.
+  remove_tree "$ENV_STATE_DIR" "/var/lib/deployd-env"
   remove_file "$LEGACY_HTPASSWD_FILE"
   remove_tree "$AUTH_DIR" "/var/lib/deployd-auth"
   sudo rmdir "$(dirname -- "$HELPER_BIN")" 2>/dev/null || true

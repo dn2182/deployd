@@ -643,3 +643,46 @@ async def test_cancelled_command_kills_child_process(tmp_path):
         await task
     await asyncio.sleep(0.6)
     assert not marker.exists()
+
+
+async def test_restart_job_restarts_and_checks_health_without_touching_releases(
+    spec, store, monkeypatch
+):
+    monkeypatch.setattr(runner, "get_app_registry", lambda: {"app-x": spec})
+    ran = []
+
+    async def restart(spec, deploy, ctx):
+        ran.append(("restart", ctx))
+        return "restarted"
+
+    async def health(spec, deploy, ctx):
+        ran.append(("health", ctx))
+        return "healthy"
+
+    monkeypatch.setitem(runner._STEP_FNS, "restart", restart)
+    monkeypatch.setitem(runner._STEP_FNS, "health", health)
+    did = store.create_deploy(
+        "app-x", "0" * 40, "local-restart://env", "0" * 64, "restart:app-x", kind="restart"
+    )
+    await runner.run_restart(store, "app-x", did)
+    assert [name for name, _ in ran] == ["restart", "health"]
+    assert all(ctx == {"restart_only": True} for _, ctx in ran)
+    assert store.get_deploy(did)["status"] == "succeeded"
+    assert not spec.releases_dir.exists() or not any(spec.releases_dir.iterdir())
+
+
+async def test_failed_restart_job_is_reported_as_failed(spec, store, monkeypatch):
+    monkeypatch.setattr(runner, "get_app_registry", lambda: {"app-x": spec})
+
+    async def restart(spec, deploy, ctx):
+        raise RuntimeError("unit failed to start")
+
+    monkeypatch.setitem(runner._STEP_FNS, "restart", restart)
+    did = store.create_deploy(
+        "app-x", "0" * 40, "local-restart://env", "0" * 64, "restart:app-x", kind="restart"
+    )
+    await runner.run_restart(store, "app-x", did)
+    row = store.get_deploy(did)
+    assert row["status"] == "failed"
+    failed = [step for step in row["steps"] if step["status"] == "failed"]
+    assert failed[0]["step"] == "restart" and "unit failed to start" in failed[0]["output"]

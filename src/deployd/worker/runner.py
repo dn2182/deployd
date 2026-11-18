@@ -537,7 +537,8 @@ async def _step_health(spec: AppSpec, deploy: dict, ctx: dict) -> str:
     if not spec.health.url:
         return "HTTP health check skipped: no URL configured"
     sha = deploy.get("commit_sha", "") if deploy else ""
-    check_expectations = not ctx.get("rollback_verification")
+    # A rollback or a plain restart serves an earlier commit than this row names.
+    check_expectations = not (ctx.get("rollback_verification") or ctx.get("restart_only"))
     last_error = "no attempts made"
     async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
         for attempt in range(1, spec.health.retries + 1):
@@ -936,6 +937,21 @@ async def run_cleanup(store: Store, app: str, deploy_id: str, name: str) -> None
 
     # A cancelled request or service shutdown must not release the app while deletion runs.
     await _protected(cleanup())
+
+
+async def run_restart(store: Store, app: str, deploy_id: str) -> None:
+    """Restart and health-check the live release, for configuration changes made outside a deploy."""
+    spec = get_app_registry()[app]
+    deploy = store.get_deploy(deploy_id)
+
+    async def restart():
+        store.set_status(deploy_id, "running")
+        failed = await _run_steps(
+            store, spec, deploy, {"restart_only": True}, ["restart", "health"]
+        )
+        store.set_status(deploy_id, "failed" if failed else "succeeded", finished=True)
+
+    await _protected(restart())
 
 
 async def run_activation(store: Store, app: str, deploy_id: str, name: str) -> None:

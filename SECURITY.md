@@ -27,8 +27,25 @@ response within a few days.
   default all-interface bind (`0.0.0.0:844`) is meant for LAN access and is safe
   only when the host firewall keeps that port off the WAN; choose `127.0.0.1`
   when access through an SSH tunnel is sufficient.
-- Use HTTPS or an SSH tunnel when entering credentials in management. A firewall
-  allowlist or HTTP Basic Auth alone does not encrypt the connection.
+- The management site is TLS only: it uses the same certificate as the public
+  API and answers plain HTTP on its port with a redirect to `https://`, so the
+  admin token, the Basic Auth password and `.env` contents never cross the LAN
+  in clear text. The certificate is self-signed, so verify it once in the
+  browser or replace the pair with one your clients trust.
+- The optional `.env` editor adds a root helper that reads and rewrites one
+  file per app. It only opens files named `.env`, `.env.<name>` or
+  `<name>.env`, at most three folders below a directory listed in root-owned
+  `/etc/deployd/env-roots`, never follows a symlink in any path component,
+  refuses hard links, and never touches deployd's own configuration. Saves are
+  atomic and keep owner, group and mode; earlier versions live in root-only
+  `/var/lib/deployd-env`. The audit log records reads and the names of changed
+  keys, never values. Two trade-offs to accept before enabling it: anyone
+  holding the admin token can then read every app secret reachable through an
+  app's env file path, and directories under `/etc` listed in `env-roots`
+  become writable inside the service sandbox (`ReadWritePaths`), which
+  otherwise mounts `/etc` read-only for everything deployd runs. Narrow
+  `env-roots` to the directories you use (for example `/etc/myapp`) and rerun
+  the installer to tighten both.
 - Prefer per-app GitHub tokens limited to **Contents: read** on the specific
   repository. The UI stores them in `DEPLOYD_SECRETS_FILE` (0600), not app YAML;
   API responses and validation errors do not include their values. The global

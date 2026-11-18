@@ -634,12 +634,20 @@ server {
 }
 
 server {
-    listen ${admin_bind}:${admin_port};
+    # The management UI carries the admin token and app secrets, so it is TLS only.
+    # 497 is a plain HTTP request on this TLS port: send it to https on the same port.
+    listen ${admin_bind}:${admin_port} ssl;
+    ssl_certificate ${TLS_CERT};
+    ssl_certificate_key ${TLS_KEY};
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    error_page 497 =301 https://\$http_host\$request_uri;
     server_name _;
     server_tokens off;
     root ${repo_root}/web/dist;
     index index.html;
-    client_max_body_size 64k;
+    # Room for a whole .env file in one request.
+    client_max_body_size 512k;
 
     auth_basic "deployd management";
     auth_basic_user_file ${HTPASSWD_FILE};
@@ -771,8 +779,10 @@ verify_installation() {
     die "port 80 did not redirect to https"
 
   local admin_status
+  admin_status=$(curl --silent --insecure --connect-timeout 2 --max-time 5 --output /dev/null --write-out '%{http_code}' "https://127.0.0.1:${admin_port}/")
+  [[ $admin_status == "401" ]] || die "management endpoint did not require Basic Auth over https"
   admin_status=$(curl --silent --connect-timeout 2 --max-time 5 --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:${admin_port}/")
-  [[ $admin_status == "401" ]] || die "management endpoint did not require Basic Auth"
+  [[ $admin_status == "301" ]] || die "management port did not redirect plain http to https"
 }
 
 stop_for_upgrade() {
@@ -863,6 +873,103 @@ install_website_helper() {
   sudo mv -T -- "$rule" "$HELPER_SUDOERS"
 }
 
+# Prints the directories that may hold editable .env files, one per line.
+env_roots() {
+  local file=${1:-$ENV_ROOTS_FILE}
+  if sudo test -f "$file"; then
+    sudo grep -v '^[[:space:]]*#' "$file" | sed 's/[[:space:]]*$//' | grep -v '^$' || true
+  fi
+}
+
+# Writes the list on first use and adds DEPLOYD_INSTALL_ENV_ROOTS (colon-separated).
+configure_env_roots() {
+  local file=${1:-$ENV_ROOTS_FILE} root
+  sudo install -d -o root -g root -m 0755 "$(dirname -- "$file")"
+  if ! sudo test -f "$file"; then
+    printf '# Directories that may hold app .env files editable from the management UI, one per line.\n# A file may sit up to three folders below a directory listed here.\n/etc\n/opt\n' |
+      sudo install -o root -g root -m 0644 /dev/stdin "$file"
+  fi
+  local -a extra=()
+  IFS=: read -r -a extra <<<"${DEPLOYD_INSTALL_ENV_ROOTS:-}"
+  for root in ${extra[@]+"${extra[@]}"}; do
+    [[ -n $root ]] || continue
+    [[ $root == /* && $root != *..* && $root != / ]] || die "env directory must be an absolute path: $root"
+    if ! sudo grep -qx -- "$root" "$file"; then
+      printf '%s\n' "$root" | sudo tee -a "$file" >/dev/null
+    fi
+  done
+}
+
+# The service sandbox mounts /etc and /usr read-only (ProtectSystem=full) and the
+# helper runs inside it, so directories there need an explicit write grant.
+render_env_dropin() {
+  local root
+  local -a writable=()
+  for root in "$@"; do
+    case $root in
+      /etc | /etc/* | /usr | /usr/*) writable+=("-$root") ;;
+    esac
+  done
+  printf '# Written by the deployd installer from %s; edit that file and rerun the installer.\n' "$ENV_ROOTS_FILE"
+  printf '[Service]\n'
+  if ((${#writable[@]})); then
+    printf 'ReadWritePaths=%s\n' "${writable[*]}"
+  fi
+}
+
+# The editor is optional, so a directory the helper would refuse is reported and
+# never stops an install or update.
+check_env_roots() {
+  local root
+  for root in "$@"; do
+    sudo test -d "$root" || continue
+    if sudo test -L "$root" || [[ $(sudo stat -c '%U' "$root") != root ]] ||
+      [[ -n $(sudo find "$root" -maxdepth 0 -perm /022 -print) ]]; then
+      warn "$root is not a root-owned directory closed to other writers; .env files under it are refused until that is fixed"
+    fi
+  done
+}
+
+install_env_helper() {
+  local repo_root=$1 path rule dropin
+  local -a roots
+  if ! sudo test -f "$ENV_SUDOERS"; then
+    printf '%s\n' \
+      'Optional: allow the management UI to view and edit app .env files.' \
+      "This grants deployd a restricted root helper for files named .env, .env.<name> or <name>.env under the directories in $ENV_ROOTS_FILE (default /etc and /opt)." \
+      'Only an app that has an env file path set can use it; each save keeps the previous version in root-only storage.'
+    confirm 'Enable the .env editor?' || return 0
+  fi
+  configure_env_roots
+  mapfile -t roots < <(env_roots)
+  check_env_roots "${roots[@]}"
+  for path in /usr/local /usr/local/libexec /usr/local/libexec/deployd "$ENV_STATE_DIR"; do
+    sudo test ! -L "$path" || die "helper path must not be a symlink: $path"
+    if sudo test -e "$path"; then
+      [[ $(sudo stat -c '%U' "$path") == root ]] || die "helper path must be root-owned: $path"
+      [[ $(sudo find "$path" -maxdepth 0 -perm /022 -print) == '' ]] || die "helper path must not be writable by other users: $path"
+    fi
+  done
+  sudo install -d -o root -g root -m 0755 /usr/local/libexec /usr/local/libexec/deployd
+  sudo install -d -o root -g root -m 0700 "$ENV_STATE_DIR"
+  sudo test ! -L "$ENV_HELPER" || die "helper executable must not be a symlink"
+  sudo install -o root -g root -m 0755 "$repo_root/deploy/env_file.py" "$ENV_HELPER"
+  rule=$(sudo mktemp "${ENV_SUDOERS}.XXXXXX")
+  printf 'deployd ALL=(root) NOPASSWD: NOSETENV: %s\n' "$ENV_HELPER" | sudo tee "$rule" >/dev/null
+  sudo chmod 0440 "$rule"
+  if ! sudo visudo -cf "$rule"; then
+    sudo rm -f -- "$rule"
+    die ".env helper sudo policy did not validate"
+  fi
+  sudo mv -T -- "$rule" "$ENV_SUDOERS"
+  sudo test ! -L "$SERVICE_DROPIN" || die "$SERVICE_DROPIN must not be a symbolic link"
+  sudo install -d -o root -g root -m 0755 "$SERVICE_DROPIN"
+  dropin=$(mktemp /tmp/deployd-dropin.XXXXXX)
+  render_env_dropin "${roots[@]}" >"$dropin"
+  sudo install -o root -g root -m 0644 "$dropin" "$ENV_DROPIN"
+  unlink "$dropin"
+}
+
 main() {
   parse_args "$@"
   require_install_user
@@ -916,6 +1023,7 @@ main() {
   configure_basic_auth "$admin_username"
   install_password_helper "$repo_root"
   install_website_helper "$repo_root"
+  install_env_helper "$repo_root"
   install_service "$repo_root"
   ensure_origin_certificate "$domain"
   write_nginx_config "$repo_root" "$domain" "$admin_bind" "$admin_port"
@@ -928,7 +1036,7 @@ main() {
     printf '\nInstallation complete.\n'
   fi
   printf 'Public API: https://%s (Cloudflare proxy; origin answers on 443 with a self-signed certificate, 80 redirects)\n' "$domain"
-  printf 'Management UI: http://%s:%s\n' "$admin_bind" "$admin_port"
+  printf 'Management UI: https://%s:%s (self-signed certificate; plain http on that port redirects)\n' "$admin_bind" "$admin_port"
   printf 'Firewall management: not modified; keep port %s restricted.\n' "$admin_port"
   if [[ $token_state == generated ]]; then
     printf '\nAdmin token generated in %s/.env; read it with:\n  sudo grep DEPLOYD_ADMIN_TOKEN %s/.env\n' "$repo_root" "$repo_root"

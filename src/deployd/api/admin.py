@@ -12,7 +12,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request, Response
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 
-from .. import account
+from .. import account, envfile
 from ..config import (
     APP_NAME_PATTERN,
     AppSpec,
@@ -300,6 +300,98 @@ async def repair_website(request: Request, name: AppName, confirmation: WebsiteC
         request.app.state.queue.enqueue_connection(name, deploy_id, "repair")
         _audit(request, "website.repair", name)
     return {"deploy_id": deploy_id, "status": "queued"}
+
+
+class EnvFileWrite(BaseModel):
+    content: str = Field(max_length=262_144)
+    expected_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    restart: bool = False
+
+
+class EnvFileRestore(BaseModel):
+    confirm: str
+    restart: bool = False
+
+
+def _env_app(request: Request, name: str) -> AppSpec:
+    spec = _release_app(request, name)
+    if spec.env_file is None:
+        raise HTTPException(status_code=409, detail="no .env file is configured for this app")
+    return spec
+
+
+async def _env_call(operation: str, name: str, spec: AppSpec, payload: dict | None = None) -> dict:
+    try:
+        return await envfile.call(operation, name, spec, payload)
+    except envfile.EnvFileError as exc:
+        raise HTTPException(exc.status, str(exc)) from None
+
+
+def _env_change_detail(result: dict) -> str | None:
+    # Key names only: values never reach the audit log.
+    parts = [
+        f"{label}: {', '.join(result[label])}"
+        for label in ("changed", "added", "removed")
+        if result.get(label)
+    ]
+    return "; ".join(parts)[:500] or None
+
+
+def _after_env_change(request: Request, name: str, result: dict, restart: bool) -> dict:
+    deploy_id = None
+    if restart and result.get("saved"):
+        with config_lock():
+            deploy_id = request.app.state.store.create_deploy(
+                name, "0" * 40, "local-restart://env", "0" * 64, f"restart:{name}", kind="restart"
+            )
+            request.app.state.queue.enqueue_restart(name, deploy_id)
+    return {**result, "deploy_id": deploy_id}
+
+
+@router.get("/apps/{name}/env")
+async def inspect_env_file(request: Request, name: AppName):
+    spec = _env_app(request, name)
+    if not envfile.HELPER.is_file():
+        return {"path": str(spec.env_file), "available": False}
+    return {
+        "path": str(spec.env_file),
+        "available": True,
+        **(await _env_call("check", name, spec)),
+    }
+
+
+@router.get("/apps/{name}/env/content")
+async def read_env_file(request: Request, name: AppName):
+    spec = _env_app(request, name)
+    result = await _env_call("read", name, spec)
+    _audit(request, "env.read", name, str(spec.env_file))
+    return {"path": str(spec.env_file), **result}
+
+
+@router.put("/apps/{name}/env")
+async def write_env_file(request: Request, name: AppName, body: EnvFileWrite):
+    spec = _env_app(request, name)
+    if request.app.state.queue.is_removing(name):
+        raise HTTPException(status_code=409, detail="app removal is in progress")
+    result = await _env_call(
+        "write", name, spec, {"content": body.content, "expected_sha256": body.expected_sha256}
+    )
+    if result.get("saved"):
+        _audit(request, "env.write", name, _env_change_detail(result))
+    return _after_env_change(request, name, result, body.restart)
+
+
+@router.post("/apps/{name}/env/restore")
+async def restore_env_file(request: Request, name: AppName, body: EnvFileRestore):
+    if body.confirm != name:
+        raise HTTPException(status_code=422, detail="type the app name to confirm the restore")
+    spec = _env_app(request, name)
+    if request.app.state.queue.is_removing(name):
+        raise HTTPException(status_code=409, detail="app removal is in progress")
+    result = await _env_call("restore", name, spec)
+    if result.get("saved"):
+        _audit(request, "env.restore", name, _env_change_detail(result))
+    return _after_env_change(request, name, result, body.restart)
 
 
 def _secret_info(app_name: str) -> dict:

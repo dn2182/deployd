@@ -23,7 +23,9 @@ poll=$(curl --silent --show-error --max-time 5 --insecure -H 'Host: deployd.exam
 [[ $(curl --silent --output /dev/null --write-out '%{http_code}' -H 'Host: deployd.example.com' \
   http://127.0.0.1/healthz) == 301 ]]
 sudo openssl x509 -in /etc/deployd/tls/deployd.crt -noout -subject | grep -q 'deployd.example.com'
-curl --fail --silent -u smoke-admin:smoke-password http://127.0.0.1:844/ >/dev/null
+curl --fail --silent --insecure -u smoke-admin:smoke-password https://127.0.0.1:844/ >/dev/null
+[[ $(curl --silent --output /dev/null --write-out '%{http_code} %{redirect_url}' \
+  http://127.0.0.1:844/apps) == '301 https://127.0.0.1:844/apps' ]]
 [[ $(sudo stat -c '%U:%G:%a' /opt/deployd/.env) == root:deployd:640 ]]
 [[ $(sudo stat -c '%U:%G:%a' /var/lib/deployd/secrets.env) == deployd:deployd:600 ]]
 [[ $(stat -c '%u' /opt/deployd/web/node_modules) == "$(id -u)" ]]
@@ -31,6 +33,12 @@ curl --fail --silent -u smoke-admin:smoke-password http://127.0.0.1:844/ >/dev/n
 [[ $(sudo stat -c '%U:%G:%a' /etc/sudoers.d/deployd-connect) == root:root:440 ]]
 sudo env GITHUB_ACTIONS=true python3 "$checkout/tests/website-smoke.py"
 sudo env GITHUB_ACTIONS=true python3 "$checkout/tests/password-smoke.py"
+[[ $(sudo stat -c '%U:%G:%a' /usr/local/libexec/deployd/env-file) == root:root:755 ]]
+[[ $(sudo stat -c '%U:%G:%a' /etc/sudoers.d/deployd-env) == root:root:440 ]]
+[[ $(sudo stat -c '%U:%G:%a' /var/lib/deployd-env) == root:root:700 ]]
+grep -qx 'ReadWritePaths=-/etc' /etc/systemd/system/deployd.service.d/env-roots.conf
+sudo -u deployd test ! -r /var/lib/deployd-env
+sudo env GITHUB_ACTIONS=true python3 "$checkout/tests/env-smoke.py"
 [[ $(sudo stat -c '%U:%G:%a' /var/lib/deployd-auth/htpasswd) == root:www-data:640 ]]
 [[ $(sudo stat -c '%U:%G:%a' /usr/local/libexec/deployd/change-password) == root:root:755 ]]
 [[ $(sudo stat -c '%U:%G:%a' /etc/sudoers.d/deployd-password) == root:root:440 ]]
@@ -54,9 +62,9 @@ grep -q 'Management Basic Auth user (existing): smoke-admin' "$RUNNER_TEMP/deplo
 grep -qE '[0-9a-f]{64}' "$RUNNER_TEMP/deployd-install.log" && exit 1
 [[ $(sudo find /var/lib/deployd/backups -maxdepth 1 -name 'deployd-*.sqlite3' | wc -l) == 1 ]]
 [[ $(sudo stat -c '%U:%a' /var/lib/deployd/backups) == deployd:700 ]]
-curl --silent --output /dev/null --write-out '%{http_code}' -u smoke-admin:smoke-password \
-  http://127.0.0.1:844/api/healthz | grep -q 200
-curl --silent --head -u smoke-admin:smoke-password http://127.0.0.1:844/api/healthz |
+curl --silent --insecure --output /dev/null --write-out '%{http_code}' -u smoke-admin:smoke-password \
+  https://127.0.0.1:844/api/healthz | grep -q 200
+curl --silent --insecure --head -u smoke-admin:smoke-password https://127.0.0.1:844/api/healthz |
   grep -qi '^x-frame-options: DENY'
 
 printf 'y\nREMOVE deployd\nr\n' | /opt/deployd/deploy/uninstall-ubuntu.sh
@@ -65,6 +73,8 @@ printf 'y\nREMOVE deployd\nr\n' | /opt/deployd/deploy/uninstall-ubuntu.sh
 [[ $(id -u deployd) == "$owner" && -f /srv/deployd/retained-app-data ]]
 [[ ! -e /etc/sudoers.d/deployd-connect && ! -e /usr/local/libexec/deployd/connect-website ]]
 [[ ! -e /etc/sudoers.d/deployd-password && ! -e /usr/local/libexec/deployd/change-password ]]
+[[ ! -e /etc/sudoers.d/deployd-env && ! -e /usr/local/libexec/deployd/env-file ]]
+sudo test ! -e /var/lib/deployd-env
 [[ ! -e /var/lib/deployd-auth && ! -e /etc/nginx/deployd.htpasswd ]]
 [[ -d /var/www/deployd-smoke.example && ! -L /var/www/deployd-smoke.example ]]
 [[ -f /srv/deployd/website-smoke/releases/b4deployd/index.html ]]

@@ -41,7 +41,7 @@ describe('AppEditor', () => {
     await waitFor(() => expect(call).toHaveBeenCalledTimes(1))
     const sent = JSON.parse(call.mock.calls[0][1].body)
     expect(sent.spec).toEqual({
-      github_repository: null, deploy_url: null, site_path: null, release_layout: 'symlink',
+      github_repository: null, deploy_url: null, site_path: null, env_file: null, release_layout: 'symlink',
       releases_dir: existing.releases_dir, current_link: existing.current_link,
       keep_previous: 4, auto_cleanup: false, frozen: true,
       artifact: existing.artifact, migrate: existing.migrate, restart: existing.restart,
@@ -146,5 +146,13 @@ describe('AppEditor', () => {
     expect(screen.getByLabelText('Repositorio de GitHub')).toBeInTheDocument()
     expect(screen.getByLabelText('Secreto de firma de despliegues')).toBeInTheDocument()
     expect(screen.queryByLabelText('URL del webhook (opcional)')).not.toBeInTheDocument()
+  })
+
+  it('sends the optional environment file path', async () => {
+    const { call } = editor()
+    fireEvent.change(screen.getByLabelText('Environment file path (optional)'), { target: { value: ' /etc/site/site.env ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(call).toHaveBeenCalledTimes(1))
+    expect(JSON.parse(call.mock.calls[0][1].body).spec.env_file).toBe('/etc/site/site.env')
   })
 })

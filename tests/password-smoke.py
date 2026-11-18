@@ -3,6 +3,7 @@
 import base64
 import json
 import os
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -16,10 +17,15 @@ token = next(
 )
 
 
+insecure = ssl.create_default_context()
+insecure.check_hostname = False
+insecure.verify_mode = ssl.CERT_NONE
+
+
 def request(path, password, body=None):
     auth = base64.b64encode(f"smoke-admin:{password}".encode()).decode()
     req = urllib.request.Request(
-        f"http://127.0.0.1:844{path}",
+        f"https://127.0.0.1:844{path}",
         data=json.dumps(body).encode() if body else None,
         headers={
             "Authorization": f"Basic {auth}",
@@ -28,7 +34,7 @@ def request(path, password, body=None):
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as response:
+        with urllib.request.urlopen(req, timeout=30, context=insecure) as response:
             return response.status, response.read()
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read()

@@ -7,11 +7,12 @@ import { Field, Help, IconButton, MiniBadge, Notice, Panel, inputClass } from '.
 import AppEditor from './AppEditor.jsx'
 import AppPaths from './AppPaths.jsx'
 import AppStatus from './AppStatus.jsx'
+import EnvEditor from './EnvEditor.jsx'
 import GitHubSetup from './GitHubSetup.jsx'
 import ReleasePanel from './ReleasePanel.jsx'
 import WebsiteConnection from './WebsiteConnection.jsx'
 
-const TAB_LABELS = { website: 'website.title', releases: 'releases.manage', github: 'github.title' }
+const TAB_LABELS = { website: 'website.title', releases: 'releases.manage', env: 'env.title', github: 'github.title' }
 
 export default function AppCard({ name, spec, call, api, onChanged, onSecret, revision, busy }) {
   const t = useT()
@@ -19,7 +20,7 @@ export default function AppCard({ name, spec, call, api, onChanged, onSecret, re
   const tabId = useId()
   const [editing, setEditing] = useState(false)
   const [tab, setTab] = useState(spec.site_path ? 'website' : 'releases')
-  const tabs = [...(spec.site_path ? ['website'] : []), 'releases', 'github']
+  const tabs = [...(spec.site_path ? ['website'] : []), 'releases', ...(spec.env_file ? ['env'] : []), 'github']
   const activeTab = tabs.includes(tab) ? tab : 'releases'
   const [removeWebsite, setRemoveWebsite] = useState('restore')
   const [removing, setRemoving] = useState(false)
@@ -148,6 +149,7 @@ export default function AppCard({ name, spec, call, api, onChanged, onSecret, re
           <div role="tabpanel" id={`${tabId}-panel`} aria-labelledby={`${tabId}-${activeTab}`} tabIndex={0} className="min-w-0 focus-visible:outline-none">
             {activeTab === 'website' && <WebsiteConnection name={name} call={call} onChanged={onChanged} revision={revision} />}
             {activeTab === 'releases' && <ReleasePanel name={name} spec={spec} call={call} onChanged={onChanged} revision={revision} />}
+            {activeTab === 'env' && <EnvEditor name={name} spec={spec} call={call} onChanged={onChanged} revision={revision} />}
             {activeTab === 'github' && <GitHubSetup name={name} spec={spec} call={call} onChanged={onChanged} />}
           </div>
         </>

@@ -85,9 +85,11 @@ Lo que obtienes:
   **Full**. Para **Full (strict)** reemplaza el par certificado y clave por un
   certificado Origin CA de Cloudflare en las mismas rutas; el instalador nunca
   sobrescribe un certificado que no generó.
-- **UI de administración** en `http://<bind>:844` tras Basic Auth. El bind por
-  defecto es alcanzable en la LAN; mantén ese puerto fuera de la WAN con el
-  firewall del host, o elige `127.0.0.1` y usa un túnel SSH.
+- **UI de administración** en `https://<bind>:844` tras Basic Auth, con el
+  mismo certificado self-signed (el navegador pide aceptarlo una vez). `http://`
+  en ese puerto redirige a `https://`. El bind por defecto es alcanzable en la
+  LAN; mantén ese puerto fuera de la WAN con el firewall del host, o elige
+  `127.0.0.1` y usa un túnel SSH.
 - **Token de administración** generado en `/opt/deployd/.env` (se imprime la
   ruta, no el valor). Léelo con `sudo grep DEPLOYD_ADMIN_TOKEN /opt/deployd/.env`.
 - Un usuario de sistema `deployd` dueño de `/var/lib/deployd` (estado,
@@ -96,8 +98,12 @@ Lo que obtienes:
 Opcional al instalar: el **helper de conexión de sitios web** (un programa
 propiedad de root tras una sola regla de sudo) que puede cambiar un sitio
 estático existente bajo `/var/www` o cualquier raíz listada en
-`/etc/deployd/site-roots` a los releases de deployd. Ver
-[Salir a producción](#salir-a-producción-conectar-el-sitio-web).
+`/etc/deployd/site-roots` a los releases de deployd (ver
+[Salir a producción](#salir-a-producción-conectar-el-sitio-web)), y el
+**editor de .env** (ver
+[Editar el archivo .env de una app](#editar-el-archivo-env-de-una-app)). Ambos
+se preguntan una vez; una actualización conserva tu respuesta y ofrece lo que
+aún no esté habilitado.
 
 ### Actualización
 
@@ -152,6 +158,7 @@ login) responde las preguntas habituales en inglés y español.
 | Expected body / header | opcional, placeholder `{commit_sha}`: un proceso viejo no puede pasar |
 | Hooks | `before_cutover` (directorio del release nuevo) y `after_health` (release activo, rollback si falla) |
 | Environment passthrough | variables del servicio reenviadas a los comandos, por ejemplo un DSN |
+| Environment file path | opcional; el `.env` de la app en este servidor, agrega la pestaña Environment file |
 | Retention | versiones previas conservadas para rollback (default 1) |
 | Signing secret | se genera y se muestra una sola vez; va a CI como `DEPLOYD_SECRET_<APP>` |
 | GitHub access token | opcional, `Contents: read` en ese repo, necesario para repos privados |
@@ -270,6 +277,34 @@ omite el conector.
 - **Actualizar deployd** es `update-ubuntu.sh`; deployd no puede desplegarse a
   sí mismo por su propia cola, porque el restart mataría el deploy en curso.
 
+### Editar el archivo .env de una app
+
+Mantén el `.env` de cada app fuera de la carpeta de releases, por ejemplo
+`/etc/<app>/<app>.env` con dueño `root:<appuser>`, modo `0640` y cargado por el
+`EnvironmentFile=` de la unidad. Un deploy nunca lo toca. Con el editor de .env
+habilitado al instalar también puedes cambiarlo desde la UI:
+
+1. Edita la app y define **Environment file path**. El archivo ya debe
+   existir, llamarse `.env`, `.env.<name>` o `<name>.env`, y estar como máximo
+   tres carpetas debajo de un directorio listado en `/etc/deployd/env-roots`
+   (propiedad de root; `/etc` y `/opt` por defecto;
+   `DEPLOYD_INSTALL_ENV_ROOTS=/srv/apps` agrega uno, luego vuelve a ejecutar el
+   instalador).
+2. Abre la pestaña **Environment file** y pulsa **Open file**. Los valores
+   están ocultos hasta que muestres uno; **Edit as text** muestra el archivo
+   crudo.
+3. **Save file** lo reemplaza de forma atómica con el mismo dueño, grupo y
+   modo, y puede reiniciar la app y ejecutar su health check justo después.
+
+Cada guardado conserva la versión anterior en `/var/lib/deployd-env` (solo
+root, las diez más recientes por archivo), así que **Restore previous version**
+lo deshace. Leer y escribir quedan en el audit log con los nombres de las
+claves que cambiaron, nunca los valores. Un guardado se rechaza si el archivo
+cambió en el servidor después de abrirlo. Los archivos propios de deployd
+(`/opt/deployd/.env`, `secrets.env`) no se pueden editar por esta vía. Con
+varios nodos, cada servidor tiene su propio archivo: repite el cambio en cada
+nodo.
+
 ### Migraciones de base de datos
 
 `deployd-migrate` aplica archivos `NNN_name.sql` en orden numérico, registra el
@@ -319,7 +354,9 @@ congeladas `423`, URLs de artefacto no permitidas `403`.
 | `/var/lib/deployd` | `apps.yaml`, `secrets.env` (0600), `deployd.sqlite3`, `backups/` |
 | `/srv/deployd/<app>/releases/` | `current/` más versiones conservadas `<sha>-<deploy_id>/` |
 | `/etc/deployd/site-roots` | raíces permitidas para la conexión de sitios |
-| `/etc/deployd/tls/` | certificado y clave de origen |
+| `/etc/deployd/tls/` | certificado y clave de la API pública y de la UI de administración |
+| `/etc/deployd/env-roots` | directorios que pueden contener archivos `.env` de apps para el editor |
+| `/var/lib/deployd-env` | versiones anteriores de archivos `.env` editados, solo root |
 | `/var/lib/deployd-connect` | datos de recuperación de sitios, solo root |
 | `/var/lib/deployd-auth/htpasswd` | login de administración |
 
