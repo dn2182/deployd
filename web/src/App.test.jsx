@@ -114,7 +114,7 @@ describe('App', () => {
     expect(website).toHaveFocus()
   })
 
-  it('refreshes the history every two minutes in the background', async () => {
+  it('refreshes the history every minute in the background without showing progress', async () => {
     const routes = { ...BASE, 'GET /api/admin/deploys': [{ ...DEPLOYS[0], status: 'running' }] }
     const fetcher = mockFetch(routes)
     global.fetch = fetcher
@@ -123,11 +123,18 @@ describe('App', () => {
     await screen.findByText('No retained versions yet.')
     expect(screen.queryByText('Refresh on demand')).not.toBeInTheDocument()
     const before = calls(fetcher, '/api/admin/deploys').length
-    await act(() => vi.advanceTimersByTimeAsync(119000))
+    await act(() => vi.advanceTimersByTimeAsync(59000))
     expect(calls(fetcher, '/api/admin/deploys')).toHaveLength(before)
     routes['GET /api/admin/deploys'] = DEPLOYS
+    const spins = []
+    const observer = new MutationObserver(() => {
+      if (document.querySelector('.animate-spin, [aria-busy="true"]')) spins.push(true)
+    })
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true })
     await act(() => vi.advanceTimersByTimeAsync(2000))
     await waitFor(() => expect(calls(fetcher, '/api/admin/deploys')).toHaveLength(before + 1))
+    observer.disconnect()
+    expect(spins).toHaveLength(0)
     expect(await screen.findByText('my-api: Succeeded')).toBeInTheDocument()
   })
 

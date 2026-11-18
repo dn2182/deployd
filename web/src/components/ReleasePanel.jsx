@@ -24,9 +24,11 @@ export default function ReleasePanel({ name, spec, call, onChanged, revision = 0
   const updatePolicy = (values) => setDraft({ ...policy, key: policyKey, ...values })
   const base = `/admin/apps/${encodeURIComponent(name)}/releases`
 
-  const load = useCallback(async () => {
+  // Reloads triggered by the shared refresh are silent: controls stay enabled and
+  // what is shown is only replaced once the new answer arrives.
+  const load = useCallback(async (silent) => {
     const id = ++requestId.current
-    setLoading(true)
+    if (silent !== true) setLoading(true)
     try {
       const result = await call(base)
       if (id !== requestId.current) return
@@ -42,7 +44,7 @@ export default function ReleasePanel({ name, spec, call, onChanged, revision = 0
   }, [base, call])
 
   useEffect(() => {
-    const first = setTimeout(load, 0)
+    const first = setTimeout(() => load(true), 0)
     return () => clearTimeout(first)
   }, [load, revision])
 

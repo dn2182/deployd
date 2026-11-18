@@ -3,7 +3,7 @@ import { fetchHealth } from '../api.js'
 
 const PAGE_SIZE = 10
 // Background refresh keeps the server idle most of the time; the browser tab must be visible.
-export const AUTO_REFRESH_MS = 120000
+export const AUTO_REFRESH_MS = 60000
 const ACTIVE_STATUSES = new Set(['queued', 'running'])
 const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'rolled_back', 'superseded', 'cancelled'])
 
@@ -37,7 +37,11 @@ export function useRegistry({ token, api, onTerminal }) {
     }
   }, [])
 
-  const refresh = useCallback(async () => {
+  // A silent refresh is the background timer: it swaps data in place and never
+  // shows progress, resets a list, or interrupts a page that is being loaded.
+  const refresh = useCallback(async (options) => {
+    const silent = options?.silent === true
+    if (silent && pageRequest.current !== null) return
     const id = ++requestId.current
     pageRequest.current = null
     setLoadingMore(false)
@@ -50,7 +54,7 @@ export function useRegistry({ token, api, onTerminal }) {
       setHasMore(false)
       setError(null)
     }
-    setRefreshing(true)
+    if (!silent) setRefreshing(true)
     const healthRequest = fetchHealth().then((data) => {
       if (id === requestId.current) setHealth(data)
     })

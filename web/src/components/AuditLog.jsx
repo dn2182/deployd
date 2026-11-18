@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ScrollText } from 'lucide-react'
 import { useT } from '../i18n/index.js'
+import { AUTO_REFRESH_MS } from '../hooks/useRegistry.js'
 import When from './When.jsx'
 import { Button, EmptyState, ErrorMessage, Panel, Skeleton, Spinner } from './ui.jsx'
 
 const PAGE = 10
-// Same cadence as the deploy history; a reload replaces what is shown with the newest page.
-const AUTO_REFRESH_MS = 120000
+const MAX_SHOWN = 200
 
 export default function AuditLog({ api }) {
   const t = useT()
@@ -15,33 +15,57 @@ export default function AuditLog({ api }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const requestId = useRef(0)
+  const shown = useRef(0)
+  const paging = useRef(false)
 
   const load = useCallback(async (offset = 0) => {
     const id = ++requestId.current
+    paging.current = true
     setLoading(true)
     try {
       const page = await api.audit({ limit: PAGE, offset })
       if (id !== requestId.current) return
+      shown.current = offset + page.length
       setEntries((old) => (offset === 0 ? page : [...(old ?? []), ...page]))
       setHasMore(page.length >= PAGE)
       setError(null)
     } catch (requestError) {
       if (id === requestId.current) setError(requestError.message)
     } finally {
-      if (id === requestId.current) setLoading(false)
+      if (id === requestId.current) {
+        paging.current = false
+        setLoading(false)
+      }
+    }
+  }, [api])
+
+  // Background refresh: reloads exactly the rows already on screen, in place.
+  const reload = useCallback(async () => {
+    if (paging.current) return
+    const id = ++requestId.current
+    const limit = Math.min(MAX_SHOWN, Math.max(PAGE, shown.current))
+    try {
+      const rows = await api.audit({ limit, offset: 0 })
+      if (id !== requestId.current) return
+      shown.current = rows.length
+      setEntries(rows)
+      setHasMore(rows.length >= limit)
+      setError(null)
+    } catch (requestError) {
+      if (id === requestId.current) setError(requestError.message)
     }
   }, [api])
 
   useEffect(() => {
     const timer = setTimeout(() => load(0), 0)
     const interval = setInterval(() => {
-      if (document.visibilityState !== 'hidden') load(0)
+      if (document.visibilityState !== 'hidden') reload()
     }, AUTO_REFRESH_MS)
     return () => {
       clearTimeout(timer)
       clearInterval(interval)
     }
-  }, [load])
+  }, [load, reload])
 
   return (
     <div className="flex flex-col gap-3">

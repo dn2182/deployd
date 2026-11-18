@@ -315,7 +315,7 @@ this way. Security notes: [SECURITY.md](SECURITY.md).
 - **Freeze** pauses deploys from GitHub for an app. Going back to an earlier
   version still works.
 - **Recent deploys** shows the last ten with filters and commit search. You
-  can cancel a queued deploy or redeploy one. It refreshes every two minutes;
+  can cancel a queued deploy or redeploy one. It refreshes every minute;
   the Refresh button or the `r` key updates now.
 - **Manage versions** activates an earlier version, deletes kept versions and
   sets how many to keep. Activating does not undo database migrations, so the

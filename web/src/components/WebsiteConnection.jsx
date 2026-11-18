@@ -12,9 +12,11 @@ export default function WebsiteConnection({ name, call, onChanged, revision = 0 
   const requestId = useRef(0)
   const base = `/admin/apps/${encodeURIComponent(name)}/website`
 
-  const load = useCallback(async () => {
+  // Reloads triggered by the shared refresh are silent: controls stay enabled and
+  // what is shown is only replaced once the new answer arrives.
+  const load = useCallback(async (silent) => {
     const id = ++requestId.current
-    setLoading(true)
+    if (silent !== true) setLoading(true)
     try {
       const result = await call(base)
       if (id !== requestId.current) return
@@ -30,7 +32,7 @@ export default function WebsiteConnection({ name, call, onChanged, revision = 0 
   }, [base, call])
 
   useEffect(() => {
-    const timer = setTimeout(load, 0)
+    const timer = setTimeout(() => load(true), 0)
     return () => clearTimeout(timer)
   }, [load, revision])
 

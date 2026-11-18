@@ -95,7 +95,7 @@ const en = [
   },
   {
     q: 'Does the UI refresh by itself?',
-    a: 'It does, every two minutes while the tab is visible, which keeps the server mostly idle. The Refresh button in the top bar or the r key updates immediately. CI still polls its own deploy until it finishes.',
+    a: 'It does, every minute while the tab is visible, which keeps the server mostly idle. The Refresh button in the top bar or the r key updates immediately. CI still polls its own deploy until it finishes.',
   },
   {
     q: "Can I edit an app's .env file from here?",
@@ -198,7 +198,7 @@ const es = [
   },
   {
     q: 'La UI se actualiza sola?',
-    a: 'Sí, cada dos minutos mientras la pestaña está visible, lo que mantiene el servidor casi en reposo. El botón Actualizar de la barra superior o la tecla r actualizan de inmediato. CI sigue consultando su propio deploy hasta que termina.',
+    a: 'Sí, cada minuto mientras la pestaña está visible, lo que mantiene el servidor casi en reposo. El botón Actualizar de la barra superior o la tecla r actualizan de inmediato. CI sigue consultando su propio deploy hasta que termina.',
   },
   {
     q: 'Puedo editar el archivo .env de una app desde aquí?',

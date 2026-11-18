@@ -327,7 +327,7 @@ propia de deployd no se puede editar por esta vía. Notas de seguridad:
   anterior sigue funcionando.
 - **Recent deploys** muestra los últimos diez con filtros y búsqueda por
   commit. Puedes cancelar un deploy en cola o volver a desplegar uno. Se
-  refresca cada dos minutos; el botón Refresh o la tecla `r` actualizan ya.
+  refresca cada minuto; el botón Refresh o la tecla `r` actualizan ya.
 - **Manage versions** activa una versión anterior, borra versiones conservadas
   y define cuántas conservar. Activar no deshace migraciones de base de datos,
   así que el código anterior debe funcionar con la base actual.
