@@ -23,5 +23,5 @@ make dev-web     # Vite dev server, proxies /api to the API
   the UI).
 - `ruff format` before committing; CI enforces lint and formatting.
 - Security-sensitive changes (auth, extraction, subprocess handling) get
-  extra scrutiny — explain the reasoning in the PR description.
+  extra scrutiny: explain the reasoning in the PR description.
 - By contributing you agree your contributions are licensed under Apache-2.0.

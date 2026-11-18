@@ -1,2 +1,8 @@
+# picomatch ReDoS (GHSA-fc5q-39xc-vjpf) reaches us only through Vite at build
+# time and has no patched release yet (latest is 4.0.7). Remove this entry and
+# update once picomatch 4.0.8 or later is published.
+auditConfig:
+  ignoreGhsas:
+    - GHSA-fc5q-39xc-vjpf
 overrides:
   source-map-js: '>=1.2.2'

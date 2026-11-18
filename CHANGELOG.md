@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 — unreleased
+## 0.1.0 (unreleased)
 
 Initial release.
 
@@ -131,7 +131,7 @@ Initial release.
 
 - Deploy API: HMAC-authenticated `POST /deploys` (timestamp + signed nonce +
   body, atomic replay protection), `GET /deploys/{id}` status with per-step log.
-- Worker: per-app serialized pipeline — download, SHA256 verify, unpack
+- Worker: per-app serialized pipeline: download, SHA256 verify, unpack
   (zip/tar, traversal-safe), migrate, atomic cutover (symlink/junction),
   restart, health check, auto-rollback, release pruning, crash recovery, and
   bounded downloads/extraction/command output.

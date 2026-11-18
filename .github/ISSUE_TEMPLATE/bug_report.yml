@@ -1,0 +1,48 @@
+name: Bug report
+description: Something in deployd does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security problems do not belong here. Report them privately, see SECURITY.md.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output
+      description: >-
+        Relevant output with secrets removed, for example the failed step in the
+        management UI, `sudo journalctl -u deployd -n 60 --no-pager` or the installer output.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: deployd version
+      description: Output of `git -C /opt/deployd log --oneline -1`
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Server
+      placeholder: Ubuntu 24.04, x86_64
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Install, update or uninstall
+        - Deploy pipeline
+        - GitHub Actions workflow
+        - Management UI
+        - Website connection
+        - .env editor
+        - Database migrations
+        - Other

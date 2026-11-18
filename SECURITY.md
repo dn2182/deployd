@@ -1,6 +1,6 @@
 # Security Policy
 
-deployd is a deploy agent — it runs commands on your server by design. Read
+deployd is a deploy agent: it runs commands on your server by design. Read
 this before exposing it anywhere.
 
 ## Reporting a vulnerability
@@ -54,7 +54,7 @@ response within a few days.
   `DEPLOYD_GITHUB_TOKEN` remains a fallback if no app token exists. Tokens are sent
   only to the initial HTTPS GitHub release-asset API URL, never to redirects.
 - One HMAC secret per app; rotate via the admin API. Secrets live in env vars
-  or `config/secrets.env` (0600) — never in git. Admin and app secrets must
+  or `config/secrets.env` (0600), never in git. Admin and app secrets must
   contain at least 32 bytes.
 - Keep `allowed_url_prefix` tight and list only required
   `allowed_redirect_hosts`. Private/non-routable destinations are blocked by

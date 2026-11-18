@@ -1,7 +1,7 @@
 [project]
 name = "deployd"
 version = "0.1.0"
-description = "Pull-style deploy agent over HTTPS — no inbound SSH/FTP"
+description = "Deploy GitHub Actions artifacts to your own servers over HTTPS: no inbound SSH, atomic cutover, health checks, automatic rollback"
 readme = "README.md"
 license = "Apache-2.0"
 authors = [{name = "Daniel (dn2182)"}]

@@ -29,8 +29,11 @@ Lo que obtienes:
 - **Fácil de alojar.** Un comando lo instala en un servidor Ubuntu. No
   necesita servidor de base de datos ni otros servicios.
 
-> **Estado:** versión preliminar. La configuración y la API pueden cambiar
-> antes de `0.1.0`.
+> **Estado:** estable y en uso en producción. deployd publica aplicaciones
+> reales de clientes en varios servidores de producción, y cada cambio se
+> prueba con una instalación, actualización y desinstalación completas en
+> Ubuntu 24.04. La instalación en Windows está documentada pero aún no se ha
+> probado en un servidor real.
 
 ## Contenido
 
