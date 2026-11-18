@@ -73,10 +73,12 @@ jobs:
           enable-cache: true
       - run: uv sync --extra dev --frozen
       - run: uv run python tests/render_workflow.py "$RUNNER_TEMP/rendered"
+      # The glob is expanded here: the rendered files only exist under /rendered in the container.
       - run: |
+          mapfile -t rendered < <(cd "$RUNNER_TEMP/rendered" && printf '/rendered/%s\n' .github/workflows/*.yml)
           docker run --rm -v "$PWD:/repo" -v "$RUNNER_TEMP/rendered:/rendered" -w /repo \
             rhysd/actionlint:1.7.7 -no-color \
-            .github/workflows/ci.yml examples/github-actions-deploy.yml /rendered/.github/workflows/*.yml
+            .github/workflows/ci.yml examples/github-actions-deploy.yml "${rendered[@]}"
 
   web:
     runs-on: ubuntu-24.04

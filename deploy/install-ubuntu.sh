@@ -875,7 +875,7 @@ install_website_helper() {
 
 # Prints the directories that may hold editable .env files, one per line.
 env_roots() {
-  local file=${1:-$ENV_ROOTS_FILE}
+  local file=$1
   if sudo test -f "$file"; then
     sudo grep -v '^[[:space:]]*#' "$file" | sed 's/[[:space:]]*$//' | grep -v '^$' || true
   fi
@@ -883,7 +883,7 @@ env_roots() {
 
 # Writes the list on first use and adds DEPLOYD_INSTALL_ENV_ROOTS (colon-separated).
 configure_env_roots() {
-  local file=${1:-$ENV_ROOTS_FILE} root
+  local file=$1 root
   sudo install -d -o root -g root -m 0755 "$(dirname -- "$file")"
   if ! sudo test -f "$file"; then
     printf '# Directories that may hold app .env files editable from the management UI, one per line.\n# A file may sit up to three folders below a directory listed here.\n/etc\n/opt\n' |
@@ -940,8 +940,8 @@ install_env_helper() {
       'Only an app that has an env file path set can use it; each save keeps the previous version in root-only storage.'
     confirm 'Enable the .env editor?' || return 0
   fi
-  configure_env_roots
-  mapfile -t roots < <(env_roots)
+  configure_env_roots "$ENV_ROOTS_FILE"
+  mapfile -t roots < <(env_roots "$ENV_ROOTS_FILE")
   check_env_roots "${roots[@]}"
   for path in /usr/local /usr/local/libexec /usr/local/libexec/deployd "$ENV_STATE_DIR"; do
     sudo test ! -L "$path" || die "helper path must not be a symlink: $path"
