@@ -318,7 +318,7 @@ Build commands run in GitHub Actions, never on the deployd server. Node presets
 install locked dependencies; custom commands must install their own toolchains.
 Only the selected output folder is packaged. For plain HTML, the source folder
 is the output. Keep backend code and private files outside that folder.
-Packaging rejects symlinks, hidden files, node_modules and common private-key
+Packaging rejects symlinks, .env files, node_modules and common private-key
 files. Review your output for other sensitive content before deploying.
 
 The build job runs read-only and uploads the packaged artifact. The publish job

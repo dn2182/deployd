@@ -1,19 +1,36 @@
-# deployd — agente de deploy tipo pull sobre HTTPS
+# deployd
 
 [![CI](https://github.com/dn2182/deployd/actions/workflows/ci.yml/badge.svg)](https://github.com/dn2182/deployd/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/dn2182/deployd)](LICENSE)
 
 *Read it in [English](README.md).*
 
-Despliega artefactos de tus aplicaciones en tus propios servidores desde
-GitHub Actions **sin SSH ni FTP entrante y sin toolchain de build ni
-contenedores en el servidor**. CI compila y publica un release asset y envía
-una sola petición firmada con HMAC; deployd la descarga, la verifica, la pone
-en producción de forma atómica, reinicia la app, comprueba su salud y hace
-rollback solo si algo falla.
+**deployd publica las nuevas versiones de tus sitios web y apps en tus propios
+servidores, de forma automática y segura, sin darle a nadie acceso remoto a
+ellos.**
 
-> **Estado:** versión preliminar. `0.1.0` se etiqueta tras el primer deploy en
-> producción y un simulacro de rollback.
+Un desarrollador sube código a GitHub. GitHub lo compila y le avisa a deployd
+que hay una versión nueva. deployd, un programa pequeño que corre en tu
+servidor, descarga esa versión, comprueba que es exactamente lo que se
+compiló, cambia la app activa en un instante y confirma que está sana. Si la
+versión nueva no levanta sana, deployd vuelve a poner la anterior por sí solo.
+
+Lo que obtienes:
+
+- **Sin accesos remotos para desplegar.** GitHub nunca recibe acceso SSH ni
+  FTP. El servidor recoge la versión nueva por sí mismo.
+- **Nada que compilar en el servidor.** Sin compiladores, sin Docker, sin
+  herramientas extra en producción.
+- **Seguro por defecto.** Cada versión se verifica antes de correr, el cambio
+  es instantáneo y un release fallido hace rollback solo.
+- **Una sola página web para manejarlo.** Agrega apps, mira los deploys,
+  vuelve a una versión anterior, pausa los deploys, edita el archivo de
+  ajustes de una app.
+- **Fácil de alojar.** Un comando lo instala en un servidor Ubuntu. No
+  necesita servidor de base de datos ni otros servicios.
+
+> **Estado:** versión preliminar. La configuración y la API pueden cambiar
+> antes de `0.1.0`.
 
 ## Contenido
 
@@ -22,11 +39,23 @@ rollback solo si algo falla.
 3. [Registrar una aplicación](#registrar-una-aplicación)
 4. [Conectar GitHub Actions](#conectar-github-actions)
 5. [Salir a producción: conectar el sitio web](#salir-a-producción-conectar-el-sitio-web)
-6. [Operación](#operación)
-7. [Referencia](#referencia)
-8. [Desarrollo local](#desarrollo-local)
+6. [Ajustes de la app: archivos .env](#ajustes-de-la-app-archivos-env)
+7. [Operación](#operación)
+8. [Migraciones de base de datos](#migraciones-de-base-de-datos)
+9. [Referencia](#referencia)
+10. [Desarrollo local](#desarrollo-local)
 
 ## Cómo funciona
+
+1. GitHub Actions compila la app y adjunta el resultado a un release de GitHub.
+2. Le envía a deployd una sola petición firmada: qué app, qué commit, dónde
+   está el archivo y su checksum.
+3. deployd descarga el archivo, verifica el checksum y lo desempaqueta.
+4. Ejecuta tu migración de base de datos y el hook previo al cambio, si los
+   definiste.
+5. Cambia la carpeta activa a la versión nueva de forma atómica y reinicia la
+   app.
+6. Revisa el health de la app. Si falla, restaura la versión anterior.
 
 ```
 GitHub Actions (build + publicación del release asset)
@@ -41,24 +70,22 @@ worker (una cola por app, apps en paralelo)
       fallo tras el cutover => rollback automático
 ```
 
-- **Artefactos, no código fuente.** Lo que CI firmó es lo que corre; producción
-  no necesita SDKs. Cada deploy se fija a un commit SHA, nunca a una rama.
+Decisiones de diseño que conviene conocer:
+
+- **Artefactos, no código fuente.** Lo que CI compiló es lo que corre. Cada
+  deploy se fija a un commit SHA, nunca a una rama.
 - **Un contrato fijo.** El workflow no elige comandos ni rutas; solo puede
-  disparar una app que registraste. Un build comprometido sigue enviando lo
-  que construyó, así que cada app corre bajo su propia identidad con mínimos
-  privilegios.
-- **Nada más se administra.** deployd nunca escribe el sitio de Nginx, la
-  unidad de systemd ni la configuración de tu app. Eso existe antes del primer
-  deploy.
-- **Sin base de datos externa.** La configuración es YAML más env; el estado
-  en runtime es SQLite.
+  disparar una app que registraste.
+- **Nada más se administra.** deployd nunca escribe el sitio de Nginx ni la
+  unidad de systemd de tu app. Eso existe antes del primer deploy.
+- **Sin base de datos externa.** La configuración es YAML, el estado es SQLite.
 
 ## Instalación en Ubuntu
 
-Git es la única dependencia de arranque; el instalador descarga Node 24, uv y
-pnpm como builds oficiales verificados por checksum y configura el servicio,
-Nginx, los directorios de estado y la UI de administración. Ejecútalo con tu
-usuario normal, no con `sudo`; eleva solo lo que necesita root.
+Git es lo único que instalas a mano. El instalador configura el servicio,
+Nginx, la UI de administración y las herramientas de build que falten (Node
+24, uv, pnpm, todas verificadas por checksum). Ejecútalo con tu usuario
+normal, no con `sudo`; eleva solo lo que necesita root.
 
 ```bash
 sudo apt update && sudo apt install -y git
@@ -67,43 +94,37 @@ git clone https://github.com/dn2182/deployd.git /opt/deployd
 /opt/deployd/deploy/install-ubuntu.sh
 ```
 
-Te pregunta:
+Pregunta:
 
 | Pregunta | Default | Override desatendido |
 |---|---|---|
 | Dominio público de deployd | `deployd.example.com` | `DEPLOYD_INSTALL_DOMAIN` |
 | Dirección de bind de administración | `0.0.0.0` (LAN) | `DEPLOYD_INSTALL_ADMIN_BIND` |
 | Puerto de administración | `844` | `DEPLOYD_INSTALL_ADMIN_PORT` |
-| Usuario Basic Auth | `deployd-admin` | `DEPLOYD_INSTALL_ADMIN_USER` |
-| Contraseña Basic Auth | se pide | `DEPLOYD_INSTALL_ADMIN_PASSWORD` |
-| Confirmaciones | se piden | `DEPLOYD_INSTALL_YES=1` |
+| Usuario de administración | `deployd-admin` | `DEPLOYD_INSTALL_ADMIN_USER` |
+| Contraseña de administración | se pide | `DEPLOYD_INSTALL_ADMIN_PASSWORD` |
+| Conexión de sitios, editor de .env | se pregunta, opcional | `DEPLOYD_INSTALL_YES=1` habilita ambos |
 
 Lo que obtienes:
 
-- **API pública** en `https://<dominio>` (puerto 443, certificado self-signed
-  en `/etc/deployd/tls/`; el puerto 80 redirige). Pon Cloudflare en modo
-  **Full**. Para **Full (strict)** reemplaza el par certificado y clave por un
-  certificado Origin CA de Cloudflare en las mismas rutas; el instalador nunca
-  sobrescribe un certificado que no generó.
-- **UI de administración** en `https://<bind>:844` tras Basic Auth, con el
-  mismo certificado self-signed (el navegador pide aceptarlo una vez). `http://`
-  en ese puerto redirige a `https://`. El bind por defecto es alcanzable en la
-  LAN; mantén ese puerto fuera de la WAN con el firewall del host, o elige
-  `127.0.0.1` y usa un túnel SSH.
-- **Token de administración** generado en `/opt/deployd/.env` (se imprime la
-  ruta, no el valor). Léelo con `sudo grep DEPLOYD_ADMIN_TOKEN /opt/deployd/.env`.
-- Un usuario de sistema `deployd` dueño de `/var/lib/deployd` (estado,
-  registro de apps, secrets) y `/srv/deployd` (releases).
+- **API pública** en `https://<dominio>` por el puerto 443, con un certificado
+  self-signed en `/etc/deployd/tls/`. El puerto 80 redirige. Esta es la
+  dirección que llama GitHub. Pon Cloudflare en modo **Full**; para
+  **Full (strict)** reemplaza el certificado y la clave por un par Origin CA
+  de Cloudflare en las mismas rutas. El instalador nunca sobrescribe un
+  certificado que no generó.
+- **UI de administración** en `https://<servidor>:844`, tras usuario y
+  contraseña, con el mismo certificado (el navegador pide aceptarlo una vez).
+  `http://` en ese puerto redirige a `https://`. Mantén el puerto fuera de
+  internet con tu firewall, o enlázalo a `127.0.0.1` y usa un túnel SSH.
+- **Token de administración**, que la UI pide después del login. Léelo con:
 
-Opcional al instalar: el **helper de conexión de sitios web** (un programa
-propiedad de root tras una sola regla de sudo) que puede cambiar un sitio
-estático existente bajo `/var/www` o cualquier raíz listada en
-`/etc/deployd/site-roots` a los releases de deployd (ver
-[Salir a producción](#salir-a-producción-conectar-el-sitio-web)), y el
-**editor de .env** (ver
-[Editar el archivo .env de una app](#editar-el-archivo-env-de-una-app)). Ambos
-se preguntan una vez; una actualización conserva tu respuesta y ofrece lo que
-aún no esté habilitado.
+  ```bash
+  sudo grep DEPLOYD_ADMIN_TOKEN /opt/deployd/.env
+  ```
+
+- Un usuario de sistema `deployd` que corre el servicio y es dueño de su
+  estado (`/var/lib/deployd`) y de los releases (`/srv/deployd`).
 
 ### Actualización
 
@@ -111,214 +132,217 @@ aún no esté habilitado.
 /opt/deployd/deploy/update-ubuntu.sh
 ```
 
-Hace pull, corre lint, tests y el build web **antes** de detener el servicio,
-se niega a detenerlo mientras hay un deploy en curso, respalda el estado
-SQLite en `/var/lib/deployd/backups/` (conserva los cinco más recientes) y
-reinicia. Todos los ajustes se conservan. Los cambios locales a archivos
-versionados en el servidor se imprimen y se descartan primero; tu
-configuración vive fuera del árbol versionado. Los hallazgos del audit de
-dependencias se reportan, no detienen (`DEPLOYD_INSTALL_STRICT_AUDIT=1` para
-que detengan). Ejecutar `install-ubuntu.sh` a mano sobre una instalación
-existente ofrece la misma actualización in-place; `--reconfigure` vuelve a
-hacer las preguntas.
+Descarga la última versión, corre los tests y compila la UI antes de tocar el
+servicio en ejecución, espera cualquier deploy en curso, respalda la base de
+estado (las cinco copias más recientes en `/var/lib/deployd/backups/`) y
+reinicia. Todos los ajustes se conservan. Las funciones opcionales que no
+habilitaste se ofrecen de nuevo. Los cambios locales a archivos versionados en
+`/opt/deployd` se listan y se descartan; tu configuración vive fuera de ellos.
+
+Para cambiar el dominio, la dirección de bind o el puerto, ejecuta
+`/opt/deployd/deploy/install-ubuntu.sh --reconfigure`.
 
 ### Desinstalación
 
 ```bash
-/opt/deployd/deploy/uninstall-ubuntu.sh          # --purge también elimina releases,
-                                                 # datos de recuperación, TLS y tooling
+/opt/deployd/deploy/uninstall-ubuntu.sh
 ```
 
-Ofrece un backup, pregunta si los sitios conectados deben restaurarse a
-carpetas reales o conservar sus symlinks, y elimina el servicio, los sitios de
-Nginx, las credenciales y el estado. Las aplicaciones desplegadas se conservan.
+Ofrece un backup, pregunta si los sitios conectados vuelven a ser carpetas
+reales o conservan sus enlaces, y elimina el servicio, su sitio de Nginx, las
+credenciales y el estado. Tus apps desplegadas y sus releases se quedan.
+Agrega `--purge` para eliminar también los releases, los datos de
+recuperación, el certificado y las herramientas de build.
 
 ### Cambiar la contraseña de administración
 
-Icono de llave en la barra superior de la UI una vez autenticado. Cambia la
-contraseña Basic Auth de Nginx mediante un helper root restringido; el token
-de administración y los secrets de las apps no cambian, y el navegador vuelve
-a pedir login.
+Usa el icono de llave en la barra superior de la UI. El token de
+administración y los secrets de las apps no se ven afectados, y el navegador
+vuelve a pedir login.
 
 ## Registrar una aplicación
 
 Abre la UI de administración, ingresa el token de administración y pulsa
-**Add application**. El botón **Help** (barra superior, disponible antes del
-login) responde las preguntas habituales en inglés y español.
+**Add application**. El botón **Help** de la barra superior responde las
+preguntas comunes en inglés y español.
 
 | Campo | Notas |
 |---|---|
 | Name | minúsculas, dígitos, guiones; se convierte en `/srv/deployd/<name>/` |
-| GitHub repository | `OWNER/REPO`; fija el allowlist de artefactos automáticamente |
+| GitHub repository | `OWNER/REPO`; solo se aceptan archivos de release de ese repo |
 | Public deployd URL | `https://<dominio>`, lo usa el workflow generado |
-| Kind | **Static site** (verifica `index.html`) o **Service** (tu comando de restart) |
-| Local site path | solo sitios estáticos; la ruta que Nginx ya sirve, bajo una raíz permitida |
-| Restart command | lista argv, sin shell; en servicios suele ser `sudo systemctl restart <unit>` |
-| Health URL | opcional; si el restart o el health fallan tras el cutover, hay rollback |
-| Expected body / header | opcional, placeholder `{commit_sha}`: un proceso viejo no puede pasar |
-| Hooks | `before_cutover` (directorio del release nuevo) y `after_health` (release activo, rollback si falla) |
-| Environment passthrough | variables del servicio reenviadas a los comandos, por ejemplo un DSN |
-| Environment file path | opcional; el `.env` de la app en este servidor, agrega la pestaña Environment file |
-| Retention | versiones previas conservadas para rollback (default 1) |
-| Signing secret | se genera y se muestra una sola vez; va a CI como `DEPLOYD_SECRET_<APP>` |
-| GitHub access token | opcional, `Contents: read` en ese repo, necesario para repos privados |
+| Kind | **Static site** (verifica que exista `index.html`) o **Service** (ejecuta tu comando de restart) |
+| Local site path | solo sitios estáticos: la carpeta que Nginx ya sirve |
+| Restart command | programa y argumentos, sin shell; normalmente `sudo systemctl restart <unit>` |
+| Health URL | opcional; un health check fallido tras el cambio hace rollback |
+| Expected body / header | opcional; `{commit_sha}` prueba que responde la versión nueva |
+| Hooks | `before_cutover` (en la carpeta de la versión nueva) y `after_health` (si falla hay rollback) |
+| Environment passthrough | variables del servicio que tus comandos pueden ver, por ejemplo un DSN |
+| Environment file path | opcional; ver [Ajustes de la app](#ajustes-de-la-app-archivos-env) |
+| Retention | versiones anteriores conservadas para rollback (default 1) |
+| Signing secret | se genera y se muestra una sola vez; va a GitHub como `DEPLOYD_SECRET_<APP>` |
+| GitHub access token | solo para repositorios privados; `Contents: read` en ese repositorio |
 
-Prerrequisitos en el servidor, por app, que deployd no crea:
+deployd no crea lo siguiente, así que tenlo listo en el servidor:
 
-- Una unidad de systemd (o pool de IIS en Windows) para servicios, y esta línea
-  de sudoers para el usuario deployd:
-  `deployd ALL=(root) NOPASSWD: /usr/bin/systemctl restart <unit>`.
-- El sitio de Nginx sirviendo `/srv/deployd/<app>/releases/current`
-  directamente, o un document root existente que conectarás en
-  [Salir a producción](#salir-a-producción-conectar-el-sitio-web).
-- La configuración y los secrets propios de la app, donde sea que los lea.
+- **Para un servicio:** su unidad de systemd y permiso para que deployd la
+  reinicie:
 
-Los comandos corren con un entorno limpio más `DEPLOYD_APP`,
-`DEPLOYD_DEPLOY_ID`, `DEPLOYD_COMMIT_SHA`, `DEPLOYD_RELEASE_DIR`,
-`DEPLOYD_CURRENT` y las variables listadas en **Environment passthrough**; los
-secrets del propio servicio nunca les llegan. Un script que necesita root corre
-como `/usr/bin/sudo <script>` con una línea `NOPASSWD` de sudoers equivalente.
+  ```
+  deployd ALL=(root) NOPASSWD: /usr/bin/systemctl restart <unit>
+  ```
 
-Un repositorio con frontend y backend son dos aplicaciones, cada una con su
-secret y su workflow. Un token de GitHub puesto en el formulario de la app
-aplica sin reiniciar y tiene prioridad sobre el fallback global
-`DEPLOYD_GITHUB_TOKEN` en `.env` (que sí requiere reinicio al cambiar).
+- **Para un sitio:** el sitio de Nginx, sirviendo
+  `/srv/deployd/<app>/releases/current` directamente o una carpeta existente
+  que conectarás en [Salir a producción](#salir-a-producción-conectar-el-sitio-web).
+- **Los ajustes y secrets propios de la app.**
+
+Conviene saber:
+
+- Un repositorio con frontend y backend son dos aplicaciones, cada una con su
+  secret y su workflow.
+- Los comandos de migrate, restart y hooks corren con un entorno limpio más
+  `DEPLOYD_APP`, `DEPLOYD_DEPLOY_ID`, `DEPLOYD_COMMIT_SHA`,
+  `DEPLOYD_RELEASE_DIR`, `DEPLOYD_CURRENT` y las variables de passthrough. Los
+  secrets de deployd nunca les llegan.
+- Un script que necesita root corre como `/usr/bin/sudo <script>` con una
+  línea `NOPASSWD` de sudoers equivalente.
+- Un token de GitHub guardado en el formulario de la app funciona de
+  inmediato. El fallback global `DEPLOYD_GITHUB_TOKEN` en `/opt/deployd/.env`
+  requiere reiniciar el servicio tras un cambio.
 
 ## Conectar GitHub Actions
 
 En la tarjeta de la app abre **GitHub Actions setup**:
 
-1. Elige el preset de build (pnpm, npm, HTML plano, o un comando propio como
-   `dotnet publish -c Release -o dist` o `go build -o dist/api ./cmd/api`), la
-   carpeta del proyecto (`.` o `frontend`) y la carpeta de salida.
-2. Elige el **trigger**: pushes a una rama, o tags de Git que coincidan con un
-   patrón (`v*`, `web-v*`). El checkbox de abajo decide automático versus
-   manual: marcado, el push o el tag despliega solo; desmarcado, corres el
-   workflow desde Actions y eliges la rama o el tag.
-3. **Deployment targets** opcionales (`web-01, web-02`) para nodos espejo,
-   cada uno con su propio deployd y la app registrada.
-4. **Preview workflow** para leerlo, **Save settings and download ZIP** para
-   obtener `.github/workflows/deployd.yml`, `scripts/notify_deploy.py` y
-   `DEPLOYD-SETUP.md`. Descomprime en la raíz del repositorio.
+1. Elige cómo se compila la app (pnpm, npm, HTML plano, o tu propio comando
+   como `dotnet publish -c Release -o dist`), la carpeta del proyecto y la
+   carpeta de salida.
+2. Elige el **trigger**: pushes a una rama, o tags de Git que coincidan con
+   un patrón como `v*`. Con el checkbox marcado, un push o un tag despliega
+   solo. Desmarcado, inicias el workflow desde la pestaña Actions.
+3. **Deployment targets** opcionales (`web-01, web-02`) cuando la misma app
+   corre en varios servidores, cada uno con su propio deployd.
+4. **Preview workflow** lo muestra. **Save settings and download ZIP** te da
+   `.github/workflows/deployd.yml`, `scripts/notify_deploy.py` y
+   `DEPLOYD-SETUP.md`. Descomprime en la raíz del repositorio y haz commit.
 
-Ajustes del repositorio (Settings, Secrets and variables, Actions):
+Luego agrega esto en el repositorio, en Settings, Secrets and variables,
+Actions:
 
-| | Un solo servidor | Deployment targets |
+| | Un servidor | Deployment targets |
 |---|---|---|
 | Variable | `DEPLOYD_URL` | `DEPLOYD_URL_WEB_01`, `DEPLOYD_URL_WEB_02` |
-| Secret | `DEPLOYD_SECRET_<APP>` (fallback a `DEPLOYD_SECRET`) | `DEPLOYD_SECRET_WEB_01`, `DEPLOYD_SECRET_WEB_02` |
+| Secret | `DEPLOYD_SECRET_<APP>` (o `DEPLOYD_SECRET`) | `DEPLOYD_SECRET_WEB_01`, `DEPLOYD_SECRET_WEB_02` |
 
-Varias apps en un repositorio: renombra el workflow por app
+Varias apps en un repositorio: renombra el archivo de workflow por app
 (`deployd-api.yml`, `deployd-web.yml`), usa prefijos de tag distintos en modo
-tag, un secret por app. El script notificador es compartido.
+tag, y un secret por app. El script notificador es compartido.
 
-Qué hace el workflow: un job `build` de solo lectura empaqueta la carpeta de
-salida (dotfiles permitidos, archivos de credenciales y `node_modules`
-rechazados) y lo sube; un job `publish` vuelve a verificar el checksum, crea el
-release `deploy-<app>-<sha>`, notifica a deployd y poda esos releases más allá
-de los diez más recientes. Con targets, un job matriz `deploy` notifica a cada
-nodo tras una sola publicación. `workflow_dispatch` tiene un input `dry_run`;
-descomenta la línea `environment:` para exigir revisores. Las actions y los
-runners están fijados por versión.
+Qué hace el workflow:
 
-El notificador firma la petición, consulta `GET /deploys/{id}` y falla el run
-en `failed`, `rolled_back`, `superseded` (un push más nuevo lo reemplazó en la
-cola) o `cancelled`. CI ve nombres y estados de los pasos; la salida de los
-comandos solo se ve en la UI de administración.
+- **build** empaqueta la carpeta de salida. Se rechazan symlinks,
+  `node_modules`, archivos `.env` y claves privadas.
+- **publish** adjunta el paquete a un release (el tag enviado, o un release
+  `deploy-<app>-<sha>` que crea y poda a los diez más recientes), notifica a
+  deployd y espera el resultado.
+- Con targets, un job **deploy** notifica a cada servidor tras una sola
+  publicación.
+- El run falla si el deploy falla, hace rollback, se cancela o es reemplazado
+  por un push más nuevo. GitHub solo ve nombres y resultados de los pasos; la
+  salida de los comandos se queda en la UI de administración.
+- Un run manual tiene la opción `dry_run`, que compila sin desplegar.
+  Descomenta la línea `environment:` para exigir una aprobación.
 
 ## Salir a producción: conectar el sitio web
 
-Para sitios estáticos que un server block de Nginx ya sirve desde una carpeta
-(`/var/www/example.com`, `/srv/sites/example.com`):
+Para un sitio estático que Nginx ya sirve desde una carpeta como
+`/var/www/example.com`:
 
-1. Despliega una vez para que exista `/srv/deployd/<app>/releases/current`.
-2. En la tarjeta de la app abre **Website connection**, revisa el estado,
-   pulsa **Connect website** y escribe el nombre de la app.
+1. Despliega una vez, para que exista una versión actual.
+2. En la tarjeta de la app abre **Website connection**, pulsa
+   **Connect website** y escribe el nombre de la app.
 
-La carpeta se intercambia atómicamente por un symlink a `releases/current`;
-los archivos originales se conservan como la versión `b4deployd`, disponible
-para activar. La configuración de Nginx no se toca. Si más adelante la ruta es
-reemplazada por una carpeta real u otro enlace, la pestaña lo reporta y
-**Fix connection** vuelve a enlazarla, guardando el reemplazo bajo
-`/var/lib/deployd-connect`. Cada deploy registra un paso `website` que avisa
-cuando la ruta no está enlazada, y la tarjeta de estado lo muestra.
+La carpeta se intercambia por un enlace a la versión actual en un solo paso.
+Tus archivos originales se conservan como la versión `b4deployd`, que puedes
+activar de nuevo cuando quieras. La configuración de Nginx no se toca. Si más
+adelante la ruta es reemplazada por una carpeta real, la pestaña lo indica y
+**Fix connection** la enlaza de nuevo sin borrar nada.
 
-Las raíces de sitio permitidas son `/var/www` más cada línea de
-`/etc/deployd/site-roots` (propiedad de root); el instalador verifica que cada
-raíz sea de root y no tenga escritura de grupo ni de otros
-(`DEPLOYD_INSTALL_SITE_ROOTS=/srv/sites` agrega una de forma desatendida).
-Detalles, recuperación y el flujo de restauración al eliminar:
+Los sitios deben estar directamente bajo `/var/www` o una carpeta listada en
+`/etc/deployd/site-roots` (`DEPLOYD_INSTALL_SITE_ROOTS=/srv/sites` agrega una,
+luego vuelve a ejecutar la actualización). Detalles y recuperación:
 [docs/website-connection.md](docs/website-connection.md).
 
-Si prefieres apuntar tú mismo el `root` de Nginx a `releases/current`, hazlo y
-omite el conector.
+Si lo prefieres, apunta tú mismo el `root` de Nginx a
+`/srv/deployd/<app>/releases/current` y omite este paso.
 
-## Operación
+## Ajustes de la app: archivos .env
 
-- **Tarjeta de estado** por app: release actual, cantidad en cola, último
-  deploy, último health, estado del enlace del sitio, **Freeze** (los deploys
-  de CI responden `423` hasta descongelar; el rollback sigue funcionando).
-- **Recent deploys**: los últimos diez, filtros, búsqueda por commit, cancelar
-  deploys en cola, redeploy, enlaces a commit y compare. La lista y el
-  **Audit log** se refrescan cada dos minutos mientras la pestaña está
-  visible; el Refresh de la barra superior o la tecla `r` actualizan ya.
-- **Manage versions**: activar una versión conservada (mismo camino de
-  cutover, restart y health; sin download ni migración, así que el código
-  viejo debe seguir funcionando con la base de datos actual), borrar archivos
-  conservados, cambiar la retención.
-- **Rollback** es automático ante un restart o health fallido tras el cutover,
-  y manual mediante Manage versions.
-- **`deployd check`** valida ajustes, base de estado, secrets y su modo de
-  archivo, rutas y ejecutables, y avisa de rutas de sitio sin enlazar o apps
-  congeladas. Ejecútalo tras editar configuración a mano.
-- **`/healthz`** responde `ok` solo cuando la base de estado es escribible y
-  el worker está vivo. Detrás de Cloudflare el access log muestra la dirección
-  del visitante.
-- **Actualizar deployd** es `update-ubuntu.sh`; deployd no puede desplegarse a
-  sí mismo por su propia cola, porque el restart mataría el deploy en curso.
-
-### Editar el archivo .env de una app
-
-Mantén el `.env` de cada app fuera de la carpeta de releases; un deploy nunca
-lo toca. El lugar recomendado es `/etc/apps-env/<app>/<app>.env`, cargado por
-el `EnvironmentFile=` de la unidad:
+Mantén el `.env` de cada app fuera de su carpeta de releases. Los deploys y
+rollbacks nunca lo tocan. El lugar recomendado es
+`/etc/apps-env/<app>/<app>.env`:
 
 ```bash
 sudo install -d -m 0750 -o root -g <appuser> /etc/apps-env/<app>
 sudo install -m 0640 -o root -g <appuser> /dev/null /etc/apps-env/<app>/<app>.env
 ```
 
-Con el editor de .env habilitado al instalar puedes cambiarlo desde la UI:
+Cárgalo desde la unidad de systemd de la app con
+`EnvironmentFile=/etc/apps-env/<app>/<app>.env`.
 
-1. Edita la app y define **Environment file path**. El archivo ya debe
-   existir, llamarse `.env`, `.env.<name>` o `<name>.env`, y estar como máximo
-   tres carpetas debajo de un directorio listado en `/etc/deployd/env-roots`
-   (propiedad de root; `/etc/apps-env` por defecto, creado por el instalador).
-   Los archivos guardados en otro lugar también funcionan: agrega su carpeta,
-   por ejemplo `/etc/myapp` o `/opt/myapp`, como una línea en ese archivo y
-   vuelve a ejecutar `update-ubuntu.sh`
-   (`DEPLOYD_INSTALL_ENV_ROOTS=/etc/myapp:/opt/myapp` lo hace desatendido).
+Con el editor de .env habilitado al instalar, manejas el archivo desde la UI:
+
+1. Edita la app y define **Environment file path**.
 2. Abre la pestaña **Environment file** y pulsa **Open file**. Los valores
-   están ocultos hasta que muestres uno; **Edit as text** muestra el archivo
+   están ocultos hasta que muestres uno. **Edit as text** muestra el archivo
    crudo.
-3. **Save file** lo reemplaza de forma atómica con el mismo dueño, grupo y
-   modo, y puede reiniciar la app y ejecutar su health check justo después.
+3. **Save file**, con la opción de reiniciar la app y revisar su health.
 
-Cada guardado conserva la versión anterior en `/var/lib/deployd-env` (solo
-root, las diez más recientes por archivo), así que **Restore previous version**
-lo deshace. Leer y escribir quedan en el audit log con los nombres de las
-claves que cambiaron, nunca los valores. Un guardado se rechaza si el archivo
-cambió en el servidor después de abrirlo. Los archivos propios de deployd
-(`/opt/deployd/.env`, `secrets.env`) no se pueden editar por esta vía. Con
-varios nodos, cada servidor tiene su propio archivo: repite el cambio en cada
-nodo.
+Qué esperar:
 
-### Migraciones de base de datos
+- El archivo conserva su dueño y permisos.
+- Cada guardado conserva la versión anterior en el servidor (las diez más
+  recientes), y **Restore previous version** la recupera.
+- El audit log registra quién abrió o cambió el archivo y qué claves
+  cambiaron, nunca los valores.
+- Un guardado se rechaza si el archivo cambió en el servidor después de
+  abrirlo.
+- El archivo ya debe existir y llamarse `.env`, `.env.<name>` o `<name>.env`.
+- Cada servidor tiene su propio archivo. Con varios servidores, repite el
+  cambio en cada uno.
 
-`deployd-migrate` aplica archivos `NNN_name.sql` en orden numérico, registra el
-SHA256 de cada archivo y se niega a correr cuando un archivo aplicado cambió.
-Úsalo como comando migrate de la app para que una migración fallida detenga el
-deploy antes del cutover.
+Los archivos guardados en otro lugar también funcionan. Agrega su carpeta,
+por ejemplo `/etc/myapp`, como una línea en `/etc/deployd/env-roots` y vuelve
+a ejecutar la actualización (`DEPLOYD_INSTALL_ENV_ROOTS=/etc/myapp` lo hace
+desatendido). Las carpetas bajo `/home` no son alcanzables, y la configuración
+propia de deployd no se puede editar por esta vía. Notas de seguridad:
+[SECURITY.md](SECURITY.md).
+
+## Operación
+
+- **Tarjeta de estado** por app: versión actual, cola, último deploy, último
+  health check, estado del enlace del sitio.
+- **Freeze** pausa los deploys desde GitHub para una app. Volver a una versión
+  anterior sigue funcionando.
+- **Recent deploys** muestra los últimos diez con filtros y búsqueda por
+  commit. Puedes cancelar un deploy en cola o volver a desplegar uno. Se
+  refresca cada dos minutos; el botón Refresh o la tecla `r` actualizan ya.
+- **Manage versions** activa una versión anterior, borra versiones conservadas
+  y define cuántas conservar. Activar no deshace migraciones de base de datos,
+  así que el código anterior debe funcionar con la base actual.
+- **Rollback** es automático cuando el restart o el health check fallan tras
+  un cambio.
+- **Audit log** lista cada acción de administración y quién la hizo.
+- **`deployd check`** valida la configuración en el servidor y avisa de sitios
+  sin enlazar o apps congeladas. Ejecútalo tras editar archivos a mano.
+
+## Migraciones de base de datos
+
+`deployd-migrate` aplica archivos `NNN_name.sql` en orden, registra el
+checksum de cada archivo y se niega a continuar cuando un archivo ya aplicado
+fue modificado. Defínelo como el comando migrate de la app y una migración
+fallida detiene el deploy antes del cambio.
 
 ```bash
 deployd-migrate --dir migrations --dialect mssql --dsn-env DEPLOYD_MIGRATE_DSN
@@ -326,13 +350,10 @@ deployd-migrate --dir migrations --dialect postgres --dsn-file /etc/app/dsn --dr
 deployd-migrate --dir migrations status
 ```
 
-Pasa el DSN con `--dsn-env` (lista esa variable en el environment passthrough
-de la app) o `--dsn-file`; `--dsn` es visible en `ps`. SQL Server ejecuta cada
-archivo en una transacción con `SET XACT_ABORT ON`, drena cada result set para
-que los errores tras un `PRINT` también fallen, y rechaza archivos que manejan
-sus propias transacciones; los runners que comparten base se serializan con
-`sp_getapplock` (SQL Server) o un advisory lock (PostgreSQL). Instala el
-driver con `pip install 'deployd[mssql]'` o `'deployd[postgres]'`.
+Entrega la cadena de conexión con `--dsn-env` (y lista esa variable en el
+environment passthrough de la app) o `--dsn-file`. Cada archivo corre en una
+transacción, y dos ejecuciones contra la misma base nunca se solapan. Instala
+el driver con `pip install 'deployd[mssql]'` o `'deployd[postgres]'`.
 
 ## Referencia
 
@@ -348,51 +369,48 @@ X-Deploy-Signature: sha256=<hex hmac de "{timestamp}.{nonce}.{raw body}">
  "artifact_sha256": "<64 hex>", "triggered_by": "github-actions:<run_id>"}
 ```
 
-`202 {deploy_id}` y luego `GET /deploys/{deploy_id}` reporta
-`queued | running | succeeded | failed | rolled_back | superseded | cancelled`
-con la línea de tiempo de pasos. Reintentar exactamente la misma petición
-firmada devuelve el id original. Apps desconocidas responden `401`, apps
-congeladas `423`, URLs de artefacto no permitidas `403`.
+La respuesta es `202` con un `deploy_id`. Luego `GET /deploys/{deploy_id}`
+reporta `queued`, `running`, `succeeded`, `failed`, `rolled_back`,
+`superseded` o `cancelled`, con los pasos. Enviar de nuevo la misma petición
+firmada devuelve el mismo id. Una firma inválida o una app desconocida
+responden `401`, una app congelada `423`, un archivo de fuera del repositorio
+de la app `403`.
 
 ### Rutas
 
 | Ruta | Contenido |
 |---|---|
-| `/opt/deployd` | checkout de git, `.venv`, `.node`, `.env` (root:deployd 0640) |
-| `/var/lib/deployd` | `apps.yaml`, `secrets.env` (0600), `deployd.sqlite3`, `backups/` |
-| `/srv/deployd/<app>/releases/` | `current/` más versiones conservadas `<sha>-<deploy_id>/` |
-| `/etc/deployd/site-roots` | raíces permitidas para la conexión de sitios |
+| `/opt/deployd` | el checkout, sus herramientas y `.env` (token de administración, ajustes del servicio) |
+| `/var/lib/deployd` | `apps.yaml`, `secrets.env`, la base de estado y sus backups |
+| `/srv/deployd/<app>/releases/` | `current/` más las versiones anteriores conservadas |
 | `/etc/deployd/tls/` | certificado y clave de la API pública y de la UI de administración |
-| `/etc/deployd/env-roots` | directorios que pueden contener archivos `.env` de apps para el editor |
+| `/etc/deployd/site-roots` | carpetas cuyos sitios se pueden conectar |
+| `/etc/deployd/env-roots` | carpetas cuyos archivos `.env` se pueden editar |
+| `/etc/apps-env/<app>/` | lugar por defecto del `.env` de cada app |
 | `/var/lib/deployd-env` | versiones anteriores de archivos `.env` editados, solo root |
-| `/var/lib/deployd-connect` | datos de recuperación de sitios, solo root |
-| `/var/lib/deployd-auth/htpasswd` | login de administración |
+| `/var/lib/deployd-connect` | datos de recuperación de la conexión de sitios, solo root |
+| `/var/lib/deployd-auth` | login de administración |
 
-### `.env`
+### Ajustes del servicio
 
-`DEPLOYD_ADMIN_TOKEN`, `DEPLOYD_GITHUB_TOKEN` (fallback para repos privados),
-`DEPLOYD_BIND_HOST` / `DEPLOYD_BIND_PORT` (`127.0.0.1:8300`, solo Nginx le
-habla), `DEPLOYD_DRAIN_TIMEOUT_SECONDS` (cuánto espera un stop por un cutover
-en curso, default 600; el timeout de stop de systemd está por encima),
-`DEPLOYD_DB_PATH`, `DEPLOYD_APPS_CONFIG`, `DEPLOYD_SECRETS_FILE`. Los overrides
-por app `DEPLOYD_SECRET_<APP>` y `DEPLOYD_GITHUB_TOKEN_<APP>` tienen prioridad
-sobre la UI y no se pueden cambiar desde ella. Los cambios en `.env` requieren
-reiniciar el servicio.
+`/opt/deployd/.env` contiene `DEPLOYD_ADMIN_TOKEN`, el fallback opcional
+`DEPLOYD_GITHUB_TOKEN` para repositorios privados, y
+`DEPLOYD_DRAIN_TIMEOUT_SECONDS` (cuánto espera un stop por un deploy que está
+a mitad del cambio, default 600). Definir ahí `DEPLOYD_SECRET_<APP>` o
+`DEPLOYD_GITHUB_TOKEN_<APP>` tiene prioridad sobre la UI para esa app.
+Reinicia el servicio después de cambiar este archivo.
 
-### `apps.yaml`
-
-Todo lo que la UI edita vive en `/var/lib/deployd/apps.yaml`;
+Todo lo que la UI edita vive en `/var/lib/deployd/apps.yaml`.
 [config/apps.example.yaml](config/apps.example.yaml) documenta cada clave,
-incluidos límites de tamaño de artefacto, timeouts, hooks, aserciones de health
-y `env_passthrough`. El almacenamiento de releases, la activación y la
-retención se describen en [docs/release-layout.md](docs/release-layout.md).
+incluidos límites de tamaño y timeouts. Almacenamiento de releases y
+retención: [docs/release-layout.md](docs/release-layout.md).
 
-### Windows
+### Seguridad y Windows
 
-Servicio NSSM, physical path de IIS sobre un junction, `Restart-WebAppPool`:
-[deploy/windows.md](deploy/windows.md) (script instalador sin probar en
-Windows real). Propiedades de seguridad y checklist de hardening:
-[SECURITY.md](SECURITY.md).
+El checklist de hardening y las propiedades de seguridad están en
+[SECURITY.md](SECURITY.md). Una instalación en Windows con NSSM e IIS se
+describe en [deploy/windows.md](deploy/windows.md); su instalador no se ha
+probado en un servidor Windows real.
 
 ## Desarrollo local
 
@@ -409,13 +427,13 @@ make check-audit                               # pip-audit y pnpm audit
 ```
 
 ```
-src/deployd/        app FastAPI, pipeline del worker, store SQLite, CLIs migrate y check
-web/                UI de administración React (Vite + Tailwind)
-deploy/             instalador/actualizador/desinstalador Ubuntu, unidad systemd, helpers root, guía Windows
-examples/           workflow de referencia generado + notificador vendorizable
+src/deployd/        API, worker de deploys, store SQLite, comandos migrate y check
+web/                UI de administración (React, Vite, Tailwind)
+deploy/             instalador, actualizador y desinstalador Ubuntu, unidad systemd, helpers root
+examples/           workflow de referencia y el script notificador
 docs/               conexión de sitios y layout de releases en detalle
-tests/              pytest (API, worker, instalador); web/ usa vitest
+tests/              pytest para API, worker e instalador; web/ usa vitest
 ```
 
-Ver [CONTRIBUTING.md](CONTRIBUTING.md). Reportes de seguridad: [SECURITY.md](SECURITY.md).
-Apache-2.0, ver [LICENSE](LICENSE) y [NOTICE](NOTICE).
+Ver [CONTRIBUTING.md](CONTRIBUTING.md). Apache-2.0, ver [LICENSE](LICENSE) y
+[NOTICE](NOTICE).
