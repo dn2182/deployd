@@ -414,7 +414,7 @@ probado en un servidor Windows real.
 
 ## Desarrollo local
 
-Python 3.11.4+, uv, Node 24, pnpm 11.
+Python 3.11.4+, uv, Node 24, pnpm 12.
 
 ```bash
 make install                                   # dependencias Python + web

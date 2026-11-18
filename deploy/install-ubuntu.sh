@@ -5,11 +5,11 @@ set -Eeuo pipefail
 # shellcheck source=deploy/lib.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/lib.sh"
 
-readonly PNPM_VERSION="11.20.0"
-readonly NODE_VERSION="24.22.0"
+readonly PNPM_VERSION="12.21.0"
+readonly NODE_VERSION="24.22.3"
 readonly NODE_MIN_MAJOR=22
 readonly NODE_MIN_MINOR=19
-readonly UV_VERSION="0.12.13"
+readonly UV_VERSION="0.13.9"
 readonly APT_PACKAGES=(ca-certificates curl git make nginx apache2-utils openssl python3)
 
 require_install_user() {
@@ -201,9 +201,11 @@ corepack_pnpm() {
     corepack prepare "pnpm@${PNPM_VERSION}" --activate
 }
 
-# A pnpm on PATH is only usable if it runs: distribution corepack shims can exist and still crash.
+# Usable means it runs and is the pinned version: distribution corepack shims can
+# exist and still crash, and an older pnpm cannot switch itself to a newer major.
+# Checked from / so no project's packageManager field changes the answer.
 pnpm_works() {
-  command -v pnpm >/dev/null 2>&1 && pnpm --version >/dev/null 2>&1
+  command -v pnpm >/dev/null 2>&1 && [[ $(cd / && pnpm --version 2>/dev/null) == "$PNPM_VERSION" ]]
 }
 
 ensure_pnpm() {
@@ -986,6 +988,8 @@ main() {
   parse_args "$@"
   require_install_user
   export PATH="$NODE_DIR/bin:$TOOL_BIN_DIR:$PATH"
+  # corepack must fetch the pinned pnpm without asking in the middle of an install.
+  export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 
   local script_dir repo_root domain admin_bind admin_port admin_username token_state db_path
   local mode=install installed roots

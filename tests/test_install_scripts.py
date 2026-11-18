@@ -646,3 +646,14 @@ def test_unsafe_env_directory_warns_without_stopping_the_install():
     )
     assert result.returncode == 0 and "continued" in result.stdout
     assert "/srv/shared is not a root-owned directory" in result.stderr
+
+
+def test_pnpm_must_be_the_pinned_version_to_count_as_working(tmp_path):
+    fake = tmp_path / "pnpm"
+    fake.write_text('#!/bin/sh\necho "$FAKE_PNPM_VERSION"\n')
+    fake.chmod(0o755)
+    body = f'PATH="{tmp_path}:$PATH"; pnpm_works && echo usable || echo stale'
+    pinned = run_function("install-ubuntu.sh", f'export FAKE_PNPM_VERSION="$PNPM_VERSION"; {body}')
+    assert pinned.stdout.strip() == "usable"
+    older = run_function("install-ubuntu.sh", f"export FAKE_PNPM_VERSION=11.20.0; {body}")
+    assert older.stdout.strip() == "stale"

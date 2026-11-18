@@ -25,7 +25,7 @@ jobs:
           node-version: 24
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
-          version: 11.20.0
+          version: 12.21.0
       - run: shellcheck deploy/install-ubuntu.sh deploy/uninstall-ubuntu.sh deploy/lib.sh tests/installer-smoke.sh
       # Lint, tests and audit already run in the python/web/dependency-audit jobs.
       - run: bash tests/installer-smoke.sh
@@ -92,7 +92,7 @@ jobs:
           persist-credentials: false
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
-          version: 11.20.0
+          version: 12.21.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
@@ -116,7 +116,7 @@ jobs:
           enable-cache: true
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
-          version: 11.20.0
+          version: 12.21.0
       - run: uv sync --extra dev --frozen
       - run: uv run --with pip-audit==2.10.1 pip-audit
       - working-directory: web
@@ -138,7 +138,7 @@ jobs:
           python-version: "3.12"
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
-          version: 11.20.0
+          version: 12.21.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
