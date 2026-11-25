@@ -135,7 +135,8 @@ assert env_file.read_text() == "DB_PASSWORD=original\n"
 
 # A restart that fails with the new file puts the previous one back by itself. The
 # restart command stands in for an app that cannot start without DB_PASSWORD.
-os.chown(env_file, 0, grp.getgrnam("deployd").gr_gid)
+for path in (folder, env_file):
+    os.chown(path, 0, grp.getgrnam("deployd").gr_gid)
 needs_key = {
     **spec,
     "restart": {"command": ["/usr/bin/grep", "-q", "^DB_PASSWORD=", str(env_file)]},
