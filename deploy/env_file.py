@@ -39,9 +39,16 @@ PART = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
 NAME = re.compile(r"(?:\.env(?:\.[A-Za-z0-9_-]{1,32})?|[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.env)\Z")
 ASSIGNMENT = re.compile(r"(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=(.*)\Z", re.DOTALL)
 OPERATIONS = ("check", "read", "write", "restore")
+VERSION = re.compile(r"\d{20}\.env\Z")
+# Characters a shell acts on. Apps that load the file with `source` need such values quoted.
+SHELL_SPECIAL = re.compile(r"[\s;&$|<>()`]")
 
 
 class Conflict(ValueError):
+    pass
+
+
+class Unconfirmed(ValueError):
     pass
 
 
@@ -174,7 +181,7 @@ def decode(data):
 
 
 def parse(text):
-    """Returns ({key: value}, [line numbers that are not assignments])."""
+    """Returns ({key: [value per definition]}, [line numbers that are not assignments])."""
     values, problems = {}, []
     lines = text.split("\n")
     index = 0
@@ -196,7 +203,7 @@ def parse(text):
                     value = "\n".join([value, *lines[index : end + 1]])
                     index = end + 1
                     break
-        values[key] = value
+        values.setdefault(key, []).append(value)
     return values, problems
 
 
@@ -205,6 +212,20 @@ def difference(before, after):
         "added": sorted(set(after) - set(before)),
         "removed": sorted(set(before) - set(after)),
         "changed": sorted(key for key in set(before) & set(after) if before[key] != after[key]),
+        "keys_before": len(before),
+        "keys_after": len(after),
+    }
+
+
+def cautions(values):
+    """Key names worth a second look before saving; values never leave this function."""
+    return {
+        "duplicates": sorted(key for key, defined in values.items() if len(defined) > 1),
+        "unquoted": sorted(
+            key
+            for key, defined in values.items()
+            if defined[-1][:1] not in ("'", '"') and SHELL_SPECIAL.search(defined[-1])
+        ),
     }
 
 
@@ -233,7 +254,7 @@ def backups(app, path):
 
 
 def stored(folder):
-    return sorted(name for name in os.listdir(folder) if re.fullmatch(r"\d{20}\.env", name))
+    return sorted(name for name in os.listdir(folder) if VERSION.fullmatch(name))
 
 
 def keep(folder, data):
@@ -291,11 +312,22 @@ def normalise(content):
     return data
 
 
-def save(directory, name, folder, current, metadata, data):
+def save(directory, name, folder, current, metadata, data, *, confirmed=None, dry_run=False):
+    """``confirmed`` lists the keys the caller agreed to remove; None skips that check."""
+    after = parse(decode(data))[0]
     result = {"saved": current != data, "sha256": digest(data)}
-    result.update(difference(parse(decode(current))[0], parse(decode(data))[0]))
+    result.update(difference(parse(decode(current))[0], after))
+    result.update(cautions(after))
+    if dry_run:
+        return {**result, "saved": False, "would_save": result["saved"]}
+    if confirmed is not None and result["removed"] != sorted(set(confirmed)):
+        raise Unconfirmed(
+            f"this save removes {len(result['removed'])} variable(s) that were not confirmed: "
+            + ", ".join(result["removed"][:40])
+        )
     if result["saved"]:
         kept = keep(folder, current)
+        result["kept"] = kept
         try:
             replace(directory, name, data, metadata)
         except OSError as exc:
@@ -332,21 +364,43 @@ def run(operation, app, value, payload=None):
         if operation == "read":
             return {**describe(metadata), "content": decode(current), "sha256": digest(current)}
         with backups(app, Path(value)) as folder:
+            payload = payload or {}
+            expected = payload.get("expected_sha256")
+            if expected and expected != digest(current):
+                raise Conflict(
+                    "the file changed on the server after it was loaded; reload it first"
+                )
             if operation == "restore":
                 names = stored(folder)
-                if not names:
+                # An automatic restore names the exact version its own save replaced.
+                version = payload.get("version") or (names[-1] if names else None)
+                if version is None:
                     raise ValueError("no earlier version of this file is stored")
-                fd = os.open(names[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=folder)
+                if (
+                    not isinstance(version, str)
+                    or not VERSION.fullmatch(version)
+                    or version not in names
+                ):
+                    raise ValueError("that earlier version is no longer stored")
+                fd = os.open(version, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=folder)
                 with os.fdopen(fd, "rb") as handle:
                     data = handle.read(MAX_BYTES + 1)
-            else:
-                data = normalise((payload or {}).get("content"))
-                expected = (payload or {}).get("expected_sha256")
-                if expected and expected != digest(current):
-                    raise Conflict(
-                        "the file changed on the server after it was loaded; reload it first"
-                    )
-            return save(directory, name, folder, current, metadata, data)
+                return save(directory, name, folder, current, metadata, data)
+            confirmed = payload.get("confirm_removed")
+            if not isinstance(confirmed, list) or not all(
+                isinstance(key, str) for key in confirmed
+            ):
+                raise ValueError("confirm_removed must be a list of variable names")
+            return save(
+                directory,
+                name,
+                folder,
+                current,
+                metadata,
+                normalise(payload.get("content")),
+                confirmed=confirmed,
+                dry_run=payload.get("dry_run") is True,
+            )
 
 
 def stored_for(app, value):
@@ -365,16 +419,21 @@ def main():
         signal.signal(signal.SIGALRM, deadline_expired)
         signal.alarm(30)
         payload = None
-        if sys.argv[1] == "write":
+        if sys.argv[1] in ("write", "restore"):
             raw = sys.stdin.buffer.read(4 * MAX_BYTES + 1)
             if len(raw) > 4 * MAX_BYTES:
                 raise ValueError("request is too large")
-            payload = json.loads(raw)
-            if not isinstance(payload, dict):
-                raise ValueError("invalid request")
+            # A restore of the newest version sends no request body.
+            if raw.strip() or sys.argv[1] == "write":
+                payload = json.loads(raw)
+                if not isinstance(payload, dict):
+                    raise ValueError("invalid request")
         print(json.dumps(run(*sys.argv[1:], payload)))
     except Conflict as exc:
         print(json.dumps({"error": str(exc), "code": "conflict"}))
+        return 1
+    except Unconfirmed as exc:
+        print(json.dumps({"error": str(exc), "code": "unconfirmed"}))
         return 1
     except (OSError, ValueError, KeyError) as exc:
         # File contents never reach this message: only paths and fixed text do.

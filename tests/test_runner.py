@@ -196,11 +196,14 @@ async def test_configured_http_health_is_still_checked(spec, monkeypatch, status
         lambda **kwargs: real_client(transport=httpx.MockTransport(respond), **kwargs),
     )
     if status == 200:
-        assert await runner._step_health(spec, {}, {}) == "healthy after 1 attempt(s)"
+        assert (
+            await runner._step_health(spec, {}, {})
+            == "healthy: 3 consecutive passes after 3 attempt(s)"
+        )
     else:
         with pytest.raises(RuntimeError, match="HTTP 503"):
             await runner._step_health(spec, {}, {})
-    assert requested == [spec.health.url]
+    assert set(requested) == {spec.health.url}
 
 
 async def test_sha_mismatch_fails_before_cutover(tmp_path, spec, store, monkeypatch):
@@ -669,6 +672,152 @@ async def test_restart_job_restarts_and_checks_health_without_touching_releases(
     assert all(ctx == {"restart_only": True} for _, ctx in ran)
     assert store.get_deploy(did)["status"] == "succeeded"
     assert not spec.releases_dir.exists() or not any(spec.releases_dir.iterdir())
+
+
+_REAL_CLIENT = httpx.AsyncClient
+
+
+def _health_responses(monkeypatch, answers):
+    """Serves the given statuses in order (an exception class raises); the last one repeats."""
+    seen = []
+
+    def respond(request):
+        answer = answers[min(len(seen), len(answers) - 1)]
+        seen.append(answer)
+        if isinstance(answer, int):
+            return httpx.Response(answer, text="status ok")
+        raise answer("slow", request=request)
+
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: _REAL_CLIENT(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    return seen
+
+
+async def test_health_needs_consecutive_passes_so_a_flapping_app_is_not_healthy(spec, monkeypatch):
+    flapping = spec.model_copy(
+        update={"health": spec.health.model_copy(update={"retries": 4, "passes": 3})}
+    )
+    seen = _health_responses(monkeypatch, [200, httpx.ReadTimeout, 200, 200, httpx.ReadTimeout])
+    with pytest.raises(RuntimeError, match="3 consecutive passes required.*ReadTimeout"):
+        await runner._step_health(flapping, {}, {})
+    assert len(seen) == 5
+
+    seen = _health_responses(monkeypatch, [503, 200, httpx.ReadTimeout, 200, 200, 200])
+    assert (
+        await runner._step_health(flapping, {}, {})
+        == "healthy: 3 consecutive passes after 6 attempt(s)"
+    )
+
+    single = spec.model_copy(update={"health": spec.health.model_copy(update={"passes": 1})})
+    _health_responses(monkeypatch, [200])
+    assert await runner._step_health(single, {}, {}) == "healthy after 1 attempt(s)"
+
+
+async def test_restart_checks_expectations_that_do_not_name_the_commit(spec, monkeypatch):
+    _health_responses(monkeypatch, [200])
+    fixed = spec.model_copy(
+        update={"health": spec.health.model_copy(update={"expect_body": "database ok"})}
+    )
+    with pytest.raises(RuntimeError, match="response body lacks"):
+        await runner._step_health(fixed, {}, {"restart_only": True})
+    by_commit = spec.model_copy(
+        update={"health": spec.health.model_copy(update={"expect_body": "{commit_sha}"})}
+    )
+    assert "healthy" in await runner._step_health(by_commit, {}, {"restart_only": True})
+
+
+def _restart_job(store):
+    return store.create_deploy(
+        "app-x", "0" * 40, "local-restart://env", "0" * 64, "restart:app-x", kind="restart"
+    )
+
+
+REVERT = {"version": "00000000000000000001.env", "expected_sha256": "d" * 64}
+
+
+async def test_unhealthy_restart_after_an_env_save_puts_the_previous_file_back(
+    spec, store, monkeypatch
+):
+    monkeypatch.setattr(runner, "get_app_registry", lambda: {"app-x": spec})
+    events = []
+
+    async def restore(operation, name, app_spec, payload=None):
+        events.append((operation, name, payload))
+        return {"saved": True}
+
+    async def command(*args, **kwargs):
+        events.append("restart")
+        return "restarted"
+
+    async def health(spec, deploy, ctx):
+        # Unhealthy with the new file, healthy again once the old one is back.
+        if ctx.get("rollback_verification"):
+            return "healthy"
+        raise RuntimeError("unhealthy after 3 attempts: HTTP 500")
+
+    monkeypatch.setattr(runner.envfile, "call", restore)
+    monkeypatch.setattr(runner, "_run_cmd", command)
+    monkeypatch.setitem(runner._STEP_FNS, "health", health)
+    did = _restart_job(store)
+    await runner.run_restart(store, "app-x", did, REVERT)
+
+    assert events == ["restart", ("restore", "app-x", REVERT), "restart"]
+    row = store.get_deploy(did)
+    assert row["status"] == "rolled_back"
+    rollback = [step for step in row["steps"] if step["step"] == "rollback"][-1]
+    assert rollback["status"] == "succeeded" and "previous .env restored" in rollback["output"]
+    audit = store.list_audit()[0]
+    assert (audit["actor"], audit["action"], audit["app"]) == (
+        "deployd",
+        "env.auto_restore",
+        "app-x",
+    )
+
+
+async def test_env_restore_that_does_not_cure_the_app_is_reported_as_failed(
+    spec, store, monkeypatch
+):
+    monkeypatch.setattr(runner, "get_app_registry", lambda: {"app-x": spec})
+
+    async def restore(*args):
+        return {"saved": True}
+
+    async def command(*args, **kwargs):
+        return "restarted"
+
+    async def health(spec, deploy, ctx):
+        raise RuntimeError("HTTP 500")
+
+    monkeypatch.setattr(runner.envfile, "call", restore)
+    monkeypatch.setattr(runner, "_run_cmd", command)
+    monkeypatch.setitem(runner._STEP_FNS, "health", health)
+    did = _restart_job(store)
+    await runner.run_restart(store, "app-x", did, REVERT)
+    row = store.get_deploy(did)
+    assert row["status"] == "failed"
+    assert "restored, but the app is still unhealthy" in row["steps"][-1]["output"]
+
+
+async def test_env_restore_refused_by_the_helper_leaves_the_job_failed(spec, store, monkeypatch):
+    monkeypatch.setattr(runner, "get_app_registry", lambda: {"app-x": spec})
+
+    async def refuse(*args):
+        raise runner.envfile.EnvFileError(409, "the file changed on the server")
+
+    async def health(spec, deploy, ctx):
+        raise RuntimeError("HTTP 500")
+
+    monkeypatch.setattr(runner.envfile, "call", refuse)
+    monkeypatch.setitem(runner._STEP_FNS, "health", health)
+    did = _restart_job(store)
+    await runner.run_restart(store, "app-x", did, REVERT)
+    row = store.get_deploy(did)
+    assert row["status"] == "failed"
+    assert ".env not restored: the file changed on the server" in row["steps"][-1]["output"]
+    assert store.list_audit() == []
 
 
 async def test_failed_restart_job_is_reported_as_failed(spec, store, monkeypatch):

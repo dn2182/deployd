@@ -15,6 +15,7 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
+from .. import envfile
 from ..config import AppSpec, get_app_github_token, get_app_registry
 from ..store.db import Store
 from . import directory_layout
@@ -519,15 +520,20 @@ async def _step_restart(spec: AppSpec, deploy: dict, ctx: dict) -> str:
     )
 
 
-def _expectation_problem(spec: AppSpec, resp: httpx.Response, sha: str) -> str | None:
+def _expectation_problem(spec: AppSpec, resp: httpx.Response, sha: str | None) -> str | None:
+    """``sha`` is None when the live commit is unknown; expectations that name it are skipped."""
     health = spec.health
-    if health.expect_body:
-        expected = health.expect_body.replace("{commit_sha}", sha)
+
+    def applies(expectation: str | None) -> bool:
+        return bool(expectation) and (sha is not None or "{commit_sha}" not in expectation)
+
+    if applies(health.expect_body):
+        expected = health.expect_body.replace("{commit_sha}", sha or "")
         if expected not in resp.text[:1_048_576]:
             return "response body lacks the expected content"
-    if health.expect_header:
+    if applies(health.expect_header):
         name, _, value = health.expect_header.partition(":")
-        expected = value.strip().replace("{commit_sha}", sha)
+        expected = value.strip().replace("{commit_sha}", sha or "")
         if resp.headers.get(name.strip()) != expected:
             return f"header {name.strip()} did not match the expected value"
     return None
@@ -536,26 +542,43 @@ def _expectation_problem(spec: AppSpec, resp: httpx.Response, sha: str) -> str |
 async def _step_health(spec: AppSpec, deploy: dict, ctx: dict) -> str:
     if not spec.health.url:
         return "HTTP health check skipped: no URL configured"
-    sha = deploy.get("commit_sha", "") if deploy else ""
     # A rollback or a plain restart serves an earlier commit than this row names.
-    check_expectations = not (ctx.get("rollback_verification") or ctx.get("restart_only"))
+    sha = (
+        None
+        if ctx.get("rollback_verification") or ctx.get("restart_only")
+        else (deploy.get("commit_sha", "") if deploy else "")
+    )
+    passes = spec.health.passes
+    # `retries` stays the number of tries the app gets to answer well for the first time.
+    attempts = spec.health.retries + passes - 1
+    streak = 0
     last_error = "no attempts made"
     async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
-        for attempt in range(1, spec.health.retries + 1):
+        for attempt in range(1, attempts + 1):
+            problem = None
             try:
                 resp = await client.get(spec.health.url)
                 if 200 <= resp.status_code < 300:
-                    problem = _expectation_problem(spec, resp, sha) if check_expectations else None
-                    if problem is None:
-                        return f"healthy after {attempt} attempt(s)"
-                    last_error = problem
+                    problem = _expectation_problem(spec, resp, sha)
                 else:
-                    last_error = f"HTTP {resp.status_code}"
+                    problem = f"HTTP {resp.status_code}"
             except httpx.HTTPError as exc:
-                last_error = exc.__class__.__name__
-            if attempt < spec.health.retries:
-                await asyncio.sleep(spec.health.interval_seconds)
-    raise RuntimeError(f"unhealthy after {spec.health.retries} attempts: {last_error}")
+                problem = exc.__class__.__name__
+            if problem is None:
+                streak += 1
+                if streak >= passes:
+                    if passes == 1:
+                        return f"healthy after {attempt} attempt(s)"
+                    return f"healthy: {passes} consecutive passes after {attempt} attempt(s)"
+            else:
+                streak = 0
+                last_error = problem
+            if attempts - attempt < passes - streak:
+                break
+            await asyncio.sleep(spec.health.interval_seconds)
+    raise RuntimeError(
+        f"unhealthy after {attempt} attempts ({passes} consecutive passes required): {last_error}"
+    )
 
 
 def child_env(extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -939,19 +962,67 @@ async def run_cleanup(store: Store, app: str, deploy_id: str, name: str) -> None
     await _protected(cleanup())
 
 
-async def run_restart(store: Store, app: str, deploy_id: str) -> None:
-    """Restart and health-check the live release, for configuration changes made outside a deploy."""
+async def run_restart(store: Store, app: str, deploy_id: str, revert: dict | None = None) -> None:
+    """Restart and health-check the live release after an .env change.
+
+    ``revert`` names the stored .env version the change replaced. When the app does not
+    come back healthy that version is restored, the same way a failed deploy rolls back.
+    """
     spec = get_app_registry()[app]
     deploy = store.get_deploy(deploy_id)
 
     async def restart():
         store.set_status(deploy_id, "running")
-        failed = await _run_steps(
-            store, spec, deploy, {"restart_only": True}, ["restart", "health"]
-        )
-        store.set_status(deploy_id, "failed" if failed else "succeeded", finished=True)
+        ctx = {"restart_only": True}
+        failed = await _run_steps(store, spec, deploy, ctx, ["restart", "health"])
+        if failed is None:
+            status = "succeeded"
+        elif revert and await _revert_env(store, spec, app, deploy_id, revert, ctx):
+            status = "rolled_back"
+        else:
+            status = "failed"
+        store.set_status(deploy_id, status, finished=True)
 
     await _protected(restart())
+
+
+async def _revert_env(
+    store: Store, spec: AppSpec, app: str, deploy_id: str, revert: dict, ctx: dict
+) -> bool:
+    store.add_step(deploy_id, "rollback", "running")
+    try:
+        await envfile.call("restore", app, spec, revert)
+    except Exception as exc:
+        store.add_step(
+            deploy_id, "rollback", "failed", output=f".env not restored: {_error_text(exc)}"
+        )
+        log.error("restart %s: .env restore failed, %s needs attention", deploy_id, app)
+        return False
+    store.audit(
+        "deployd",
+        "env.auto_restore",
+        app,
+        f"previous version restored after a failed restart ({deploy_id})",
+        app=app,
+    )
+    try:
+        await _verify_rollback(spec, ctx)
+    except Exception as exc:
+        store.add_step(
+            deploy_id,
+            "rollback",
+            "failed",
+            output=f"previous .env restored, but the app is still unhealthy: {_error_text(exc)}",
+        )
+        log.error("restart %s: %s unhealthy after .env restore", deploy_id, app)
+        return False
+    verification = (
+        "health verified" if spec.health.url else "HTTP health check skipped: no URL configured"
+    )
+    store.add_step(
+        deploy_id, "rollback", "succeeded", output=f"previous .env restored; {verification}"
+    )
+    return True
 
 
 async def run_activation(store: Store, app: str, deploy_id: str, name: str) -> None:

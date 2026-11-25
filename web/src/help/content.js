@@ -99,7 +99,7 @@ const en = [
   },
   {
     q: "Can I edit an app's .env file from here?",
-    a: 'Yes, if the server has the .env editor enabled. Edit the app, set Environment file path (for example /etc/apps-env/myapp/myapp.env) and an Environment file tab appears. Values are hidden until you reveal them, each save keeps the previous version on the server so you can restore it, and you can restart the app right after saving. The audit log records which keys changed, never the values. Each server has its own file, so repeat the change on every node.',
+    a: 'Yes, if the server has the .env editor enabled. Edit the app, set Environment file path (for example /etc/apps-env/myapp/myapp.env) and an Environment file tab appears. Values are hidden until you reveal them, and each save keeps the previous version on the server so you can restore it. Before saving you see which variables are added, changed and removed; removing variables asks for the app name. With restart on, a failed restart or health check puts the previous file back by itself. The audit log records which keys changed, never the values. Each server has its own file, so repeat the change on every node.',
   },
   {
     q: 'Can I give a teammate access to only some applications?',
@@ -206,7 +206,7 @@ const es = [
   },
   {
     q: 'Puedo editar el archivo .env de una app desde aquí?',
-    a: 'Sí, si el servidor tiene habilitado el editor de .env. Edita la app, define Ruta del archivo de entorno (por ejemplo /etc/apps-env/myapp/myapp.env) y aparece la pestaña Archivo de entorno. Los valores están ocultos hasta que los muestres, cada guardado conserva la versión anterior en el servidor para poder restaurarla, y puedes reiniciar la app justo después de guardar. El audit log registra qué claves cambiaron, nunca los valores. Cada servidor tiene su propio archivo, así que repite el cambio en cada nodo.',
+    a: 'Sí, si el servidor tiene habilitado el editor de .env. Edita la app, define Ruta del archivo de entorno (por ejemplo /etc/apps-env/myapp/myapp.env) y aparece la pestaña Archivo de entorno. Los valores están ocultos hasta que los muestres, y cada guardado conserva la versión anterior en el servidor para poder restaurarla. Antes de guardar ves qué variables se agregan, cambian y eliminan; eliminar variables pide el nombre de la app. Con el restart activo, si el restart o el health check falla se vuelve a poner el archivo anterior automáticamente. El audit log registra qué claves cambiaron, nunca los valores. Cada servidor tiene su propio archivo, así que repite el cambio en cada nodo.',
   },
   {
     q: 'Puedo darle a alguien del equipo acceso solo a algunas aplicaciones?',

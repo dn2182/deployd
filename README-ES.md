@@ -182,7 +182,7 @@ preguntas comunes en inglés y español.
 | Kind | **Static site** (verifica que exista `index.html`) o **Service** (ejecuta tu comando de restart) |
 | Local site path | solo sitios estáticos: la carpeta que Nginx ya sirve |
 | Restart command | programa y argumentos, sin shell; normalmente `sudo systemctl restart <unit>` |
-| Health URL | opcional; un health check fallido tras el cambio hace rollback |
+| Health URL | opcional; un health check fallido tras el cambio hace rollback. Debe responder bien tres veces seguidas (`health.passes`), así que apúntalo a un endpoint que llegue a la base de datos de la app |
 | Expected body / header | opcional; `{commit_sha}` prueba que responde la versión nueva |
 | Hooks | `before_cutover` (en la carpeta de la versión nueva) y `after_health` (si falla hay rollback) |
 | Environment passthrough | variables del servicio que tus comandos pueden ver, por ejemplo un DSN |
@@ -305,14 +305,22 @@ Con el editor de .env habilitado al instalar, manejas el archivo desde la UI:
 2. Abre la pestaña **Environment file** y pulsa **Open file**. Los valores
    están ocultos hasta que muestres uno. **Edit as text** muestra el archivo
    crudo.
-3. **Save file**, con la opción de reiniciar la app y revisar su health.
+3. **Save file**. Antes de escribir nada ves qué variables se agregan,
+   cambian y eliminan. Eliminar variables pide escribir el nombre de la app.
+   Los valores sin comillas con espacios o caracteres de shell se señalan.
+4. Deja **Restart the app** activo para aplicar el cambio y revisar su health.
 
 Qué esperar:
 
+- Si el restart o el health check falla, se vuelve a poner el archivo
+  anterior y la app se reinicia de nuevo, igual que el rollback de un
+  deploy. Requiere un health URL; sin él solo se nota un comando de restart
+  que falla.
 - El archivo conserva su dueño y permisos.
 - Cada guardado conserva la versión anterior en el servidor (las diez más
   recientes), y **Restore previous version** la recupera.
-- El audit log registra quién abrió o cambió el archivo y qué claves
+- El audit log registra quién abrió o cambió el archivo, la cantidad de
+  variables antes y después, y qué claves se eliminaron, agregaron o
   cambiaron, nunca los valores.
 - Un guardado se rechaza si el archivo cambió en el servidor después de
   abrirlo.

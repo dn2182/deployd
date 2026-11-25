@@ -5,12 +5,14 @@ import { renderWith } from '../test-utils.jsx'
 
 const STATUS = { path: '/etc/api/api.env', available: true, exists: true, owner: 'root', group: 'api', mode: '0640', backups: 0 }
 const CONTENT = '# database\nDB_PASSWORD=hunter2\nexport API_URL=https://api.example.com\n'
-const SERVICE = { restart: { command: ['sudo', 'systemctl', 'restart', 'api'] } }
+const SERVICE = { restart: { command: ['sudo', 'systemctl', 'restart', 'api'] }, health: { url: 'http://127.0.0.1:5000/healthz' } }
+const PREVIEW = { saved: false, would_save: true, added: [], removed: [], changed: ['DB_PASSWORD'], keys_before: 2, keys_after: 2, unquoted: [], duplicates: [] }
 
 function backend(overrides = {}) {
   const routes = {
     'GET /admin/apps/api/env': STATUS,
     'GET /admin/apps/api/env/content': { ...STATUS, content: CONTENT, sha256: 'c'.repeat(64) },
+    'POST /admin/apps/api/env/preview': PREVIEW,
     'PUT /admin/apps/api/env': { saved: true, deploy_id: null, added: [], removed: [], changed: ['DB_PASSWORD'] },
     'POST /admin/apps/api/env/restore': { saved: true, deploy_id: null },
     ...overrides,
@@ -51,13 +53,14 @@ describe('env editor', () => {
     expect(await screen.findByRole('button', { name: 'Save file' })).toBeDisabled()
     fireEvent.change(screen.getByLabelText('Value of DB_PASSWORD'), { target: { value: 'n3w' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save file' }))
-    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Save file' }))
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Save file' }))
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
     expect(call).toHaveBeenCalledWith('/admin/apps/api/env', {
       method: 'PUT',
       body: JSON.stringify({
         content: '# database\nDB_PASSWORD=n3w\nexport API_URL=https://api.example.com\n',
         expected_sha256: 'c'.repeat(64),
+        confirm_removed: [],
         restart: true,
       }),
     })
@@ -74,10 +77,10 @@ describe('env editor', () => {
     fireEvent.change(names.at(-1), { target: { value: 'NEW_KEY' } })
     fireEvent.change(screen.getByLabelText('Value of NEW_KEY'), { target: { value: '1' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save file' }))
-    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Save file' }))
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Save file' }))
     expect(await screen.findByText('Environment file saved.')).toBeInTheDocument()
     expect(JSON.parse(call.mock.calls.at(-2)[1].body)).toEqual({
-      content: '# database\nDB_PASSWORD=hunter2\nNEW_KEY=1\n', expected_sha256: 'c'.repeat(64), restart: false,
+      content: '# database\nDB_PASSWORD=hunter2\nNEW_KEY=1\n', expected_sha256: 'c'.repeat(64), confirm_removed: [], restart: false,
     })
     expect(onChanged).not.toHaveBeenCalled()
   })
@@ -99,10 +102,54 @@ describe('env editor', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Open file' }))
     fireEvent.change(await screen.findByLabelText('Value of DB_PASSWORD'), { target: { value: 'x' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save file' }))
-    const dialog = screen.getByRole('alertdialog')
+    const dialog = await screen.findByRole('alertdialog')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save file' }))
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('reload it first')
     expect(screen.getByLabelText('Value of DB_PASSWORD')).toHaveValue('x')
+  })
+
+  it('lists removed variables and asks for the app name before saving', async () => {
+    const call = backend({
+      'POST /admin/apps/api/env/preview': { ...PREVIEW, changed: [], removed: ['DB_HOST', 'JWT_KEY'], keys_before: 122, keys_after: 120 },
+    })
+    setup(call)
+    fireEvent.click(await screen.findByRole('button', { name: 'Open file' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove API_URL' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save file' }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(within(dialog).getByText('Variables: 122 before, 120 after.')).toBeInTheDocument()
+    expect(within(dialog).getByText(/deletes 2 variable/)).toBeInTheDocument()
+    expect(within(dialog).getByText('DB_HOST, JWT_KEY')).toBeInTheDocument()
+    const confirm = within(dialog).getByRole('button', { name: 'Remove variables and save' })
+    expect(confirm).toBeDisabled()
+    fireEvent.change(within(dialog).getByLabelText('Type api to confirm removing these variables'), { target: { value: 'api' } })
+    fireEvent.click(confirm)
+    expect(await screen.findByText('Environment file saved.')).toBeInTheDocument()
+    expect(JSON.parse(call.mock.calls.at(-2)[1].body).confirm_removed).toEqual(['DB_HOST', 'JWT_KEY'])
+  })
+
+  it('flags unquoted shell characters in edited values and duplicate names', async () => {
+    setup(backend({
+      'POST /admin/apps/api/env/preview': { ...PREVIEW, unquoted: ['DB_PASSWORD', 'OLD_ONE'], duplicates: ['API_URL'] },
+    }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Open file' }))
+    fireEvent.change(await screen.findByLabelText('Value of DB_PASSWORD'), { target: { value: 'a;b' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save file' }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(within(dialog).getByText(/Unquoted values.*: DB_PASSWORD\. If the app/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/1 other unquoted value/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/Defined more than once: API_URL/)).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Save file' })).toBeEnabled()
+  })
+
+  it('does not open the dialog when the preview is refused, and says what restart does', async () => {
+    setup(backend({ 'POST /admin/apps/api/env/preview': new Error('line 2 is not KEY=value or a # comment') }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Open file' }))
+    expect(await screen.findByText(/the previous file is put back/)).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Value of DB_PASSWORD'), { target: { value: 'x' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save file' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('line 2 is not KEY=value')
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
 
   it('offers restore only when an earlier version exists and asks for the app name', async () => {

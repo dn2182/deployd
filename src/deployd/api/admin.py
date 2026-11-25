@@ -480,9 +480,14 @@ async def repair_website(request: Request, name: AppName, confirmation: WebsiteC
     return {"deploy_id": deploy_id, "status": "queued"}
 
 
-class EnvFileWrite(BaseModel):
+class EnvFilePreview(BaseModel):
     content: str = Field(max_length=262_144)
     expected_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
+class EnvFileWrite(EnvFilePreview):
+    # Every key the save drops must be named here, so a variable never disappears unnoticed.
+    confirm_removed: list[str] = Field(default_factory=list, max_length=2000)
     restart: bool = False
 
 
@@ -505,14 +510,19 @@ async def _env_call(operation: str, name: str, spec: AppSpec, payload: dict | No
         raise HTTPException(exc.status, str(exc)) from None
 
 
-def _env_change_detail(result: dict) -> str | None:
-    # Key names only: values never reach the audit log.
-    parts = [
+def _env_change_detail(result: dict, restart: bool) -> str:
+    # Key names only: values never reach the audit log. Removals come first so the
+    # length limit never hides them.
+    parts = [f"variables: {result.get('keys_before', '?')} to {result.get('keys_after', '?')}"]
+    parts += [
         f"{label}: {', '.join(result[label])}"
-        for label in ("changed", "added", "removed")
+        for label in ("removed", "added", "changed")
         if result.get(label)
     ]
-    return "; ".join(parts)[:500] or None
+    if len(parts) == 1:
+        parts.append("no variable changed (comments, order or spacing only)")
+    parts.append("restart queued" if restart else "no restart")
+    return "; ".join(parts)[:1000]
 
 
 def _after_env_change(request: Request, name: str, result: dict, restart: bool) -> dict:
@@ -522,7 +532,11 @@ def _after_env_change(request: Request, name: str, result: dict, restart: bool) 
             deploy_id = request.app.state.store.create_deploy(
                 name, "0" * 40, "local-restart://env", "0" * 64, f"restart:{name}", kind="restart"
             )
-            request.app.state.queue.enqueue_restart(name, deploy_id)
+            # The job puts this exact version back when the app does not come up healthy.
+            revert = {"version": result.get("kept"), "expected_sha256": result.get("sha256")}
+            request.app.state.queue.enqueue_restart(
+                name, deploy_id, revert if revert["version"] else None
+            )
     return {**result, "deploy_id": deploy_id}
 
 
@@ -546,16 +560,40 @@ async def read_env_file(request: Request, name: AppName):
     return {"path": str(spec.env_file), **result}
 
 
+@app_router.post("/env/preview")
+async def preview_env_file(request: Request, name: AppName, body: EnvFilePreview):
+    """What a save would change, by key name. Nothing is written."""
+    spec = _env_app(request, name)
+    return await _env_call(
+        "write",
+        name,
+        spec,
+        {
+            "content": body.content,
+            "expected_sha256": body.expected_sha256,
+            "confirm_removed": [],
+            "dry_run": True,
+        },
+    )
+
+
 @app_router.put("/env")
 async def write_env_file(request: Request, name: AppName, body: EnvFileWrite):
     spec = _env_app(request, name)
     if request.app.state.queue.is_removing(name):
         raise HTTPException(status_code=409, detail="app removal is in progress")
     result = await _env_call(
-        "write", name, spec, {"content": body.content, "expected_sha256": body.expected_sha256}
+        "write",
+        name,
+        spec,
+        {
+            "content": body.content,
+            "expected_sha256": body.expected_sha256,
+            "confirm_removed": body.confirm_removed,
+        },
     )
     if result.get("saved"):
-        _audit(request, "env.write", name, _env_change_detail(result))
+        _audit(request, "env.write", name, _env_change_detail(result, body.restart))
     return _after_env_change(request, name, result, body.restart)
 
 
@@ -568,7 +606,7 @@ async def restore_env_file(request: Request, name: AppName, body: EnvFileRestore
         raise HTTPException(status_code=409, detail="app removal is in progress")
     result = await _env_call("restore", name, spec)
     if result.get("saved"):
-        _audit(request, "env.restore", name, _env_change_detail(result))
+        _audit(request, "env.restore", name, _env_change_detail(result, body.restart))
     return _after_env_change(request, name, result, body.restart)
 
 

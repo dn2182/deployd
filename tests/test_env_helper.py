@@ -31,8 +31,13 @@ def env(tmp_path, monkeypatch):
     return path
 
 
-def write(path, content, expected=None):
-    return helper.run("write", "api", str(path), {"content": content, "expected_sha256": expected})
+def write(path, content, expected=None, removed=None, **extra):
+    """Confirms whatever the content removes, unless the test names the keys itself."""
+    if removed is None:
+        kept = helper.parse(content)[0]
+        removed = [key for key in helper.parse(path.read_text())[0] if key not in kept]
+    payload = {"content": content, "expected_sha256": expected, "confirm_removed": removed}
+    return helper.run("write", "api", str(path), {**payload, **extra})
 
 
 def test_read_returns_content_metadata_and_digest(env):
@@ -84,6 +89,58 @@ def test_restore_swaps_in_the_previous_version_and_can_be_undone(env):
     assert env.read_text() == CONTENT
     helper.run("restore", "api", str(env))
     assert env.read_text() == "A=1\n"
+
+
+def test_removed_keys_must_be_confirmed_by_name(env):
+    with pytest.raises(helper.Unconfirmed, match="removes 1 variable.*API_KEY") as refused:
+        write(env, "DB_URL=postgres://db/app\n", removed=[])
+    assert "postgres" not in str(refused.value)
+    with pytest.raises(helper.Unconfirmed):
+        write(env, "DB_URL=postgres://db/app\n", removed=["API_KEY", "OTHER"])
+    assert env.read_text() == CONTENT
+    assert helper.run("check", "api", str(env))["backups"] == 0
+    result = write(env, "DB_URL=postgres://db/app\n", removed=["API_KEY"])
+    assert result["saved"] and (result["keys_before"], result["keys_after"]) == (2, 1)
+    with pytest.raises(ValueError, match="confirm_removed"):
+        helper.run("write", "api", str(env), {"content": "A=1\n"})
+
+
+def test_preview_reports_the_change_and_writes_nothing(env):
+    inode = env.stat().st_ino
+    content = "DB_URL=Server=db;Database=app\nQUOTED='a b; $c'\nPLAIN=ok\nPLAIN=again\nPATHS=a b\n"
+    result = write(env, content, removed=[], dry_run=True)
+    assert not result["saved"] and result["would_save"]
+    assert (result["added"], result["removed"], result["changed"]) == (
+        ["PATHS", "PLAIN", "QUOTED"],
+        ["API_KEY"],
+        ["DB_URL"],
+    )
+    assert (result["keys_before"], result["keys_after"]) == (2, 4)
+    assert result["unquoted"] == ["DB_URL", "PATHS"] and result["duplicates"] == ["PLAIN"]
+    assert "Server" not in str(result) and "kept" not in result
+    assert env.stat().st_ino == inode and env.read_text() == CONTENT
+    assert helper.run("check", "api", str(env))["backups"] == 0
+
+
+def test_a_change_to_an_earlier_duplicate_definition_is_reported(env):
+    write(env, "A=1\nA=2\n")
+    assert write(env, "A=changed\nA=2\n")["changed"] == ["A"]
+
+
+def test_restore_of_a_named_version_checks_the_file_is_still_the_saved_one(env):
+    saved = write(env, "A=1\n")
+    revert = {"version": saved["kept"], "expected_sha256": saved["sha256"]}
+    write(env, "A=2\n")
+    with pytest.raises(helper.Conflict):
+        helper.run("restore", "api", str(env), revert)
+    assert env.read_text() == "A=2\n"
+    newer = write(env, "A=1\n")
+    assert newer["sha256"] == saved["sha256"]
+    assert helper.run("restore", "api", str(env), revert)["saved"]
+    assert env.read_text() == CONTENT
+    for version in ("../../x.env", "00000000000000000000.env", 7):
+        with pytest.raises(ValueError, match="no longer stored"):
+            helper.run("restore", "api", str(env), {"version": version})
 
 
 def test_restore_without_history_is_refused(env):
@@ -174,7 +231,7 @@ def test_missing_file_reports_absence_and_is_never_created(env):
     missing = env.parent / "other.env"
     assert helper.run("check", "api", str(missing)) == {"exists": False}
     with pytest.raises(ValueError, match="does not exist"):
-        write(missing, "A=1\n")
+        write(missing, "A=1\n", removed=[])
     assert not missing.exists()
 
 

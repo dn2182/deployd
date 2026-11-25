@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Eye, EyeOff, Plus, Trash2 } from 'lucide-react'
+import { Eye, EyeOff, Plus, Trash2, TriangleAlert } from 'lucide-react'
 import { useT } from '../i18n/index.js'
 import { useToast } from '../hooks/useToast.js'
 import { ConfirmDialog } from './ConfirmDialog.jsx'
@@ -7,6 +7,48 @@ import { Button, Checkbox, ErrorMessage, Help, IconButton, Notice, Skeleton, inp
 
 const ASSIGNMENT = /^(\s*(?:export\s+)?)([A-Za-z_][A-Za-z0-9_.-]*)(\s*=)(.*)$/
 let nextRowId = 0
+
+function KeyList({ label, keys, tone = 'text-text' }) {
+  if (!keys?.length) return null
+  return (
+    <div className="flex flex-col gap-1">
+      <span className={`text-xs font-medium ${tone}`}>{label}</span>
+      <code className="max-h-28 overflow-auto break-all rounded-card border border-border bg-surface px-2.5 py-1.5 font-mono text-[11px] leading-relaxed text-text">
+        {keys.join(', ')}
+      </code>
+    </div>
+  )
+}
+
+function Caution({ children }) {
+  return (
+    <p role="alert" className="m-0 flex items-start gap-2 rounded-card border border-danger/25 bg-danger-soft px-3 py-2 text-xs text-danger">
+      <TriangleAlert size={15} className="mt-px shrink-0" />
+      <span className="min-w-0 break-words">{children}</span>
+    </p>
+  )
+}
+
+// What the server says a save would do. Key names only: the server never returns values here.
+function Review({ review, t }) {
+  const touched = new Set([...review.added, ...review.changed])
+  const unquoted = review.unquoted.filter((key) => touched.has(key))
+  const untouched = review.unquoted.length - unquoted.length
+  const quiet = !review.added.length && !review.changed.length && !review.removed.length
+  return (
+    <>
+      <p className="m-0 text-xs text-text">{t('env.review_count', { before: review.keys_before, after: review.keys_after })}</p>
+      {review.removed.length > 0 && <Caution>{t('env.review_removed_warning', { count: review.removed.length })}</Caution>}
+      <KeyList label={t('env.review_removed')} keys={review.removed} tone="text-danger" />
+      <KeyList label={t('env.review_changed')} keys={review.changed} />
+      <KeyList label={t('env.review_added')} keys={review.added} />
+      {quiet && <Help>{t('env.review_quiet')}</Help>}
+      {unquoted.length > 0 && <Caution>{t('env.review_unquoted', { keys: unquoted.join(', ') })}</Caution>}
+      {untouched > 0 && <Help>{t('env.review_unquoted_existing', { count: untouched })}</Help>}
+      {review.duplicates.length > 0 && <Caution>{t('env.review_duplicates', { keys: review.duplicates.join(', ') })}</Caution>}
+    </>
+  )
+}
 
 // Lines that are not assignments (comments, blanks, continuation lines) are kept verbatim.
 function toRows(text) {
@@ -38,6 +80,7 @@ export default function EnvEditor({ name, spec, call, onChanged, revision = 0 })
   const static_ = spec?.restart?.command?.[0] === '/usr/bin/test'
   const [restart, setRestart] = useState(!static_)
   const [pending, setPending] = useState(false)
+  const [review, setReview] = useState(null)
   const requestId = useRef(0)
   const base = `/admin/apps/${encodeURIComponent(name)}/env`
 
@@ -104,19 +147,39 @@ export default function EnvEditor({ name, spec, call, onChanged, revision = 0 })
     await loadStatus()
     if (result.deploy_id) onChanged()
   }
+  // The server works out what would change, so the list shown is the one it enforces.
+  const preview = async () => {
+    setPending(true)
+    setError(null)
+    try {
+      setReview(await call(`${base}/preview`, {
+        method: 'POST', body: JSON.stringify({ content: current, expected_sha256: file.sha256 }),
+      }))
+    } catch (err) {
+      setError(err.message)
+      return false
+    } finally {
+      setPending(false)
+    }
+  }
   const save = async () => {
     const result = await call(base, {
-      method: 'PUT', body: JSON.stringify({ content: current, expected_sha256: file.sha256, restart }),
+      method: 'PUT',
+      body: JSON.stringify({ content: current, expected_sha256: file.sha256, confirm_removed: review.removed, restart }),
     })
     await finish(result, 'env.saved')
   }
+  const removing = (review?.removed.length ?? 0) > 0
   const restore = async () => {
     const result = await call(`${base}/restore`, { method: 'POST', body: JSON.stringify({ confirm: name, restart }) })
     await finish(result, 'env.restored')
   }
 
   const restartBox = (
-    <Checkbox label={t('env.restart')} checked={restart} onChange={(event) => setRestart(event.target.checked)} />
+    <div className="flex flex-col gap-1">
+      <Checkbox label={t('env.restart')} checked={restart} onChange={(event) => setRestart(event.target.checked)} />
+      {restart && !static_ && <Help>{t(spec?.health?.url ? 'env.restart_help' : 'env.restart_no_health')}</Help>}
+    </div>
   )
 
   return (
@@ -196,12 +259,18 @@ export default function EnvEditor({ name, spec, call, onChanged, revision = 0 })
           {restartBox}
           <div className="flex flex-wrap gap-2">
             <ConfirmDialog
-              trigger={<Button variant="primary" disabled={!dirty}>{t('env.save')}</Button>}
+              trigger={<Button variant="primary" disabled={!dirty || pending}>{t('env.save')}</Button>}
               title={t('env.save_title')}
               description={t('env.save_description')}
-              confirmLabel={t('env.save')}
+              confirmLabel={t(removing ? 'env.save_removing' : 'env.save')}
+              destructive={removing}
+              confirmationValue={removing ? name : undefined}
+              confirmationLabel={removing ? t('env.review_confirm', { name }) : undefined}
+              onOpen={preview}
               onConfirm={save}
-            />
+            >
+              {review && <Review review={review} t={t} />}
+            </ConfirmDialog>
             <Button onClick={close}>{t('env.close')}</Button>
           </div>
         </>

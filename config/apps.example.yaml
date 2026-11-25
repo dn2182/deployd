@@ -46,6 +46,8 @@ apps:
       url: "http://127.0.0.1:8000/healthz"
       retries: 10
       interval_seconds: 3
+      # consecutive good answers required; a 200 followed by a timeout is not healthy
+      passes: 3
       # optional assertions so a stale process answering 200 cannot pass;
       # {commit_sha} is replaced with the deployed SHA
       expect_body: null                            # e.g. "{commit_sha}"

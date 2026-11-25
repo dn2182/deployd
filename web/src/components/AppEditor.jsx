@@ -132,6 +132,7 @@ export default function AppEditor({ name: existingName, initialSpec, call, onSav
         url: form.healthUrl.trim() || null,
         retries: base.health?.retries ?? 5,
         interval_seconds: base.health?.interval_seconds ?? 3,
+        passes: base.health?.passes ?? 3,
         expect_body: form.expectBody.trim() || null,
         expect_header: form.expectHeader.trim() || null,
       },

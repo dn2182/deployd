@@ -172,14 +172,9 @@ async def test_health_expectations_reject_stale_process(tmp_path):
         with pytest.raises(RuntimeError, match="response body lacks"):
             await runner._step_health(spec, {"commit_sha": "new"}, {})
         assert len(seen) == 2
-        assert (
-            await runner._step_health(spec, {"commit_sha": "old"}, {})
-            == "healthy after 1 attempt(s)"
-        )
-        assert (
-            await runner._step_health(spec, {}, {"rollback_verification": True})
-            == "healthy after 1 attempt(s)"
-        )
+        passed = "healthy: 3 consecutive passes after 3 attempt(s)"
+        assert await runner._step_health(spec, {"commit_sha": "old"}, {}) == passed
+        assert await runner._step_health(spec, {}, {"rollback_verification": True}) == passed
     finally:
         runner.httpx.AsyncClient = original
 

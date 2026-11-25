@@ -59,6 +59,9 @@ def helper(monkeypatch):
             "added": ["NEW"],
             "removed": [],
             "changed": ["DB_PASSWORD"],
+            "keys_before": 1,
+            "keys_after": 2,
+            "kept": "00000000000000000001.env",
             "backups": 2,
         },
         "restore": {
@@ -67,6 +70,9 @@ def helper(monkeypatch):
             "added": [],
             "removed": ["NEW"],
             "changed": [],
+            "keys_before": 2,
+            "keys_after": 1,
+            "kept": "00000000000000000002.env",
             "backups": 3,
         },
     }
@@ -137,12 +143,18 @@ def test_write_passes_content_to_the_helper_and_audits_key_names_only(env, helpe
                 "write",
                 "app-x",
                 "/etc/app-x/app-x.env",
-                {"content": "DB_PASSWORD=s3cret\nNEW=1\n", "expected_sha256": SHA},
+                {
+                    "content": "DB_PASSWORD=s3cret\nNEW=1\n",
+                    "expected_sha256": SHA,
+                    "confirm_removed": [],
+                },
             )
         ]
         audit = client.get("/admin/audit", headers=ADMIN).json()[0]
         assert audit["action"] == "env.write"
-        assert audit["detail"] == "changed: DB_PASSWORD; added: NEW"
+        assert audit["detail"] == (
+            "variables: 1 to 2; added: NEW; changed: DB_PASSWORD; no restart"
+        )
         assert "s3cret" not in str(audit)
 
 
@@ -153,7 +165,15 @@ def test_write_can_queue_a_restart_of_the_live_release(env, helper):
         body = client.put(
             "/admin/apps/app-x/env", headers=ADMIN, json={"content": "A=1\n", "restart": True}
         ).json()
-        assert queued == [("app-x", body["deploy_id"])]
+        assert queued == [
+            (
+                "app-x",
+                body["deploy_id"],
+                {"version": "00000000000000000001.env", "expected_sha256": "d" * 64},
+            )
+        ]
+        audit = client.get("/admin/audit", headers=ADMIN).json()[0]
+        assert audit["detail"].endswith("restart queued")
         row = client.app.state.store.get_deploy(body["deploy_id"])
         assert row["kind"] == "restart" and row["triggered_by"] == "restart:app-x"
         assert (
@@ -198,7 +218,48 @@ def test_restore_requires_typing_the_app_name(env, helper):
         body = client.post(url, headers=ADMIN, json={"confirm": "app-x"}).json()
         assert body["saved"] and body["deploy_id"] is None
         audit = client.get("/admin/audit", headers=ADMIN).json()[0]
-        assert (audit["action"], audit["detail"]) == ("env.restore", "removed: NEW")
+        assert (audit["action"], audit["detail"]) == (
+            "env.restore",
+            "variables: 2 to 1; removed: NEW; no restart",
+        )
+
+
+def test_a_save_that_changes_no_variable_still_says_so_in_the_audit_log(env, helper):
+    helper[1]["write"] = {
+        "saved": True,
+        "sha256": SHA,
+        "added": [],
+        "removed": [],
+        "changed": [],
+        "keys_before": 3,
+        "keys_after": 3,
+    }
+    with TestClient(create_app()) as client:
+        client.put("/admin/apps/app-x/env", headers=ADMIN, json={"content": "# note\nA=1\n"})
+        audit = client.get("/admin/audit", headers=ADMIN).json()[0]
+        assert audit["detail"] == (
+            "variables: 3 to 3; no variable changed (comments, order or spacing only); no restart"
+        )
+
+
+def test_preview_is_a_dry_run_and_removed_keys_travel_with_the_save(env, helper):
+    calls, _ = helper
+    with TestClient(create_app()) as client:
+        url = "/admin/apps/app-x/env"
+        assert client.post(f"{url}/preview", json={"content": "A=1\n"}).status_code == 401
+        client.post(f"{url}/preview", headers=ADMIN, json={"content": "A=1\n"})
+        assert calls[-1][3] == {
+            "content": "A=1\n",
+            "expected_sha256": None,
+            "confirm_removed": [],
+            "dry_run": True,
+        }
+        assert "env." not in client.get("/admin/audit", headers=ADMIN).text
+        client.put(
+            url, headers=ADMIN, json={"content": "A=1\n", "confirm_removed": ["DB_PASSWORD"]}
+        )
+        assert calls[-1][3]["confirm_removed"] == ["DB_PASSWORD"]
+        assert "dry_run" not in calls[-1][3]
 
 
 BASE = {

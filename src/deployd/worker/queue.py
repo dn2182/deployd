@@ -17,6 +17,8 @@ LOCAL_KINDS = ("activate", "connect", "remove", "cleanup", "restart")
 class Job:
     kind: str = "artifact"
     release: str | None = None
+    # For a restart after an .env save: the stored version to put back if it fails.
+    revert: dict | None = None
 
 
 class DeployQueue:
@@ -49,8 +51,8 @@ class DeployQueue:
     def enqueue_cleanup(self, app: str, deploy_id: str, release: str) -> None:
         self.enqueue(app, deploy_id, Job("cleanup", release))
 
-    def enqueue_restart(self, app: str, deploy_id: str) -> None:
-        self.enqueue(app, deploy_id, Job("restart"))
+    def enqueue_restart(self, app: str, deploy_id: str, revert: dict | None = None) -> None:
+        self.enqueue(app, deploy_id, Job("restart", revert=revert))
 
     def enqueue(self, app: str, deploy_id: str, job: Job | None = None) -> None:
         if deploy_id in self._jobs:
@@ -121,7 +123,7 @@ class DeployQueue:
                 elif job.kind == "cleanup":
                     await runner.run_cleanup(self._store, app, deploy_id, job.release)
                 elif job.kind == "restart":
-                    await runner.run_restart(self._store, app, deploy_id)
+                    await runner.run_restart(self._store, app, deploy_id, job.revert)
                 else:
                     await runner.run_deploy(self._store, app, deploy_id)
             except asyncio.CancelledError:

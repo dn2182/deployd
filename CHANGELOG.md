@@ -15,6 +15,23 @@
   databases. Hourly maintenance removes expired sessions and nonces and
   trims the write-ahead log. `deployd check` verifies database integrity.
 
+### Safer .env saves and stricter health (November 2026)
+
+- A save shows what it changes before writing: variables added, changed and
+  removed, by name. Removing variables requires typing the app name, and the
+  server refuses a save that drops a variable nobody confirmed.
+- Unquoted values with spaces or shell characters, and variables defined
+  twice, are flagged before saving.
+- When the restart after a save fails or the app is unhealthy, the previous
+  file is restored and the app restarted again. The job ends as rolled back.
+- Health checks need consecutive good answers (`health.passes`, default 3),
+  for deploys and restarts alike. `retries` is still how many tries the app
+  gets to answer well for the first time. Deploys take two intervals longer.
+- A restart now applies health expectations that do not name `{commit_sha}`.
+- Every .env save is audited with the variable count before and after and
+  the keys removed, added and changed; a save that only touches comments or
+  order says so.
+
 ## 0.1.0 (2026-11-17)
 
 First tagged release.

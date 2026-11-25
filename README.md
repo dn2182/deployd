@@ -175,7 +175,7 @@ Spanish.
 | Kind | **Static site** (checks `index.html` exists) or **Service** (runs your restart command) |
 | Local site path | static sites only: the folder Nginx already serves |
 | Restart command | program and arguments, no shell; usually `sudo systemctl restart <unit>` |
-| Health URL | optional; a failed check after the switch rolls back |
+| Health URL | optional; a failed check after the switch rolls back. It must answer well three times in a row (`health.passes`), so point it at an endpoint that reaches the app's database |
 | Expected body / header | optional; `{commit_sha}` proves the new version is the one answering |
 | Hooks | `before_cutover` (in the new version's folder) and `after_health` (failure rolls back) |
 | Environment passthrough | service variables your commands may see, for example a database DSN |
@@ -294,15 +294,22 @@ With the .env editor enabled at install time, you manage the file from the UI:
 1. Edit the app and set **Environment file path**.
 2. Open the **Environment file** tab and press **Open file**. Values are
    hidden until you reveal one. **Edit as text** shows the raw file.
-3. **Save file**, optionally restarting the app and checking its health.
+3. **Save file**. Before anything is written you see which variables are
+   added, changed and removed. Removing variables asks you to type the app
+   name. Unquoted values with spaces or shell characters are flagged.
+4. Leave **Restart the app** on to apply the change and check its health.
 
 What to expect:
 
+- If the restart or the health check fails, the previous file is put back
+  and the app restarted again, like a deploy rollback. This needs a health
+  URL; without one only a failing restart command is noticed.
 - The file keeps its owner and permissions.
 - Each save keeps the previous version on the server (newest ten), and
   **Restore previous version** brings it back.
-- The audit log records who opened or changed the file and which keys
-  changed, never the values.
+- The audit log records who opened or changed the file, the variable count
+  before and after, and which keys were removed, added or changed, never
+  the values.
 - A save is refused if the file changed on the server after you opened it.
 - The file must already exist and be named `.env`, `.env.<name>` or
   `<name>.env`.

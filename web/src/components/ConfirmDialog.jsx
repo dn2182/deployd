@@ -53,6 +53,7 @@ export function ConfirmDialog({
   description,
   confirmLabel,
   onConfirm,
+  onOpen,
   destructive = false,
   confirmationValue,
   confirmationLabel,
@@ -86,10 +87,15 @@ export function ConfirmDialog({
     }
   }
   const confirmed = confirmationValue === undefined || value === confirmationValue
+  // onOpen prepares what the dialog shows; resolving to false keeps it closed.
+  const show = async () => {
+    if (onOpen && (await onOpen()) === false) return
+    setOpen(true)
+  }
 
   return (
     <>
-      {cloneElement(trigger, { onClick: () => setOpen(true) })}
+      {cloneElement(trigger, { onClick: show })}
       {open && (
         <Modal role="alertdialog" labelledBy={`${id}-title`} describedBy={`${id}-description`} onClose={close} closable={!pending}>
           <div

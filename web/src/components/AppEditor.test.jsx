@@ -9,7 +9,7 @@ const existing = {
   artifact: { allowed_url_prefix: 'https://example.com/artifacts/', max_download_bytes: 1234 },
   migrate: { command: ['/usr/bin/migrate', '--apply'], timeout_seconds: 120 },
   restart: { command: ['/usr/bin/restart', 'arg with spaces', 'two\nlines'], timeout_seconds: 600 },
-  health: { url: 'https://example.com/health', retries: 12, interval_seconds: 5, expect_body: null, expect_header: null },
+  health: { url: 'https://example.com/health', retries: 12, interval_seconds: 5, passes: 2, expect_body: null, expect_header: null },
   hooks: { before_cutover: null, after_health: ['/usr/local/bin/warm', '--all'] },
   secret: { configured: true, env_override: false, fingerprint: '123456' },
   github: { configured: true, source: 'app', env_override: false },
@@ -31,7 +31,7 @@ describe('AppEditor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() => expect(call).toHaveBeenCalledTimes(1))
     expect(sentSpec(call).health).toEqual({
-      url: null, retries: 12, interval_seconds: 5, expect_body: null, expect_header: null,
+      url: null, retries: 12, interval_seconds: 5, passes: 2, expect_body: null, expect_header: null,
     })
   })
 

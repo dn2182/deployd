@@ -78,6 +78,24 @@ status, stale = request(
 assert status == 409 and "reload" in stale["detail"], stale
 assert env_file.read_text() == "DB_PASSWORD=original\n"
 
+status, preview = request(
+    "/admin/apps/env-smoke/env/preview",
+    {"content": "NEW=a b;c\n", "expected_sha256": loaded["sha256"]},
+    "POST",
+)
+assert status == 200 and not preview["saved"] and preview["would_save"], preview
+assert (preview["removed"], preview["added"], preview["unquoted"]) == (
+    ["DB_PASSWORD"],
+    ["NEW"],
+    ["NEW"],
+), preview
+status, unconfirmed = request("/admin/apps/env-smoke/env", {"content": "NEW=1\n"}, "PUT")
+assert status == 409 and "DB_PASSWORD" in unconfirmed["detail"], unconfirmed
+assert env_file.read_text() == "DB_PASSWORD=original\n"
+assert not Path("/var/lib/deployd-env/env-smoke").exists() or not list(
+    Path("/var/lib/deployd-env/env-smoke").rglob("*.env")
+)
+
 status, saved = request(
     "/admin/apps/env-smoke/env",
     {
@@ -98,23 +116,53 @@ kept = list(Path("/var/lib/deployd-env/env-smoke").rglob("*.env"))
 assert len(kept) == 1 and kept[0].read_text() == "DB_PASSWORD=original\n"
 assert kept[0].stat().st_mode & 0o777 == 0o600
 
-for _ in range(60):
-    status, deploy = request(f"/deploys/{saved['deploy_id']}")
-    if deploy["status"] not in ("queued", "running"):
-        break
-    time.sleep(1)
+
+def finished(deploy_id):
+    for _ in range(60):
+        deploy = request(f"/deploys/{deploy_id}")[1]
+        if deploy["status"] not in ("queued", "running"):
+            break
+        time.sleep(1)
+    return deploy
+
+
+deploy = finished(saved["deploy_id"])
 assert deploy["status"] == "succeeded", deploy
 
 status, restored = request("/admin/apps/env-smoke/env/restore", {"confirm": "env-smoke"}, "POST")
 assert status == 200 and restored["saved"], restored
 assert env_file.read_text() == "DB_PASSWORD=original\n"
 
+# A restart that fails with the new file puts the previous one back by itself. The
+# restart command stands in for an app that cannot start without DB_PASSWORD.
+os.chown(env_file, 0, grp.getgrnam("deployd").gr_gid)
+needs_key = {
+    **spec,
+    "restart": {"command": ["/usr/bin/grep", "-q", "^DB_PASSWORD=", str(env_file)]},
+}
+assert request("/admin/apps/env-smoke", needs_key, "PUT")[0] == 200
+status, broken = request(
+    "/admin/apps/env-smoke/env",
+    {"content": "OTHER=1\n", "confirm_removed": ["DB_PASSWORD"], "restart": True},
+    "PUT",
+)
+assert status == 200 and broken["saved"] and broken["removed"] == ["DB_PASSWORD"], broken
+deploy = finished(broken["deploy_id"])
+assert deploy["status"] == "rolled_back", deploy
+assert env_file.read_text() == "DB_PASSWORD=original\n"
+assert grp.getgrgid(env_file.stat().st_gid).gr_name == "deployd"
+
 status, audit = request("/admin/audit")
 actions = [row["action"] for row in audit]
-assert {"env.read", "env.write", "env.restore"} <= set(actions), actions
+assert {"env.read", "env.write", "env.restore", "env.auto_restore"} <= set(actions), actions
+written = [row["detail"] for row in audit if row["action"] == "env.write"]
+assert all(detail and detail.startswith("variables: ") for detail in written), written
+assert any("removed: DB_PASSWORD" in detail for detail in written), written
 assert "original" not in json.dumps(audit)
 
 assert request("/admin/apps/env-smoke", method="DELETE")[0] == 200
 env_file.unlink()
 folder.rmdir()
-print("Env editor read, validation, conflict, write, restart, restore and audit passed.")
+print(
+    "Env editor read, preview, validation, conflict, write, restart, automatic restore and audit passed."
+)

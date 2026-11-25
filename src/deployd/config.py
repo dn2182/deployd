@@ -184,6 +184,8 @@ class HealthSpec(BaseModel):
     url: str | None = None
     retries: int = Field(default=10, ge=1, le=100)
     interval_seconds: float = Field(default=3, ge=0, le=300)
+    # Consecutive good answers required. One 200 from an app that then times out is not healthy.
+    passes: int = Field(default=3, ge=1, le=20)
     # {commit_sha} in either expectation is replaced with the deployed SHA, so a
     # stale process answering 200 cannot pass as the new release.
     expect_body: str | None = Field(default=None, max_length=500)
