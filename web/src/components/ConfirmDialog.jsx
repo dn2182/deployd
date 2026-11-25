@@ -3,7 +3,9 @@ import { Info, TriangleAlert } from 'lucide-react'
 import { useT } from '../i18n/index.js'
 import { Button, ErrorMessage, Field, Spinner, inputClass } from './ui.jsx'
 
-export function Modal({ role = 'dialog', labelledBy, describedBy, onClose, closable = true, className = '', children }) {
+const MODAL_WIDTH = { default: 'w-[min(440px,calc(100vw-32px))]', wide: 'w-[min(640px,calc(100vw-32px))]' }
+
+export function Modal({ role = 'dialog', labelledBy, describedBy, onClose, closable = true, size = 'default', className = '', children }) {
   const ref = useRef(null)
   useEffect(() => {
     const dialog = ref.current
@@ -38,7 +40,7 @@ export function Modal({ role = 'dialog', labelledBy, describedBy, onClose, closa
       onClose={closed}
       onClick={backdrop}
       onKeyDown={keydown}
-      className={`m-auto max-h-[calc(100vh-32px)] w-[min(440px,calc(100vw-32px))] overflow-auto rounded-panel border border-border bg-surface-strong p-0 text-text shadow-2xl backdrop-blur-2xl backdrop:bg-[rgba(3,7,16,0.48)] backdrop:backdrop-blur-sm ${className}`.trim()}
+      className={`m-auto max-h-[calc(100vh-32px)] ${MODAL_WIDTH[size]} overflow-auto rounded-panel border border-border bg-surface-strong p-0 text-text shadow-2xl backdrop-blur-2xl backdrop:bg-[rgba(3,7,16,0.48)] backdrop:backdrop-blur-sm ${className}`.trim()}
     >
       <div className="p-6">{children}</div>
     </dialog>

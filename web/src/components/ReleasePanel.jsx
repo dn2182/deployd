@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Layers } from 'lucide-react'
 import { useT } from '../i18n/index.js'
+import { useRole } from '../hooks/useRole.js'
 import { ConfirmDialog } from './ConfirmDialog.jsx'
 import When from './When.jsx'
 import { Button, Checkbox, DetailItem, EmptyState, ErrorMessage, Field, Help, MiniBadge, Notice, Skeleton, inputClass } from './ui.jsx'
@@ -23,6 +24,7 @@ export default function ReleasePanel({ name, spec, call, onChanged, revision = 0
   const { keep, retain, automatic } = policy
   const updatePolicy = (values) => setDraft({ ...policy, key: policyKey, ...values })
   const base = `/admin/apps/${encodeURIComponent(name)}/releases`
+  const { admin } = useRole()
 
   // Reloads triggered by the shared refresh are silent: controls stay enabled and
   // what is shown is only replaced once the new answer arrives.
@@ -128,7 +130,7 @@ export default function ReleasePanel({ name, spec, call, onChanged, revision = 0
           </ul>
         ) : <EmptyState icon={<Layers size={22} />} className="py-5">{t('releases.empty')}</EmptyState>}
       </>}
-      <form className="flex flex-col gap-3 border-t border-border-subtle pt-4"
+      {admin && <form className="flex flex-col gap-3 border-t border-border-subtle pt-4"
         onSubmit={(event) => { event.preventDefault(); if (retain) saveRetention().catch(() => {}) }}>
         <Checkbox label={t('releases.retain')} checked={retain} disabled={busy}
           onChange={(event) => updatePolicy({ retain: event.target.checked })} />
@@ -149,7 +151,7 @@ export default function ReleasePanel({ name, spec, call, onChanged, revision = 0
             onConfirm={saveRetention}
           />}
         </div>
-      </form>
+      </form>}
     </section>
   )
 }

@@ -16,10 +16,16 @@ function describe(payload, status) {
   return detail ?? `HTTP ${status}`
 }
 
-export async function request(token, path, opts = {}) {
+// The owner sends the admin token; a team member sends the session from sign-in.
+function credentialHeaders(credentials) {
+  if (typeof credentials === 'string') return credentials ? { 'X-Admin-Token': credentials } : {}
+  return credentials?.session ? { 'X-Deployd-Session': credentials.session } : {}
+}
+
+export async function request(credentials, path, opts = {}) {
   const resp = await fetch(`/api${path}`, {
     ...opts,
-    headers: { 'Content-Type': 'application/json', 'X-Admin-Token': token, ...opts.headers },
+    headers: { 'Content-Type': 'application/json', ...credentialHeaders(credentials), ...opts.headers },
   })
   const body = await resp.text()
   let payload
@@ -59,6 +65,12 @@ const app = (name) => `/admin/apps/${encodeURIComponent(name)}`
 export function createApi(call) {
   return {
     account: () => call('/admin/account'),
+    changeOwnPassword: (passwords) => call('/admin/me/password', post(passwords)),
+    members: () => call('/admin/users'),
+    createMember: (member) => call('/admin/users', post(member)),
+    updateMember: (username, changes) =>
+      call(`/admin/users/${encodeURIComponent(username)}`, { method: 'PATCH', body: JSON.stringify(changes) }),
+    deleteMember: (username) => call(`/admin/users/${encodeURIComponent(username)}`, { method: 'DELETE' }),
     changePassword: (credentials) => call('/admin/account/password', post(credentials)),
     apps: () => call('/admin/apps'),
     deploys: ({ limit = 50, offset = 0, app: appName, status } = {}) =>

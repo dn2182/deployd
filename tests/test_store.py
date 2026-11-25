@@ -2,7 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from deployd.store.db import InstanceLock, Store
+from deployd.store.db import SCHEMA_VERSION, InstanceLock, Store
 
 
 def _store(tmp_path):
@@ -94,7 +94,7 @@ def test_unversioned_database_is_upgraded_in_place(tmp_path):
     assert s.get_deploy("d1")["kind"] == "activate"
     assert s.get_deploy("d2")["kind"] == "artifact"
     with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         assert {row[1] for row in conn.execute("PRAGMA table_info(nonces)")} >= {
             "request_hash",
             "deploy_id",
@@ -198,7 +198,7 @@ def test_schema_migration_is_atomic(tmp_path, monkeypatch):
     monkeypatch.setattr(db_module, "SCHEMA_VERSION", 1)
     Store(path).init()
     monkeypatch.setattr(db_module, "_MIGRATIONS", all_migrations)
-    monkeypatch.setattr(db_module, "SCHEMA_VERSION", 2)
+    monkeypatch.setattr(db_module, "SCHEMA_VERSION", all_migrations[-1][0])
     original = Store._migrate_to_2
 
     def explode(c, script):
@@ -214,5 +214,90 @@ def test_schema_migration_is_atomic(tmp_path, monkeypatch):
     monkeypatch.setattr(Store, "_migrate_to_2", staticmethod(original))
     Store(path).init()
     with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == all_migrations[-1][0]
         assert "kind" in {row[1] for row in conn.execute("PRAGMA table_info(deploys)")}
+
+
+def test_history_and_status_queries_use_indexes_without_sorting(tmp_path):
+    import sqlite3
+
+    store = _store(tmp_path)
+    for index in range(30):
+        store.create_deploy(f"app-{index % 3}", "a" * 40, "https://example.com/a", "b" * 64, "t")
+    queries = {
+        "all history": (
+            "SELECT * FROM deploys ORDER BY created_at DESC, rowid DESC LIMIT 10",
+            "ix_deploys_created",
+        ),
+        "one app": (
+            "SELECT * FROM deploys WHERE app = 'app-1' ORDER BY created_at DESC, rowid DESC LIMIT 10",
+            "ix_deploys_app_created",
+        ),
+        "by status": (
+            "SELECT * FROM deploys WHERE status = 'failed' "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 10",
+            "ix_deploys_status_created",
+        ),
+        "busy": (
+            "SELECT 1 FROM deploys WHERE app = 'app-1' AND status IN ('queued', 'running') LIMIT 1",
+            "ix_deploys_active",
+        ),
+        "member audit": (
+            "SELECT id FROM audit_log WHERE app IN ('app-1', 'app-2') ORDER BY id DESC LIMIT 10",
+            "ix_audit_app",
+        ),
+    }
+    with sqlite3.connect(tmp_path / "test.sqlite3") as conn:
+        conn.execute("ANALYZE")
+        for label, (query, index) in queries.items():
+            plan = " | ".join(row[3] for row in conn.execute(f"EXPLAIN QUERY PLAN {query}"))
+            assert index in plan, (label, plan)
+            # "SCAN x USING INDEX" is an ordered index read; a bare SCAN reads the whole table.
+            assert not any(
+                part.strip() in ("SCAN deploys", "SCAN audit_log") for part in plan.split("|")
+            )
+            if label != "member audit":
+                assert "TEMP B-TREE" not in plan, (label, plan)
+        names = {
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")
+        }
+    assert "ix_audit_at" not in names
+
+
+def test_last_step_reads_the_newest_matching_step_of_the_app(tmp_path):
+    store = _store(tmp_path)
+    old = store.create_deploy("site", "a" * 40, "https://example.com/a", "b" * 64, "t")
+    store.add_step(old, "health", "failed", output="old")
+    other = store.create_deploy("other", "a" * 40, "https://example.com/a", "b" * 64, "t")
+    store.add_step(other, "health", "succeeded", output="not mine")
+    new = store.create_deploy("site", "c" * 40, "https://example.com/a", "b" * 64, "t")
+    store.add_step(new, "restart", "succeeded")
+    store.add_step(new, "health", "succeeded", output="new")
+    assert store.last_step("site", "health")["output"] == "new"
+    assert store.last_step("site", "migrate") is None
+    assert store.last_step("nobody", "health") is None
+
+
+def test_maintenance_removes_expired_rows_and_keeps_the_database_healthy(tmp_path):
+    import sqlite3
+
+    store = _store(tmp_path)
+    store.create_user("dev", "hash", [])
+    user = store.get_user("dev")
+    store.create_session(user["id"], "live", 3600)
+    store.create_session(user["id"], "dead", 3600)
+    store.consume_nonce("fresh")
+    with sqlite3.connect(tmp_path / "test.sqlite3") as conn:
+        conn.execute(
+            "UPDATE sessions SET expires_at = datetime('now', '-1 hour') WHERE token_hash = 'dead'"
+        )
+        conn.execute(
+            "INSERT INTO nonces (nonce, seen_at) VALUES ('stale', datetime('now', '-2 days'))"
+        )
+    store.maintain()
+    with sqlite3.connect(tmp_path / "test.sqlite3") as conn:
+        assert [row[0] for row in conn.execute("SELECT token_hash FROM sessions")] == ["live"]
+        assert [row[0] for row in conn.execute("SELECT nonce FROM nonces")] == ["fresh"]
+    assert store.quick_check() == "ok"
+    wal = tmp_path / "test.sqlite3-wal"
+    assert not wal.exists() or wal.stat().st_size == 0

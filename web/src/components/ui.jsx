@@ -70,6 +70,38 @@ export function Checkbox({ label, className = '', ...props }) {
   )
 }
 
+// An on/off control for one setting; the label is read by assistive technology.
+export function Switch({ checked, onChange, label, disabled = false }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS} ${checked ? 'border-transparent bg-accent' : 'border-border-subtle bg-surface-soft'}`}
+    >
+      <span
+        aria-hidden="true"
+        className={`inline-block size-[18px] rounded-full bg-white shadow-sm transition-transform duration-200 ${checked ? 'translate-x-[22px]' : 'translate-x-[3px]'}`}
+      />
+    </button>
+  )
+}
+
+export function Avatar({ name, muted = false, size = 'default' }) {
+  const box = size === 'small' ? 'size-7 text-[11px]' : 'size-10 text-sm'
+  return (
+    <span
+      aria-hidden="true"
+      className={`grid shrink-0 place-items-center rounded-full font-semibold uppercase text-white ${box} ${muted ? 'bg-muted-soft' : 'bg-linear-to-br from-[#7488ff] via-[#405bef] to-[#3947c4]'}`}
+    >
+      {name.slice(0, 2)}
+    </span>
+  )
+}
+
 export function Help({ children, className = '' }) {
   return <p className={`text-[11px] leading-relaxed text-muted ${className}`.trim()}>{children}</p>
 }

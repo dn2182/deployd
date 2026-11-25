@@ -41,6 +41,7 @@ grep -qx 'ReadWritePaths=-/etc/apps-env' /etc/systemd/system/deployd.service.d/e
 [[ $(systemctl show deployd -p ProtectSystem --value) == full ]]
 sudo -u deployd test ! -r /var/lib/deployd-env
 sudo env GITHUB_ACTIONS=true python3 "$checkout/tests/env-smoke.py"
+sudo env GITHUB_ACTIONS=true python3 "$checkout/tests/members-smoke.py"
 [[ $(sudo stat -c '%U:%G:%a' /var/lib/deployd-auth/htpasswd) == root:www-data:640 ]]
 [[ $(sudo stat -c '%U:%G:%a' /usr/local/libexec/deployd/change-password) == root:root:755 ]]
 [[ $(sudo stat -c '%U:%G:%a' /etc/sudoers.d/deployd-password) == root:root:440 ]]

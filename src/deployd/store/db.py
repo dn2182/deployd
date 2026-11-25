@@ -60,6 +60,44 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE INDEX IF NOT EXISTS ix_audit_at ON audit_log(at DESC);
 """,
     ),
+    (
+        3,
+        """
+CREATE TABLE users (
+    id            INTEGER PRIMARY KEY,
+    username      TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    disabled      INTEGER NOT NULL DEFAULT 0 CHECK (disabled IN (0, 1)),
+    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    last_login_at TEXT
+);
+CREATE TABLE user_apps (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    app     TEXT NOT NULL,
+    PRIMARY KEY (user_id, app)
+) WITHOUT ROWID;
+CREATE INDEX ix_user_apps_app ON user_apps(app);
+CREATE TABLE sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    expires_at TEXT NOT NULL
+) WITHOUT ROWID;
+CREATE INDEX ix_sessions_user ON sessions(user_id);
+CREATE INDEX ix_sessions_expires ON sessions(expires_at);
+ALTER TABLE audit_log ADD COLUMN app TEXT;
+CREATE INDEX ix_audit_app ON audit_log(app, id DESC);
+-- History is listed newest first with rowid as the tie-break. Ascending indexes read
+-- backwards give exactly that order, so no query has to sort.
+DROP INDEX IF EXISTS ix_deploys_app_created;
+CREATE INDEX ix_deploys_app_created ON deploys(app, created_at);
+CREATE INDEX ix_deploys_created ON deploys(created_at);
+-- "Is this app busy" is asked on every status refresh; it must not depend on history size.
+CREATE INDEX ix_deploys_active ON deploys(app) WHERE status IN ('queued', 'running');
+-- The audit log is always read by id; this index was never used.
+DROP INDEX IF EXISTS ix_audit_at;
+""",
+    ),
 ]
 SCHEMA_VERSION = _MIGRATIONS[-1][0]
 
@@ -150,6 +188,8 @@ class Store:
                         self._migrate_unversioned(c, script)
                     elif target == 2:
                         self._migrate_to_2(c, script)
+                    elif target == 3:
+                        self._migrate_to_3(c, script)
                     else:
                         _run_statements(c, script)
                     c.execute(f"PRAGMA user_version = {target}")
@@ -177,6 +217,19 @@ class Store:
                 (kind, prefix + "%"),
             )
 
+    @staticmethod
+    def _migrate_to_3(c: sqlite3.Connection, script: str) -> None:
+        _run_statements(c, script)
+        # Earlier rows named the app only in target; a cancelled deploy named the deploy.
+        c.execute(
+            "UPDATE audit_log SET app = target WHERE action != 'deploy.cancel' "
+            "AND target IN (SELECT DISTINCT app FROM deploys)"
+        )
+        c.execute(
+            "UPDATE audit_log SET app = (SELECT app FROM deploys WHERE deploy_id = target) "
+            "WHERE action = 'deploy.cancel'"
+        )
+
     @contextmanager
     def _conn(self):
         conn = sqlite3.connect(self._db_path)
@@ -188,6 +241,21 @@ class Store:
             conn.commit()
         finally:
             conn.close()
+
+    def maintain(self) -> None:
+        """Hourly housekeeping: drop what expired, refresh planner statistics, trim the WAL."""
+        self.purge_old_nonces()
+        self.purge_expired_sessions()
+        with self._conn() as c:
+            c.execute("PRAGMA optimize")
+        with self._conn() as c:
+            # Outside a transaction; a busy database just skips this round.
+            c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    def quick_check(self) -> str:
+        """'ok', or SQLite's description of what is damaged."""
+        with self._conn() as c:
+            return "; ".join(row[0] for row in c.execute("PRAGMA quick_check").fetchall())
 
     def check_writable(self) -> None:
         with self._conn() as c:
@@ -376,8 +444,15 @@ class Store:
         app: str | None = None,
         status: str | None = None,
         offset: int = 0,
+        apps: frozenset[str] | None = None,
     ) -> list[dict]:
+        """``apps`` limits the result to those applications; None means no limit."""
         clauses, params = [], []
+        if apps is not None:
+            if not apps:
+                return []
+            clauses.append(f"app IN ({', '.join('?' * len(apps))})")
+            params.extend(sorted(apps))
         if app:
             clauses.append("app = ?")
             params.append(app)
@@ -428,12 +503,15 @@ class Store:
             return dict(row) if row else None
 
     def last_step(self, app: str, step: str) -> dict | None:
+        """The newest ``step`` among the app's recent deploys, read through indexes only."""
         with self._conn() as c:
             row = c.execute(
                 "SELECT s.step, s.status, s.started_at, s.output, s.deploy_id "
-                "FROM deploy_steps s JOIN deploys d ON d.deploy_id = s.deploy_id "
-                "WHERE d.app = ? AND s.step = ? ORDER BY s.id DESC LIMIT 1",
-                (app, step),
+                "FROM deploy_steps s WHERE s.step = ? AND s.deploy_id IN ("
+                "  SELECT deploy_id FROM deploys WHERE app = ? "
+                "  ORDER BY created_at DESC, rowid DESC LIMIT 50) "
+                "ORDER BY s.id DESC LIMIT 1",
+                (step, app),
             ).fetchone()
             return dict(row) if row else None
 
@@ -449,18 +527,163 @@ class Store:
             return row["commit_sha"] if row else None
 
     # --- audit ----------------------------------------------------------
-    def audit(self, actor: str, action: str, target: str | None, detail: str | None) -> None:
+    def audit(
+        self,
+        actor: str,
+        action: str,
+        target: str | None,
+        detail: str | None,
+        app: str | None = None,
+    ) -> None:
         with self._conn() as c:
             c.execute(
-                "INSERT INTO audit_log (actor, action, target, detail) VALUES (?, ?, ?, ?)",
-                (actor, action, target, detail),
+                "INSERT INTO audit_log (actor, action, target, detail, app) VALUES (?, ?, ?, ?, ?)",
+                (actor, action, target, detail, app),
             )
 
-    def list_audit(self, limit: int = 50, offset: int = 0) -> list[dict]:
+    def list_audit(
+        self, limit: int = 50, offset: int = 0, apps: frozenset[str] | None = None
+    ) -> list[dict]:
+        """``apps`` limits the result to entries about those applications."""
+        where, params = "", []
+        if apps is not None:
+            if not apps:
+                return []
+            where = f"WHERE app IN ({', '.join('?' * len(apps))}) "
+            params.extend(sorted(apps))
         with self._conn() as c:
             rows = c.execute(
-                "SELECT id, at, actor, action, target, detail FROM audit_log "
+                f"SELECT id, at, actor, action, target, detail, app FROM audit_log {where}"
                 "ORDER BY id DESC LIMIT ? OFFSET ?",
-                (limit, offset),
+                (*params, limit, offset),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    # --- users ----------------------------------------------------------
+    def create_user(self, username: str, password_hash: str, apps: list[str]) -> bool:
+        """False when the username is taken."""
+        with self._conn() as c:
+            try:
+                cur = c.execute(
+                    "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+                    (username, password_hash),
+                )
+            except sqlite3.IntegrityError:
+                return False
+            c.executemany(
+                "INSERT INTO user_apps (user_id, app) VALUES (?, ?)",
+                [(cur.lastrowid, app) for app in sorted(set(apps))],
+            )
+            return True
+
+    def list_users(self) -> list[dict]:
+        with self._conn() as c:
+            users = c.execute(
+                "SELECT u.id, u.username, u.disabled, u.created_at, u.last_login_at, "
+                "(SELECT count(*) FROM sessions s WHERE s.user_id = u.id "
+                " AND s.expires_at > datetime('now')) AS sessions "
+                "FROM users u ORDER BY u.username"
+            ).fetchall()
+            assigned: dict[int, list[str]] = {}
+            for row in c.execute("SELECT user_id, app FROM user_apps ORDER BY app"):
+                assigned.setdefault(row["user_id"], []).append(row["app"])
+            return [
+                {
+                    "username": user["username"],
+                    "disabled": bool(user["disabled"]),
+                    "created_at": user["created_at"],
+                    "last_login_at": user["last_login_at"],
+                    "sessions": user["sessions"],
+                    "apps": assigned.get(user["id"], []),
+                }
+                for user in users
+            ]
+
+    def get_user(self, username: str) -> dict | None:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT id, username, password_hash, disabled FROM users WHERE username = ?",
+                (username,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def update_user(
+        self,
+        username: str,
+        *,
+        password_hash: str | None = None,
+        disabled: bool | None = None,
+        apps: list[str] | None = None,
+        keep_session: str | None = None,
+    ) -> bool:
+        """Applies the given changes in one transaction; False when the user is unknown.
+
+        A new password or a disabled account ends the user's sessions, except
+        ``keep_session`` (the one that asked for its own password change).
+        """
+        with self._conn() as c:
+            row = c.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+            if row is None:
+                return False
+            user_id = row["id"]
+            if password_hash is not None:
+                c.execute(
+                    "UPDATE users SET password_hash = ? WHERE id = ?", (password_hash, user_id)
+                )
+            if disabled is not None:
+                c.execute("UPDATE users SET disabled = ? WHERE id = ?", (int(disabled), user_id))
+            if apps is not None:
+                c.execute("DELETE FROM user_apps WHERE user_id = ?", (user_id,))
+                c.executemany(
+                    "INSERT INTO user_apps (user_id, app) VALUES (?, ?)",
+                    [(user_id, app) for app in sorted(set(apps))],
+                )
+            if password_hash is not None or disabled:
+                c.execute(
+                    "DELETE FROM sessions WHERE user_id = ? AND token_hash != ?",
+                    (user_id, keep_session or ""),
+                )
+            return True
+
+    def delete_user(self, username: str) -> bool:
+        with self._conn() as c:
+            return c.execute("DELETE FROM users WHERE username = ?", (username,)).rowcount == 1
+
+    def forget_app(self, app: str) -> None:
+        """A removed application must not grant access again if its name is reused."""
+        with self._conn() as c:
+            c.execute("DELETE FROM user_apps WHERE app = ?", (app,))
+
+    # --- sessions -------------------------------------------------------
+    def create_session(self, user_id: int, token_hash: str, ttl_seconds: int) -> str:
+        with self._conn() as c:
+            c.execute(
+                "INSERT INTO sessions (token_hash, user_id, expires_at) "
+                "VALUES (?, ?, datetime('now', ?))",
+                (token_hash, user_id, f"+{int(ttl_seconds)} seconds"),
+            )
+            c.execute("UPDATE users SET last_login_at = datetime('now') WHERE id = ?", (user_id,))
+            return c.execute(
+                "SELECT expires_at FROM sessions WHERE token_hash = ?", (token_hash,)
+            ).fetchone()["expires_at"]
+
+    def session_user(self, token_hash: str) -> dict | None:
+        """The enabled user behind a live session, with the apps assigned to them."""
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT u.id, u.username FROM sessions s JOIN users u ON u.id = s.user_id "
+                "WHERE s.token_hash = ? AND s.expires_at > datetime('now') AND u.disabled = 0",
+                (token_hash,),
+            ).fetchone()
+            if row is None:
+                return None
+            apps = c.execute("SELECT app FROM user_apps WHERE user_id = ?", (row["id"],)).fetchall()
+            return {"username": row["username"], "apps": frozenset(app["app"] for app in apps)}
+
+    def delete_session(self, token_hash: str) -> None:
+        with self._conn() as c:
+            c.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
+
+    def purge_expired_sessions(self) -> None:
+        with self._conn() as c:
+            c.execute("DELETE FROM sessions WHERE expires_at <= datetime('now')")

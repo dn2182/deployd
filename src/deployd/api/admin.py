@@ -1,5 +1,9 @@
-"""Admin surface. Own auth (X-Admin-Token) — the deploy HMAC does not cover it.
-Bind to localhost/tailnet or front with Cloudflare Access; never expose bare.
+"""Management surface. The deploy HMAC does not cover it; it has its own auth.
+
+Three routers, so a new endpoint is owner-only unless it is placed elsewhere on purpose:
+- ``router``: the owner (admin token) only. Everything that changes configuration.
+- ``app_router``: one application; the owner, or a member it is assigned to.
+- ``shared_router``: any signed-in caller; handlers filter by the caller's applications.
 """
 
 import hashlib
@@ -9,10 +13,10 @@ import secrets as pysecrets
 from pathlib import Path as FilePath
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 
-from .. import account, envfile
+from .. import account, auth, envfile
 from ..config import (
     APP_NAME_PATTERN,
     AppSpec,
@@ -31,33 +35,46 @@ from ..config import (
 )
 from ..github_actions import GitHubActionsSettings, render_workflow, setup_bundle
 from ..models import DeployStatus
-from ..security import constant_time_equal
 from ..worker import runner, website
 
 _ACTOR_RE = re.compile(r"^[A-Za-z0-9@._-]{1,64}$")
 
 
-def require_admin(x_admin_token: str | None = Header(default=None)):
-    expected = get_settings().admin_token
-    if not expected:
-        raise HTTPException(status_code=503, detail="admin token not configured")
-    if not constant_time_equal(expected, x_admin_token):
-        raise HTTPException(status_code=401, detail="bad admin token")
-
-
-router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin)])
 AppName = Annotated[str, Path(pattern=APP_NAME_PATTERN)]
 MANAGED_ROOT = FilePath("/srv/deployd")
 
 
+def _app_access(request: Request, name: AppName) -> auth.Principal:
+    return auth.require_app_access(request, name)
+
+
+router = APIRouter(prefix="/admin", dependencies=[Depends(auth.require_admin)])
+app_router = APIRouter(prefix="/admin/apps/{name}", dependencies=[Depends(_app_access)])
+shared_router = APIRouter(prefix="/admin", dependencies=[Depends(auth.require_principal)])
+auth_router = APIRouter(prefix="/auth")
+
+
 def actor_of(request: Request) -> str:
+    principal = getattr(getattr(request, "state", None), "principal", None)
+    if principal is not None and not principal.admin:
+        return principal.name
     # The reverse proxy forwards the Basic Auth user; direct callers are just the token.
     user = request.headers.get("x-remote-user", "")
     return user if _ACTOR_RE.fullmatch(user) else "admin-token"
 
 
-def _audit(request: Request, action: str, target: str | None, detail: str | None = None) -> None:
-    request.app.state.store.audit(actor_of(request), action, target, detail)
+def _audit(
+    request: Request,
+    action: str,
+    target: str | None,
+    detail: str | None = None,
+    *,
+    app: str | None = None,
+) -> None:
+    """``app`` ties the entry to an application so its members can see it."""
+    if app is None and target in get_app_registry():
+        app = target
+    request.app.state.store.audit(actor_of(request), action, target, detail, app)
 
 
 class ReleaseSelection(BaseModel):
@@ -111,6 +128,167 @@ def change_management_password(body: PasswordChange, request: Request):
         raise HTTPException(exc.status, str(exc)) from None
     _audit(request, "account.password.change", username)
     return {"changed": True}
+
+
+class Credentials(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: SecretStr
+
+
+class OwnPasswordChange(BaseModel):
+    current_password: SecretStr
+    new_password: SecretStr
+
+
+def _new_password(value: SecretStr | None, generate: bool) -> tuple[str | None, str | None]:
+    """Returns (password, generated): generated is set only when deployd made it up."""
+    if generate:
+        generated = auth.generate_password()
+        return generated, generated
+    if value is None:
+        return None, None
+    password = value.get_secret_value()
+    problem = auth.password_problem(password)
+    if problem:
+        raise HTTPException(status_code=422, detail=problem)
+    return password, None
+
+
+class MemberCreate(BaseModel):
+    username: str = Field(pattern=auth.USERNAME_PATTERN)
+    password: SecretStr | None = None
+    generate_password: bool = False
+    apps: list[Annotated[str, Field(pattern=APP_NAME_PATTERN)]] = Field(
+        default_factory=list, max_length=500
+    )
+
+    @model_validator(mode="after")
+    def one_password_source(self):
+        if (self.password is None) == (not self.generate_password):
+            raise ValueError("give a password or ask for a generated one")
+        return self
+
+
+class MemberUpdate(BaseModel):
+    password: SecretStr | None = None
+    generate_password: bool = False
+    disabled: bool | None = None
+    apps: list[Annotated[str, Field(pattern=APP_NAME_PATTERN)]] | None = Field(
+        default=None, max_length=500
+    )
+
+    @model_validator(mode="after")
+    def one_password_source(self):
+        if self.password is not None and self.generate_password:
+            raise ValueError("give a password or ask for a generated one, not both")
+        return self
+
+
+MemberName = Annotated[str, Path(pattern=auth.USERNAME_PATTERN)]
+
+
+def _known_apps(apps: list[str]) -> list[str]:
+    unknown = sorted(set(apps) - set(get_app_registry()))
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"unknown application: {', '.join(unknown)}")
+    return sorted(set(apps))
+
+
+@auth_router.post("/login")
+async def login(request: Request, body: Credentials):
+    username = body.username.strip().lower()
+    session = auth.login(request.app.state.store, username, body.password.get_secret_value())
+    request.app.state.store.audit(username, "member.login", username, None)
+    return {**session, "username": username}
+
+
+@shared_router.post("/logout")
+async def logout(request: Request):
+    principal = request.state.principal
+    if principal.session:
+        request.app.state.store.delete_session(principal.session)
+    return {"signed_out": True}
+
+
+@shared_router.get("/me")
+async def who_am_i(request: Request):
+    principal = request.state.principal
+    return {
+        "role": "admin" if principal.admin else "member",
+        "username": None if principal.admin else principal.name,
+        "apps": None if principal.admin else sorted(principal.apps),
+    }
+
+
+@shared_router.post("/me/password")
+async def change_own_password(request: Request, body: OwnPasswordChange):
+    principal = request.state.principal
+    if principal.admin:
+        raise HTTPException(status_code=409, detail="the administrator uses the management login")
+    store = request.app.state.store
+    user = store.get_user(principal.name)
+    current = body.current_password.get_secret_value()
+    if user is None or not auth.verify_password(current, user["password_hash"]):
+        raise HTTPException(status_code=400, detail="Current password is incorrect.")
+    password, _ = _new_password(body.new_password, False)
+    if password == current:
+        raise HTTPException(status_code=422, detail="new password must be different")
+    # Every other session of this member ends; the one making the change stays.
+    store.update_user(
+        principal.name, password_hash=auth.hash_password(password), keep_session=principal.session
+    )
+    _audit(request, "member.password.change", principal.name)
+    return {"changed": True}
+
+
+@router.get("/users")
+async def list_members(request: Request):
+    return request.app.state.store.list_users()
+
+
+@router.post("/users", status_code=201)
+async def create_member(request: Request, body: MemberCreate):
+    if body.username in auth.RESERVED_USERNAMES:
+        raise HTTPException(status_code=422, detail="that username is reserved")
+    apps = _known_apps(body.apps)
+    password, generated = _new_password(body.password, body.generate_password)
+    if not request.app.state.store.create_user(body.username, auth.hash_password(password), apps):
+        raise HTTPException(status_code=409, detail="a member with that username already exists")
+    _audit(request, "member.create", body.username, f"apps: {', '.join(apps) or 'none'}")
+    return {"username": body.username, "apps": apps, "password": generated}
+
+
+@router.patch("/users/{username}")
+async def update_member(request: Request, username: MemberName, body: MemberUpdate):
+    apps = _known_apps(body.apps) if body.apps is not None else None
+    password, generated = _new_password(body.password, body.generate_password)
+    changed = request.app.state.store.update_user(
+        username,
+        password_hash=auth.hash_password(password) if password else None,
+        disabled=body.disabled,
+        apps=apps,
+    )
+    if not changed:
+        raise HTTPException(status_code=404, detail="unknown member")
+    detail = "; ".join(
+        part
+        for part in (
+            f"apps: {', '.join(apps) or 'none'}" if apps is not None else None,
+            "password reset" if password else None,
+            None if body.disabled is None else "disabled" if body.disabled else "enabled",
+        )
+        if part
+    )
+    _audit(request, "member.update", username, detail or None)
+    return {"username": username, "password": generated}
+
+
+@router.delete("/users/{username}")
+async def delete_member(request: Request, username: MemberName):
+    if not request.app.state.store.delete_user(username):
+        raise HTTPException(status_code=404, detail="unknown member")
+    _audit(request, "member.delete", username)
+    return {"deleted": username}
 
 
 class WebsiteConfirmation(BaseModel):
@@ -171,7 +349,7 @@ def _release_app(request: Request, name: str, *, idle: bool = False) -> AppSpec:
     return spec
 
 
-@router.get("/apps/{name}/releases")
+@app_router.get("/releases")
 async def list_app_releases(request: Request, name: AppName):
     spec = _release_app(request, name)
     try:
@@ -195,7 +373,7 @@ async def list_app_releases(request: Request, name: AppName):
     return result
 
 
-@router.post("/apps/{name}/releases/activate", status_code=202)
+@app_router.post("/releases/activate", status_code=202)
 async def activate_app_release(request: Request, name: AppName, selection: ReleaseSelection):
     store = request.app.state.store
     with config_lock():
@@ -231,7 +409,7 @@ async def activate_app_release(request: Request, name: AppName, selection: Relea
     return {"deploy_id": deploy_id, "status": "queued"}
 
 
-@router.post("/apps/{name}/releases/cleanup", status_code=202)
+@app_router.post("/releases/cleanup", status_code=202)
 async def cleanup_app_release(request: Request, name: AppName, selection: ReleaseSelection):
     store = request.app.state.store
     with config_lock():
@@ -253,7 +431,7 @@ async def cleanup_app_release(request: Request, name: AppName, selection: Releas
     return {"deploy_id": deploy_id, "status": "queued"}
 
 
-@router.get("/apps/{name}/website")
+@app_router.get("/website")
 async def inspect_website(request: Request, name: AppName):
     spec = _release_app(request, name)
     if request.app.state.store.has_active_deploys(name):
@@ -348,7 +526,7 @@ def _after_env_change(request: Request, name: str, result: dict, restart: bool) 
     return {**result, "deploy_id": deploy_id}
 
 
-@router.get("/apps/{name}/env")
+@app_router.get("/env")
 async def inspect_env_file(request: Request, name: AppName):
     spec = _env_app(request, name)
     if not envfile.HELPER.is_file():
@@ -360,7 +538,7 @@ async def inspect_env_file(request: Request, name: AppName):
     }
 
 
-@router.get("/apps/{name}/env/content")
+@app_router.get("/env/content")
 async def read_env_file(request: Request, name: AppName):
     spec = _env_app(request, name)
     result = await _env_call("read", name, spec)
@@ -368,7 +546,7 @@ async def read_env_file(request: Request, name: AppName):
     return {"path": str(spec.env_file), **result}
 
 
-@router.put("/apps/{name}/env")
+@app_router.put("/env")
 async def write_env_file(request: Request, name: AppName, body: EnvFileWrite):
     spec = _env_app(request, name)
     if request.app.state.queue.is_removing(name):
@@ -381,7 +559,7 @@ async def write_env_file(request: Request, name: AppName, body: EnvFileWrite):
     return _after_env_change(request, name, result, body.restart)
 
 
-@router.post("/apps/{name}/env/restore")
+@app_router.post("/env/restore")
 async def restore_env_file(request: Request, name: AppName, body: EnvFileRestore):
     if body.confirm != name:
         raise HTTPException(status_code=422, detail="type the app name to confirm the restore")
@@ -403,8 +581,9 @@ def _secret_info(app_name: str) -> dict:
     }
 
 
-@router.get("/apps")
-async def list_apps():
+@shared_router.get("/apps")
+async def list_apps(request: Request):
+    principal = request.state.principal
     return {
         name: {
             **spec.model_dump(mode="json"),
@@ -412,10 +591,11 @@ async def list_apps():
             "github": github_token_info(name),
         }
         for name, spec in get_app_registry().items()
+        if principal.can(name)
     }
 
 
-@router.get("/apps/{name}/status")
+@app_router.get("/status")
 async def app_status(request: Request, name: AppName):
     spec = _release_app(request, name)
     store = request.app.state.store
@@ -441,7 +621,7 @@ async def app_status(request: Request, name: AppName):
     }
 
 
-@router.post("/apps/{name}/freeze")
+@app_router.post("/freeze")
 async def freeze_app(request: Request, name: AppName, body: FreezeRequest):
     with config_lock():
         try:
@@ -508,7 +688,7 @@ def _github_actions_target(request: Request, name: str) -> tuple[AppSpec, bool]:
     return spec, static_site
 
 
-@router.post("/apps/{name}/github-actions/preview")
+@app_router.post("/github-actions/preview")
 async def github_actions_preview(request: Request, name: AppName, settings: GitHubActionsSettings):
     """Render the workflow for the given settings without saving them."""
     spec, static_site = _github_actions_target(request, name)
@@ -518,7 +698,7 @@ async def github_actions_preview(request: Request, name: AppName, settings: GitH
     }
 
 
-@router.post("/apps/{name}/github-actions")
+@app_router.post("/github-actions")
 async def github_actions_setup(request: Request, name: AppName, settings: GitHubActionsSettings):
     with config_lock():
         spec, static_site = _github_actions_target(request, name)
@@ -656,12 +836,13 @@ async def delete_app(
                 name, "0" * 40, "local-website://remove", "0" * 64, f"remove:{name}", kind="remove"
             )
             request.app.state.queue.enqueue_removal(name, deploy_id)
-            _audit(request, "app.delete", name, "website restore queued")
+            _audit(request, "app.delete", name, "website restore queued", app=name)
             response.status_code = 202
             return {"status": "queued", "app": name, "deploy_id": deploy_id}
         if not delete_app_config(name):
             raise HTTPException(status_code=404, detail="unknown app")
-        _audit(request, "app.delete", name)
+        request.app.state.store.forget_app(name)
+        _audit(request, "app.delete", name, app=name)
     return {"status": "deleted", "app": name}
 
 
@@ -687,7 +868,7 @@ async def rotate_secret(request: Request, name: AppName):
     }
 
 
-@router.get("/deploys")
+@shared_router.get("/deploys")
 async def list_deploys(
     request: Request,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
@@ -696,27 +877,36 @@ async def list_deploys(
     status: DeployStatus | None = None,
 ):
     return request.app.state.store.list_deploys(
-        limit=limit, offset=offset, app=app, status=status.value if status else None
+        limit=limit,
+        offset=offset,
+        app=app,
+        status=status.value if status else None,
+        apps=request.state.principal.scope,
     )
 
 
-@router.post("/deploys/{deploy_id}/cancel")
+def _visible_deploy(request: Request, deploy_id: str) -> dict:
+    """A deploy the caller may act on; one outside their applications does not exist for them."""
+    row = request.app.state.store.get_deploy(deploy_id)
+    if row is None or not request.state.principal.can(row["app"]):
+        raise HTTPException(status_code=404, detail="unknown deploy")
+    return row
+
+
+@shared_router.post("/deploys/{deploy_id}/cancel")
 async def cancel_deploy(request: Request, deploy_id: str):
     store = request.app.state.store
-    if store.get_deploy(deploy_id) is None:
-        raise HTTPException(status_code=404, detail="unknown deploy")
+    row = _visible_deploy(request, deploy_id)
     if not store.cancel_deploy(deploy_id, actor_of(request)):
         raise HTTPException(status_code=409, detail="only queued deploys can be cancelled")
-    _audit(request, "deploy.cancel", deploy_id)
+    _audit(request, "deploy.cancel", deploy_id, app=row["app"])
     return {"deploy_id": deploy_id, "status": "cancelled"}
 
 
-@router.post("/deploys/{deploy_id}/redeploy")
+@shared_router.post("/deploys/{deploy_id}/redeploy")
 async def redeploy(request: Request, deploy_id: str):
     store = request.app.state.store
-    old = store.get_deploy(deploy_id)
-    if old is None:
-        raise HTTPException(status_code=404, detail="unknown deploy")
+    old = _visible_deploy(request, deploy_id)
     if old["kind"] != "artifact":
         raise HTTPException(status_code=409, detail="only artifact deploys can be redeployed")
     with config_lock():
@@ -740,10 +930,12 @@ async def redeploy(request: Request, deploy_id: str):
     return {"deploy_id": new_id, "status": "queued"}
 
 
-@router.get("/audit")
+@shared_router.get("/audit")
 async def list_audit(
     request: Request,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ):
-    return request.app.state.store.list_audit(limit=limit, offset=offset)
+    return request.app.state.store.list_audit(
+        limit=limit, offset=offset, apps=request.state.principal.scope
+    )

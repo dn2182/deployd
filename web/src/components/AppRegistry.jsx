@@ -1,3 +1,4 @@
+import { useRole } from '../hooks/useRole.js'
 import { useState } from 'react'
 import { ChevronLeft, ChevronRight, Plus, Search, Server } from 'lucide-react'
 import { useT } from '../i18n/index.js'
@@ -49,6 +50,7 @@ export function RegistrySkeleton() {
 
 export default function AppRegistry({ apps, call, api, refresh, revision, isBusy, onSecret, query, onQueryChange, searchRef }) {
   const t = useT()
+  const { admin } = useRole()
   const [selected, setSelected] = useState(null)
   const [page, setPage] = useState(0)
   const needle = query.trim().toLowerCase()
@@ -62,7 +64,7 @@ export default function AppRegistry({ apps, call, api, refresh, revision, isBusy
 
   return (
     <div className="flex flex-col gap-4">
-      <NewAppCard call={call} onChanged={refresh} onSecret={onSecret} />
+      {admin && <NewAppCard call={call} onChanged={refresh} onSecret={onSecret} />}
       {Object.keys(apps).length > 0 && (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(220px,280px)_minmax(0,1fr)]">
           <Panel as="aside" className="flex flex-col gap-3 self-start p-3.5" aria-label={t('registry.title')}>
@@ -108,7 +110,7 @@ export default function AppRegistry({ apps, call, api, refresh, revision, isBusy
         </div>
       )}
       {Object.keys(apps).length === 0 && (
-        <Panel><EmptyState icon={<Server size={22} />}>{t('registry.empty')}</EmptyState></Panel>
+        <Panel><EmptyState icon={<Server size={22} />}>{t(admin ? 'registry.empty' : 'registry.empty_member')}</EmptyState></Panel>
       )}
     </div>
   )

@@ -104,6 +104,7 @@ async def run_removal(store, app, deploy_id):
         with config_lock():
             if not delete_app_config(app):
                 raise ValueError("app configuration disappeared during removal")
+            store.forget_app(app)
     except Exception as exc:
         store.add_step(deploy_id, "restore-website", "failed", output=runner._error_text(exc))
         store.set_status(deploy_id, "failed", finished=True)

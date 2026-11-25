@@ -47,6 +47,7 @@ const calls = (fetcher, prefix) => fetcher.mock.calls.filter(([url]) => url.star
 
 beforeEach(() => {
   Object.defineProperty(window.navigator, 'language', { value: 'en-US', configurable: true })
+  sessionStorage.clear()
   sessionStorage.setItem('deployd-admin-token', 't0ken')
   localStorage.clear()
   document.documentElement.removeAttribute('data-theme')
@@ -449,6 +450,75 @@ describe('App', () => {
     expect(sessionStorage.getItem('deployd-admin-token')).toBeNull()
     expect(screen.queryByRole('heading', { name: 'my-api' })).not.toBeInTheDocument()
     expect(screen.getByLabelText('Admin token')).toBeInTheDocument()
+  })
+
+  it('signs a team member in with username and password, and hides what only the administrator may do', async () => {
+    sessionStorage.clear()
+    const fetcher = mockFetch({
+      ...BASE,
+      'POST /api/auth/login': { token: 'member-session', username: 'maria', expires_at: '2026-11-26 10:00:00' },
+      'POST /api/admin/logout': { signed_out: true },
+    })
+    global.fetch = fetcher
+    render(<App />)
+    fireEvent.click(screen.getByRole('tab', { name: 'Team member' }))
+    fireEvent.change(screen.getByLabelText('Username'), { target: { value: ' Maria ' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'correct-horse-battery' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+    expect(await screen.findByRole('heading', { name: 'my-api' })).toBeInTheDocument()
+    const login = calls(fetcher, '/api/auth/login')[0][1]
+    expect(JSON.parse(login.body)).toEqual({ username: 'maria', password: 'correct-horse-battery' })
+    expect(login.headers['X-Admin-Token']).toBeUndefined()
+    const headers = calls(fetcher, '/api/admin/apps')[0][1].headers
+    expect(headers['X-Deployd-Session']).toBe('member-session')
+    expect(headers['X-Admin-Token']).toBeUndefined()
+    expect(sessionStorage.getItem('deployd-admin-token')).toBeNull()
+    expect(screen.getByTitle('Signed in as maria')).toBeInTheDocument()
+    for (const name of ['Team access', 'Edit my-api', 'Remove my-api', 'Rotate signing secret for my-api']) {
+      expect(screen.queryByRole('button', { name })).not.toBeInTheDocument()
+    }
+    expect(screen.queryByText('Add application')).not.toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: 'Website connection' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Change your password' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
+    await waitFor(() => expect(calls(fetcher, '/api/admin/logout')).toHaveLength(1))
+    expect(sessionStorage.getItem('deployd-member-session')).toBeNull()
+    expect(screen.getByRole('tab', { name: 'Team member' })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('shows the server message when a member sign-in fails and clears the password', async () => {
+    sessionStorage.clear()
+    global.fetch = vi.fn(async (url) => {
+      if (url === '/api/healthz') return { ok: true, json: async () => ({ status: 'ok' }) }
+      return { ok: false, status: 401, text: async () => JSON.stringify({ detail: 'Wrong username or password.' }) }
+    })
+    render(<App />)
+    fireEvent.click(screen.getByRole('tab', { name: 'Team member' }))
+    fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'maria' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'nope-nope-nope' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Wrong username or password.')
+    expect(screen.getByLabelText('Password')).toHaveValue('')
+    expect(screen.queryByRole('heading', { name: 'Admin token rejected' })).not.toBeInTheDocument()
+  })
+
+  it('asks a member to sign in again when the session has expired', async () => {
+    sessionStorage.clear()
+    sessionStorage.setItem('deployd-member-session', JSON.stringify({ token: 'old', username: 'maria' }))
+    global.fetch = vi.fn(async (url) => {
+      if (url === '/api/healthz') return { ok: true, json: async () => ({ status: 'ok' }) }
+      return { ok: false, status: 401, text: async () => JSON.stringify({ detail: 'session expired; sign in again' }) }
+    })
+    render(<App />)
+    expect(await screen.findByText('Your session ended. Sign in again to continue.')).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Team member' })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('opens team access for the administrator', async () => {
+    global.fetch = mockFetch({ ...BASE, 'GET /api/admin/users': [] })
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Team access' }))
+    expect(await screen.findByText(/No team members yet/)).toBeInTheDocument()
   })
 
   it('shows a distinct state when the token is rejected', async () => {

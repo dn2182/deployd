@@ -27,6 +27,24 @@ response within a few days.
   default all-interface bind (`0.0.0.0:844`) is meant for LAN access and is safe
   only when the host firewall keeps that port off the WAN; choose `127.0.0.1`
   when access through an SSH tunnel is sufficient.
+- Team members are optional accounts limited to the applications assigned to
+  them, enforced by the API on every request. They can operate those
+  applications and edit their `.env`, and can never change an application's
+  commands or paths, read signing secrets or tokens, connect websites or
+  manage members: that would be command execution on the server, which stays
+  with the admin token. A member gets the same answer for an application they
+  cannot use and for one that does not exist. Passwords are stored as scrypt
+  hashes, sessions as hashes of a random token that expire after 12 hours, and
+  five wrong passwords lock a username for 15 minutes on top of the Nginx
+  rate limit on sign-in. Deploy output and `.env` contents of an assigned
+  application are visible to its members, so assign applications with that in
+  mind.
+- On the management port the page itself and the health check load without
+  credentials; they hold no data. Every API request with the admin token, and
+  every request with no credential, must still pass Basic Auth. Only a member
+  session skips Basic Auth, and a session beside an admin token does not. If
+  the port is reachable from the internet, members' passwords become the only
+  barrier for their applications; keep it behind a VPN or an access proxy.
 - The management site is TLS only: it uses the same certificate as the public
   API and answers plain HTTP on its port with a redirect to `https://`, so the
   admin token, the Basic Auth password and `.env` contents never cross the LAN

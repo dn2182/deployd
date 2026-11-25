@@ -1,19 +1,22 @@
-import { useCallback, useLayoutEffect, useRef, useState } from 'react'
-import { Activity, AppWindow, CircleHelp, CloudCog, KeyRound, LogOut, Moon, RefreshCw, ScrollText, Sun } from 'lucide-react'
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Activity, AppWindow, CircleHelp, CloudCog, KeyRound, LogOut, Moon, RefreshCw, ScrollText, Sun, Users } from 'lucide-react'
 import { LanguageProvider, detectLanguage, useT } from './i18n/index.js'
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.js'
 import { useRegistry } from './hooks/useRegistry.js'
 import { useSession } from './hooks/useSession.js'
+import { RoleProvider } from './hooks/useRole.js'
 import { useTheme } from './hooks/useTheme.js'
 import { ToastProvider } from './components/Toasts.jsx'
 import { useToast } from './hooks/useToast.js'
-import { Button, ErrorMessage, IconButton, Kicker, Panel } from './components/ui.jsx'
+import { Avatar, Button, ErrorMessage, IconButton, Kicker, Panel } from './components/ui.jsx'
 import AppRegistry, { RegistrySkeleton } from './components/AppRegistry.jsx'
 import AuditLog from './components/AuditLog.jsx'
 import DeployHistory from './components/DeployHistory.jsx'
 import SecretModal from './components/SecretModal.jsx'
-import TokenGate from './components/TokenGate.jsx'
+import SignIn from './components/SignIn.jsx'
 import PasswordDialog from './components/PasswordDialog.jsx'
+import MemberPasswordDialog from './components/MemberPasswordDialog.jsx'
+import TeamDialog from './components/TeamDialog.jsx'
 import HelpDialog from './components/HelpDialog.jsx'
 
 const TERMINAL_TOAST = { succeeded: 'success', failed: 'error', rolled_back: 'error', cancelled: 'info' }
@@ -52,6 +55,7 @@ function Console({ language, setLanguage }) {
   const [secret, setSecret] = useState(null)
   const [passwordOpen, setPasswordOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
+  const [teamOpen, setTeamOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [view, setView] = useState('deploys')
   const searchRef = useRef(null)
@@ -71,10 +75,13 @@ function Console({ language, setLanguage }) {
   useKeyboardShortcuts({ onSearch: focusSearch, onRefresh: doRefresh, onClear: clearSearch })
 
   const locked = !session.token || session.rejected
+  const member = session.role === 'member'
+  const role = useMemo(() => ({ admin: !member, username: session.username }), [member, session.username])
   const appCount = apps ? Object.keys(apps).length : 0
   const successfulCount = deploys.filter((deploy) => deploy.status === 'succeeded').length
 
   return (
+    <RoleProvider value={role}>
     <div className="relative min-h-screen overflow-x-hidden bg-[radial-gradient(circle_at_50%_-15%,rgba(118,137,255,0.14),transparent_36rem),linear-gradient(155deg,var(--background),var(--background-deep))]">
       <header className="sticky top-0 z-30 border-b border-border-subtle bg-bg/70 backdrop-blur-2xl backdrop-saturate-150">
         <div className="mx-auto flex w-[min(1120px,calc(100%-32px))] flex-wrap items-center justify-between gap-x-6 gap-y-2 py-3">
@@ -96,19 +103,28 @@ function Console({ language, setLanguage }) {
             <IconButton label={t('language.switch')} onClick={() => setLanguage(language === 'es' ? 'en' : 'es')}>
               <span className="text-[11px] font-bold tracking-wider">{language === 'es' ? 'ES' : 'EN'}</span>
             </IconButton>
+            {!locked && !member && <IconButton label={t('team.title')} onClick={() => setTeamOpen(true)}><Users size={17} /></IconButton>}
+            {!locked && <IconButton label={t(member ? 'member_password.title' : 'password.title')} onClick={() => setPasswordOpen(true)}><KeyRound size={17} /></IconButton>}
+            <IconButton label={t('help.open')} onClick={() => setHelpOpen(true)}><CircleHelp size={17} /></IconButton>
+            {!locked && member && (
+              <span className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface-soft py-1 pr-3 pl-1 text-xs font-semibold text-text-strong" title={t('signin.signed_in_as', { name: session.username })}>
+                <Avatar name={session.username} size="small" />{session.username}
+              </span>
+            )}
             {session.token && (
               <Button size="small" onClick={session.logout}><LogOut size={14} /> {t('token.logout')}</Button>
             )}
-            {!locked && <IconButton label={t('password.title')} onClick={() => setPasswordOpen(true)}><KeyRound size={17} /></IconButton>}
-            <IconButton label={t('help.open')} onClick={() => setHelpOpen(true)}><CircleHelp size={17} /></IconButton>
           </div>
         </div>
       </header>
-      {passwordOpen && !locked && <PasswordDialog api={session.api} onClose={() => setPasswordOpen(false)} />}
+      {passwordOpen && !locked && (member
+        ? <MemberPasswordDialog api={session.api} username={session.username} onClose={() => setPasswordOpen(false)} />
+        : <PasswordDialog api={session.api} onClose={() => setPasswordOpen(false)} />)}
+      {teamOpen && !locked && !member && <TeamDialog api={session.api} apps={apps} onClose={() => setTeamOpen(false)} />}
       {helpOpen && <HelpDialog onClose={() => setHelpOpen(false)} />}
 
       <main className="relative z-10 mx-auto flex w-[min(1120px,calc(100%-32px))] flex-col gap-8 py-7 sm:py-9">
-        <section className="grid grid-cols-1 items-center gap-5 md:grid-cols-[minmax(0,1fr)_auto]">
+        {!locked && <section className="grid grid-cols-1 items-center gap-5 md:grid-cols-[minmax(0,1fr)_auto]">
           <div>
             <Kicker icon={<Activity size={14} />}>{t('hero.kicker')}</Kicker>
             <h1 className="mt-2 mb-3 max-w-2xl text-[clamp(28px,3vw,38px)] leading-[1.1] font-semibold tracking-[-0.04em] text-text-strong">{t('hero.title')}</h1>
@@ -122,11 +138,11 @@ function Console({ language, setLanguage }) {
               </div>
             ))}
           </Panel>
-        </section>
+        </section>}
 
         {registry.error && !session.rejected && <ErrorMessage>{registry.error}</ErrorMessage>}
 
-        {locked && <TokenGate rejected={session.rejected} onSubmit={session.login} />}
+        {locked && <SignIn rejected={session.rejected} expired={session.rejected && member} onAdmin={session.login} onMember={session.loginMember} />}
 
         {!locked && (
           <section>
@@ -170,6 +186,7 @@ function Console({ language, setLanguage }) {
 
       {secret && <SecretModal secret={secret} onDismiss={() => setSecret(null)} />}
     </div>
+    </RoleProvider>
   )
 }
 

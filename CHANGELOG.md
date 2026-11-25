@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Team access (November 2026)
+
+- Optional member accounts limited to chosen applications. Members sign in
+  with their own username and password and can operate those applications
+  and edit their `.env`; configuration, secrets and member management stay
+  with the administrator. Managed from Team access in the top bar.
+- New sign-in screen for members and the administrator.
+- The state database moves to schema 3 on the first start: tables for
+  members and sessions, the audit log tied to applications, and indexes
+  tuned so history and status reads stay under a millisecond on large
+  databases. Hourly maintenance removes expired sessions and nonces and
+  trims the write-ahead log. `deployd check` verifies database integrity.
+
 ## 0.1.0 (2026-11-17)
 
 First tagged release.

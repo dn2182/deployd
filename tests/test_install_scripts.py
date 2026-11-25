@@ -396,7 +396,7 @@ def test_nginx_config_hardens_api_location_and_rate_limits_deploys(tmp_path):
     assert "proxy_set_header X-Remote-User $remote_user;" in api
     assert 'add_header X-Frame-Options "DENY" always;' in api
     assert "Content-Security-Policy" in api
-    assert text.count('add_header X-Content-Type-Options "nosniff" always;') == 2
+    assert text.count('add_header X-Content-Type-Options "nosniff" always;') == 4
 
 
 def test_prune_keeps_newest_files_by_name(tmp_path):
@@ -657,3 +657,27 @@ def test_pnpm_must_be_the_pinned_version_to_count_as_working(tmp_path):
     assert pinned.stdout.strip() == "usable"
     older = run_function("install-ubuntu.sh", f"export FAKE_PNPM_VERSION=11.20.0; {body}")
     assert older.stdout.strip() == "stale"
+
+
+def test_management_site_lets_members_sign_in_without_basic_auth(tmp_path):
+    output = tmp_path / "site.conf"
+    result = run_function(
+        "install-ubuntu.sh",
+        f'render_nginx_config "{output}" /opt/deployd deployd.example.com 0.0.0.0 844',
+    )
+    assert result.returncode == 0, result.stderr
+    text = output.read_text()
+    # Basic Auth is skipped only for a session header with no admin token beside it.
+    assert 'map "$http_x_admin_token|$http_x_deployd_session" $deployd_management_realm' in text
+    assert '"~^\\|."  off;' in text and 'default   "deployd management";' in text
+    management = text.split("server {")[2]
+    assert 'auth_basic "deployd management"' not in management
+    api = management[management.index("location /api/ {") :]
+    assert "auth_basic $deployd_management_realm;" in api.split("}")[0]
+    login = management[management.index("location = /api/auth/login {") :].split("location =")[1]
+    assert "limit_req zone=deployd_login burst=5 nodelay;" in login
+    assert "limit_except POST { deny all; }" in login and "auth_basic" not in login
+    assert "proxy_pass http://127.0.0.1:8300/auth/login;" in login
+    assert "X-Remote-User" not in login
+    health = management[management.index("location = /api/healthz {") :].split("location /api/")[0]
+    assert "auth_basic" not in health

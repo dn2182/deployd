@@ -48,8 +48,8 @@ status, _ = request(
     {"current_password": "smoke-password", "new_password": "replacement-smoke-password"},
 )
 assert status == 200
-assert request("/api/healthz", "smoke-password")[0] == 401
-assert request("/api/healthz", "replacement-smoke-password")[0] == 200
+assert request("/api/admin/account", "smoke-password")[0] == 401
+assert request("/api/admin/account", "replacement-smoke-password")[0] == 200
 time.sleep(5)
 assert (
     request(
@@ -59,5 +59,5 @@ assert (
     )[0]
     == 200
 )
-assert request("/api/healthz", "smoke-password")[0] == 200
+assert request("/api/admin/account", "smoke-password")[0] == 200
 print("Management password change and reauthentication passed.")

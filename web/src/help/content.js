@@ -101,6 +101,10 @@ const en = [
     q: "Can I edit an app's .env file from here?",
     a: 'Yes, if the server has the .env editor enabled. Edit the app, set Environment file path (for example /etc/apps-env/myapp/myapp.env) and an Environment file tab appears. Values are hidden until you reveal them, each save keeps the previous version on the server so you can restore it, and you can restart the app right after saving. The audit log records which keys changed, never the values. Each server has its own file, so repeat the change on every node.',
   },
+  {
+    q: 'Can I give a teammate access to only some applications?',
+    a: 'Yes. Open Team access in the top bar, add a member and switch on the applications they should have. They sign in with their own username and password, never the admin token. On those applications they can follow and redo deployments, activate an earlier version, pause deploys and edit the .env file. They cannot see other applications, change how an application is configured, manage secrets or add users. Their actions appear in the audit log under their name. Accounts are per server.',
+  },
 ]
 
 const es = [
@@ -203,6 +207,10 @@ const es = [
   {
     q: 'Puedo editar el archivo .env de una app desde aquí?',
     a: 'Sí, si el servidor tiene habilitado el editor de .env. Edita la app, define Ruta del archivo de entorno (por ejemplo /etc/apps-env/myapp/myapp.env) y aparece la pestaña Archivo de entorno. Los valores están ocultos hasta que los muestres, cada guardado conserva la versión anterior en el servidor para poder restaurarla, y puedes reiniciar la app justo después de guardar. El audit log registra qué claves cambiaron, nunca los valores. Cada servidor tiene su propio archivo, así que repite el cambio en cada nodo.',
+  },
+  {
+    q: 'Puedo darle a alguien del equipo acceso solo a algunas aplicaciones?',
+    a: 'Sí. Abre Acceso del equipo en la barra superior, agrega un miembro y activa las aplicaciones que debe tener. Inicia sesión con su propio usuario y contraseña, nunca con el token de administración. En esas aplicaciones puede seguir y repetir deploys, activar una versión anterior, congelar deploys y editar el archivo .env. No puede ver otras aplicaciones, cambiar cómo está configurada una aplicación, manejar secrets ni agregar usuarios. Sus acciones quedan en el audit log con su nombre. Las cuentas son por servidor.',
   },
 ]
 

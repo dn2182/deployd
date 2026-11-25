@@ -3,9 +3,10 @@ import logging
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
+from ..auth import optional_principal
 from ..config import config_lock, get_app_registry, get_app_secret, get_settings
 from ..models import DeployAccepted, DeployDetail, DeployRequest
-from ..security import AuthError, constant_time_equal, signed_message, verify_request
+from ..security import AuthError, signed_message, verify_request
 
 router = APIRouter()
 log = logging.getLogger("deployd.api")
@@ -24,9 +25,10 @@ async def healthz(request: Request):
     return {"status": status, **checks}
 
 
-def is_admin_request(request: Request) -> bool:
-    expected = get_settings().admin_token
-    return bool(expected) and constant_time_equal(expected, request.headers.get("x-admin-token"))
+def may_see_output(request: Request, app: str) -> bool:
+    """The owner, or a member the application is assigned to."""
+    principal = optional_principal(request)
+    return principal is not None and principal.can(app)
 
 
 @router.post("/deploys", response_model=DeployAccepted, status_code=202)
@@ -121,7 +123,7 @@ async def get_deploy(request: Request, deploy_id: str):
         raise HTTPException(status_code=404, detail="unknown deploy")
     # Command output can carry connection strings and stack traces; CI polling
     # only needs step names and statuses.
-    reveal_output = is_admin_request(request)
+    reveal_output = may_see_output(request, row["app"])
     return DeployDetail(
         deploy_id=row["deploy_id"],
         app=row["app"],

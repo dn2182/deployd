@@ -8,6 +8,7 @@ from pathlib import Path
 
 from . import envfile
 from .config import AppSpec, get_app_github_token, get_app_registry, get_app_secret, get_settings
+from .store.db import Store
 from .worker import directory_layout
 from .worker.website import link_state
 
@@ -104,6 +105,15 @@ def run_checks() -> Report:
     if settings.db_path.exists():
         if not settings.db_path.is_file() or not os.access(settings.db_path, os.R_OK | os.W_OK):
             report.error(f"state database {settings.db_path} is not a readable, writable file")
+        else:
+            try:
+                state = Store(settings.db_path).quick_check()
+            except Exception as exc:
+                state = str(exc)
+            if state != "ok":
+                report.error(
+                    f"state database {settings.db_path} failed its integrity check: {state}"
+                )
     else:
         report.warn("state database does not exist; service startup will create it")
     if settings.secrets_file.exists():

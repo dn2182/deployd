@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from .api.admin import app_router, auth_router, shared_router
 from .api.admin import router as admin_router
 from .api.routes import router
 from .config import get_app_registry, get_settings
@@ -51,7 +52,7 @@ async def _maintenance(store: Store) -> None:
     while True:
         await asyncio.sleep(MAINTENANCE_INTERVAL_SECONDS)
         try:
-            store.purge_old_nonces()
+            store.maintain()
         except Exception:
             log.exception("maintenance run failed")
 
@@ -80,7 +81,7 @@ async def lifespan(app: FastAPI):
     try:
         sd_notify("WATCHDOG=1")
         store.init()
-        store.purge_old_nonces()
+        store.maintain()
         app.state.store = store
         app.state.queue = DeployQueue(store, drain_timeout=settings.drain_timeout_seconds)
         await asyncio.to_thread(_prepare_apps)
@@ -152,7 +153,8 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(router)
-    app.include_router(admin_router)
+    for management in (auth_router, shared_router, app_router, admin_router):
+        app.include_router(management)
     return app
 
 

@@ -45,10 +45,11 @@ Lo que obtienes:
 4. [Conectar GitHub Actions](#conectar-github-actions)
 5. [Salir a producción: conectar el sitio web](#salir-a-producción-conectar-el-sitio-web)
 6. [Ajustes de la app: archivos .env](#ajustes-de-la-app-archivos-env)
-7. [Operación](#operación)
-8. [Migraciones de base de datos](#migraciones-de-base-de-datos)
-9. [Referencia](#referencia)
-10. [Desarrollo local](#desarrollo-local)
+7. [Acceso del equipo](#acceso-del-equipo)
+8. [Operación](#operación)
+9. [Migraciones de base de datos](#migraciones-de-base-de-datos)
+10. [Referencia](#referencia)
+11. [Desarrollo local](#desarrollo-local)
 
 ## Cómo funciona
 
@@ -118,11 +119,13 @@ Lo que obtienes:
   **Full (strict)** reemplaza el certificado y la clave por un par Origin CA
   de Cloudflare en las mismas rutas. El instalador nunca sobrescribe un
   certificado que no generó.
-- **UI de administración** en `https://<servidor>:844`, tras usuario y
-  contraseña, con el mismo certificado (el navegador pide aceptarlo una vez).
-  `http://` en ese puerto redirige a `https://`. Mantén el puerto fuera de
-  internet con tu firewall, o enlázalo a `127.0.0.1` y usa un túnel SSH.
-- **Token de administración**, que la UI pide después del login. Léelo con:
+- **UI de administración** en `https://<servidor>:844`, con el mismo
+  certificado (el navegador pide aceptarlo una vez). `http://` en ese puerto
+  redirige a `https://`. Mantén el puerto fuera de internet con tu firewall, o
+  enlázalo a `127.0.0.1` y usa un túnel SSH.
+- **Inicio de sesión del administrador**: elige Administrator en la pantalla
+  de inicio e ingresa el token de administración. El navegador pide entonces
+  una vez el usuario y la contraseña de administración. Lee el token con:
 
   ```bash
   sudo grep DEPLOYD_ADMIN_TOKEN /opt/deployd/.env
@@ -324,6 +327,40 @@ desatendido). Las carpetas bajo `/home` no son alcanzables, y la configuración
 propia de deployd no se puede editar por esta vía. Notas de seguridad:
 [SECURITY.md](SECURITY.md).
 
+## Acceso del equipo
+
+Comparte aplicaciones seleccionadas con tu equipo sin compartir el token de
+administración. Abre **Team access** en la barra superior, agrega un miembro
+y activa las aplicaciones que debe tener. Se puede generar una contraseña por
+ti, que se muestra una sola vez.
+
+Un miembro inicia sesión en la misma página con su propio usuario y
+contraseña y solo ve sus aplicaciones. Ahí puede:
+
+- seguir los deploys y leer su salida, volver a desplegar y cancelar uno en cola
+- activar una versión anterior y borrar versiones conservadas
+- congelar y descongelar deploys
+- ver y editar el archivo `.env`, con restauración y restart
+- descargar el workflow de GitHub Actions
+
+Solo el administrador puede agregar, editar o eliminar aplicaciones, cambiar
+sus comandos y rutas, manejar signing secrets y tokens de GitHub, conectar
+sitios web y administrar miembros. Esa línea existe porque los comandos de
+una aplicación corren en el servidor.
+
+Conviene saber:
+
+- Cada acción queda en el audit log con el nombre del miembro. Un miembro
+  solo ve las entradas de sus aplicaciones.
+- Desactivar **Can sign in**, restablecer la contraseña o eliminar al miembro
+  termina sus sesiones de inmediato. Las sesiones también terminan a las 12
+  horas.
+- Cinco contraseñas incorrectas bloquean ese usuario durante 15 minutos.
+- Las cuentas viven en cada servidor. Alguien con aplicaciones en dos
+  servidores necesita una cuenta en ambos.
+- Los miembros llegan a la UI igual que tú, así que quienes trabajan en
+  remoto necesitan tu VPN o túnel.
+
 ## Operación
 
 - **Tarjeta de estado** por app: versión actual, cola, último deploy, último
@@ -339,8 +376,9 @@ propia de deployd no se puede editar por esta vía. Notas de seguridad:
 - **Rollback** es automático cuando el restart o el health check fallan tras
   un cambio.
 - **Audit log** lista cada acción de administración y quién la hizo.
-- **`deployd check`** valida la configuración en el servidor y avisa de sitios
-  sin enlazar o apps congeladas. Ejecútalo tras editar archivos a mano.
+- **`deployd check`** valida la configuración en el servidor, verifica la
+  base de estado y avisa de sitios sin enlazar o apps congeladas. Ejecútalo
+  tras editar archivos a mano.
 
 ## Migraciones de base de datos
 

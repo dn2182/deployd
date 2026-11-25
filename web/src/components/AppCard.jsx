@@ -3,6 +3,7 @@ import { KeyRound, Pencil, Server, ShieldCheck, Snowflake, Trash2 } from 'lucide
 import { useT } from '../i18n/index.js'
 import { ConfirmDialog } from './ConfirmDialog.jsx'
 import { useToast } from '../hooks/useToast.js'
+import { useRole } from '../hooks/useRole.js'
 import { Field, Help, IconButton, MiniBadge, Notice, Panel, inputClass } from './ui.jsx'
 import AppEditor from './AppEditor.jsx'
 import AppPaths from './AppPaths.jsx'
@@ -18,9 +19,12 @@ export default function AppCard({ name, spec, call, api, onChanged, onSecret, re
   const t = useT()
   const toast = useToast()
   const tabId = useId()
+  const { admin } = useRole()
   const [editing, setEditing] = useState(false)
-  const [tab, setTab] = useState(spec.site_path ? 'website' : 'releases')
-  const tabs = [...(spec.site_path ? ['website'] : []), 'releases', ...(spec.env_file ? ['env'] : []), 'github']
+  // Connecting a website changes the server's layout, so that tab is the administrator's.
+  const website = admin && Boolean(spec.site_path)
+  const [tab, setTab] = useState(website ? 'website' : 'releases')
+  const tabs = [...(website ? ['website'] : []), 'releases', ...(spec.env_file ? ['env'] : []), 'github']
   const activeTab = tabs.includes(tab) ? tab : 'releases'
   const [removeWebsite, setRemoveWebsite] = useState('restore')
   const [removing, setRemoving] = useState(false)
@@ -69,7 +73,7 @@ export default function AppCard({ name, spec, call, api, onChanged, onSecret, re
             <span className="block break-all text-xs text-muted">{spec.health?.url ?? t('app.no_health')}</span>
           </div>
         </div>
-        <div className="flex shrink-0 gap-1.5">
+        {admin && <div className="flex shrink-0 gap-1.5">
           <IconButton label={t('app.edit', { name })} onClick={() => setEditing(true)} disabled={busy || removing}>
             <Pencil size={16} />
           </IconButton>
@@ -99,7 +103,7 @@ export default function AppCard({ name, spec, call, api, onChanged, onSecret, re
               </Field>
             )}
           </ConfirmDialog>
-        </div>
+        </div>}
       </div>
 
       <div className="flex flex-col gap-1">

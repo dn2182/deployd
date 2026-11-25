@@ -42,10 +42,11 @@ What that gives you:
 4. [Connect GitHub Actions](#connect-github-actions)
 5. [Go live: connect the website](#go-live-connect-the-website)
 6. [App settings: .env files](#app-settings-env-files)
-7. [Operate](#operate)
-8. [Database migrations](#database-migrations)
-9. [Reference](#reference)
-10. [Local development](#local-development)
+7. [Team access](#team-access)
+8. [Operate](#operate)
+9. [Database migrations](#database-migrations)
+10. [Reference](#reference)
+11. [Local development](#local-development)
 
 ## How it works
 
@@ -113,11 +114,13 @@ What you get:
   GitHub calls. Put Cloudflare in **Full** mode; for **Full (strict)** replace
   the certificate and key with a Cloudflare Origin CA pair at the same paths.
   The installer never overwrites a certificate it did not generate.
-- **Management UI** at `https://<server>:844`, behind a username and password,
-  using the same certificate (the browser asks you to accept it once). Plain
-  `http://` on that port redirects to `https://`. Keep the port off the
-  internet with your firewall, or bind it to `127.0.0.1` and use an SSH tunnel.
-- **Admin token**, which the UI asks for after the login. Read it with:
+- **Management UI** at `https://<server>:844`, using the same certificate (the
+  browser asks you to accept it once). Plain `http://` on that port redirects
+  to `https://`. Keep the port off the internet with your firewall, or bind it
+  to `127.0.0.1` and use an SSH tunnel.
+- **Administrator sign-in**: choose Administrator on the sign-in screen and
+  enter the admin token. The browser then asks once for the management
+  username and password. Read the token with:
 
   ```bash
   sudo grep DEPLOYD_ADMIN_TOKEN /opt/deployd/.env
@@ -312,6 +315,39 @@ Files kept somewhere else work too. Add their folder, for example
 `/home` are not reachable, and deployd's own configuration cannot be edited
 this way. Security notes: [SECURITY.md](SECURITY.md).
 
+## Team access
+
+Share selected applications with teammates without sharing the admin token.
+Open **Team access** in the top bar, add a member and switch on the
+applications they should have. A password can be generated for you and is
+shown once.
+
+A member signs in on the same page with their own username and password and
+sees only their applications. There they can:
+
+- follow deployments and read their output, redeploy and cancel a queued one
+- activate an earlier version and delete kept versions
+- freeze and unfreeze deploys
+- view and edit the `.env` file, with restore and restart
+- download the GitHub Actions workflow
+
+Only the administrator can add, edit or remove applications, change their
+commands and paths, handle signing secrets and GitHub tokens, connect
+websites, and manage members. That line exists because an application's
+commands run on the server.
+
+Good to know:
+
+- Every action is recorded in the audit log under the member's name. A member
+  sees only the entries about their applications.
+- Turning off **Can sign in**, resetting the password or removing the member
+  ends their sessions immediately. Sessions also end after 12 hours.
+- Five wrong passwords lock that username for 15 minutes.
+- Accounts live on each server. A teammate with applications on two servers
+  needs an account on both.
+- Members reach the UI the same way you do, so remote teammates need your VPN
+  or tunnel.
+
 ## Operate
 
 - **Status card** per app: current version, queue, last deploy, last health
@@ -327,8 +363,9 @@ this way. Security notes: [SECURITY.md](SECURITY.md).
 - **Rollback** is automatic when the restart or health check fails after a
   switch.
 - **Audit log** lists every management action and who did it.
-- **`deployd check`** validates the configuration on the server and warns
-  about unlinked sites or frozen apps. Run it after editing files by hand.
+- **`deployd check`** validates the configuration on the server, verifies the
+  state database and warns about unlinked sites or frozen apps. Run it after
+  editing files by hand.
 
 ## Database migrations
 

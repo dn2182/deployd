@@ -587,6 +587,14 @@ map \$http_cf_connecting_ip \$deployd_client_ip {
     default \$http_cf_connecting_ip;
 }
 limit_req_zone \$deployd_client_ip zone=deployd_deploys:1m rate=10r/m;
+limit_req_zone \$deployd_client_ip zone=deployd_login:1m rate=10r/m;
+# Team members sign in inside the app and send a session header instead of Basic
+# Auth. Basic Auth still guards every request that carries the admin token, and
+# every request with neither credential.
+map "\$http_x_admin_token|\$http_x_deployd_session" \$deployd_management_realm {
+    "~^\\|."  off;
+    default   "deployd management";
+}
 
 server {
     # Self-signed origin certificate: enough for Cloudflare "Full". Drop a Cloudflare
@@ -651,10 +659,31 @@ server {
     # Room for a whole .env file in one request.
     client_max_body_size 512k;
 
-    auth_basic "deployd management";
     auth_basic_user_file ${HTPASSWD_FILE};
 
+    # Member sign-in: no Basic Auth, rate limited, and the API locks repeated failures.
+    location = /api/auth/login {
+        limit_except POST { deny all; }
+        limit_req zone=deployd_login burst=5 nodelay;
+        limit_req_status 429;
+        proxy_pass http://127.0.0.1:8300/auth/login;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+${headers}
+        add_header Cache-Control "no-store" always;
+    }
+
+    location = /api/healthz {
+        proxy_pass http://127.0.0.1:8300/healthz;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+${headers}
+        add_header Cache-Control "no-store" always;
+    }
+
     location /api/ {
+        auth_basic \$deployd_management_realm;
         proxy_pass http://127.0.0.1:8300/;
         proxy_set_header Host \$host;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -664,6 +693,7 @@ ${headers}
         add_header Cache-Control "no-store" always;
     }
 
+    # The page itself holds no data; everything it shows comes from /api/.
     location / {
         try_files \$uri \$uri/ /index.html;
 ${headers}
@@ -781,8 +811,13 @@ verify_installation() {
     die "port 80 did not redirect to https"
 
   local admin_status
-  admin_status=$(curl --silent --insecure --connect-timeout 2 --max-time 5 --output /dev/null --write-out '%{http_code}' "https://127.0.0.1:${admin_port}/")
-  [[ $admin_status == "401" ]] || die "management endpoint did not require Basic Auth over https"
+  admin_status=$(curl --silent --insecure --connect-timeout 2 --max-time 5 --output /dev/null --write-out '%{http_code}' "https://127.0.0.1:${admin_port}/api/admin/apps")
+  [[ $admin_status == "401" ]] || die "management API did not require Basic Auth over https"
+  # A wrong admin token must not get past Basic Auth by also sending a session header.
+  curl --silent --insecure --connect-timeout 2 --max-time 5 --output /dev/null --dump-header - \
+    -H 'X-Admin-Token: x' -H 'X-Deployd-Session: x' "https://127.0.0.1:${admin_port}/api/admin/apps" |
+    grep -qi '^www-authenticate: Basic' ||
+    die "management API let an admin-token request skip Basic Auth"
   admin_status=$(curl --silent --connect-timeout 2 --max-time 5 --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:${admin_port}/")
   [[ $admin_status == "301" ]] || die "management port did not redirect plain http to https"
 }
