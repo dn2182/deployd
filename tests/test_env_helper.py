@@ -108,7 +108,7 @@ def test_removed_keys_must_be_confirmed_by_name(env):
 def test_preview_reports_the_change_and_writes_nothing(env):
     inode = env.stat().st_ino
     content = "DB_URL=Server=db;Database=app\nQUOTED='a b; $c'\nPLAIN=ok\nPLAIN=again\nPATHS=a b\n"
-    result = write(env, content, removed=[], dry_run=True)
+    result = helper.run("preview", "api", str(env), {"content": content, "confirm_removed": []})
     assert not result["saved"] and result["would_save"]
     assert (result["added"], result["removed"], result["changed"]) == (
         ["PATHS", "PLAIN", "QUOTED"],

@@ -564,17 +564,26 @@ async def read_env_file(request: Request, name: AppName):
 async def preview_env_file(request: Request, name: AppName, body: EnvFilePreview):
     """What a save would change, by key name. Nothing is written."""
     spec = _env_app(request, name)
-    return await _env_call(
-        "write",
-        name,
-        spec,
-        {
-            "content": body.content,
-            "expected_sha256": body.expected_sha256,
-            "confirm_removed": [],
-            "dry_run": True,
-        },
-    )
+    try:
+        return await _env_call(
+            "preview",
+            name,
+            spec,
+            {
+                "content": body.content,
+                "expected_sha256": body.expected_sha256,
+                "confirm_removed": [],
+            },
+        )
+    except HTTPException as exc:
+        # A helper installed before previews existed rejects the operation by name.
+        if "unknown operation" in str(exc.detail):
+            raise HTTPException(
+                status_code=503,
+                detail="The .env helper on this server is older than deployd. "
+                "Run update-ubuntu.sh there, then save again.",
+            ) from None
+        raise
 
 
 @app_router.put("/env")

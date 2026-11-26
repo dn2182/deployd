@@ -38,7 +38,8 @@ PART = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
 # .env, .env.production, api.env: nothing else is ever opened, whatever the roots allow.
 NAME = re.compile(r"(?:\.env(?:\.[A-Za-z0-9_-]{1,32})?|[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.env)\Z")
 ASSIGNMENT = re.compile(r"(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=(.*)\Z", re.DOTALL)
-OPERATIONS = ("check", "read", "write", "restore")
+# "preview" is its own operation so that a helper too old to know it refuses, not writes.
+OPERATIONS = ("check", "read", "preview", "write", "restore")
 VERSION = re.compile(r"\d{20}\.env\Z")
 # Characters a shell acts on. Apps that load the file with `source` need such values quoted.
 SHELL_SPECIAL = re.compile(r"[\s;&$|<>()`]")
@@ -399,7 +400,7 @@ def run(operation, app, value, payload=None):
                 metadata,
                 normalise(payload.get("content")),
                 confirmed=confirmed,
-                dry_run=payload.get("dry_run") is True,
+                dry_run=operation == "preview",
             )
 
 
@@ -419,12 +420,12 @@ def main():
         signal.signal(signal.SIGALRM, deadline_expired)
         signal.alarm(30)
         payload = None
-        if sys.argv[1] in ("write", "restore"):
+        if sys.argv[1] in ("preview", "write", "restore"):
             raw = sys.stdin.buffer.read(4 * MAX_BYTES + 1)
             if len(raw) > 4 * MAX_BYTES:
                 raise ValueError("request is too large")
             # A restore of the newest version sends no request body.
-            if raw.strip() or sys.argv[1] == "write":
+            if raw.strip() or sys.argv[1] != "restore":
                 payload = json.loads(raw)
                 if not isinstance(payload, dict):
                     raise ValueError("invalid request")

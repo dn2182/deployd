@@ -64,6 +64,7 @@ def helper(monkeypatch):
             "kept": "00000000000000000001.env",
             "backups": 2,
         },
+        "preview": {"saved": False, "would_save": True, "removed": ["DB_PASSWORD"]},
         "restore": {
             "saved": True,
             "sha256": SHA,
@@ -248,18 +249,29 @@ def test_preview_is_a_dry_run_and_removed_keys_travel_with_the_save(env, helper)
         url = "/admin/apps/app-x/env"
         assert client.post(f"{url}/preview", json={"content": "A=1\n"}).status_code == 401
         client.post(f"{url}/preview", headers=ADMIN, json={"content": "A=1\n"})
-        assert calls[-1][3] == {
+        assert calls[-1][0] == "preview" and calls[-1][3] == {
             "content": "A=1\n",
             "expected_sha256": None,
             "confirm_removed": [],
-            "dry_run": True,
         }
         assert "env." not in client.get("/admin/audit", headers=ADMIN).text
         client.put(
             url, headers=ADMIN, json={"content": "A=1\n", "confirm_removed": ["DB_PASSWORD"]}
         )
         assert calls[-1][3]["confirm_removed"] == ["DB_PASSWORD"]
-        assert "dry_run" not in calls[-1][3]
+        assert calls[-1][0] == "write"
+
+
+def test_preview_against_an_outdated_helper_asks_for_an_update(env, helper, monkeypatch):
+    def old_helper(*args):
+        raise envfile.EnvFileError(409, "unknown operation or app name")
+
+    monkeypatch.setattr(envfile, "_invoke", old_helper)
+    with TestClient(create_app()) as client:
+        response = client.post(
+            "/admin/apps/app-x/env/preview", headers=ADMIN, json={"content": "A=1\n"}
+        )
+        assert response.status_code == 503 and "update-ubuntu.sh" in response.text
 
 
 BASE = {
